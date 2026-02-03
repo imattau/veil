@@ -1,0 +1,9 @@
+[package]
+name = "veil-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+veil-codec = { path = "../veil-codec" }
+veil-core = { path = "../veil-core" }

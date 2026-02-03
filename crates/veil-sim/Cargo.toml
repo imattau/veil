@@ -1,0 +1,18 @@
+[package]
+name = "veil-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+veil-node = { path = "../veil-node" }
+veil-fec = { path = "../veil-fec" }
+veil-core = { path = "../veil-core" }
+veil-codec = { path = "../veil-codec" }
+veil-crypto = { path = "../veil-crypto" }
+veil-transport = { path = "../veil-transport" }
+rand.workspace = true
+
+[[example]]
+name = "end_to_end"
+path = "../../examples/end_to_end.rs"

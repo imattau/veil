@@ -1,0 +1,15 @@
+[package]
+name = "veil-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde_cbor.workspace = true
+veil-core = { path = "../veil-core" }
+veil-codec = { path = "../veil-codec" }
+veil-crypto = { path = "../veil-crypto" }
+veil-fec = { path = "../veil-fec" }
+veil-transport = { path = "../veil-transport" }
+tracing.workspace = true

@@ -1,0 +1,437 @@
+use thiserror::Error;
+use veil_codec::error::CodecError;
+use veil_codec::object::{
+    decode_object_cbor, encode_object_cbor, object_signature_message_digest, ObjectV1, Signature,
+    OBJECT_FLAG_ACK_REQUESTED, OBJECT_FLAG_BATCHED, OBJECT_FLAG_SIGNED, OBJECT_V1_VERSION,
+};
+use veil_codec::shard::encode_shard_cbor;
+use veil_core::hash::blake3_32;
+use veil_core::types::{Epoch, Namespace};
+use veil_core::ObjectRoot;
+use veil_core::Tag;
+use veil_crypto::aead::{build_veil_aad, AeadCipher, AeadError};
+use veil_crypto::signing::{Signer, SigningError};
+use veil_fec::sharder::{derive_object_root, object_to_shards, FecError};
+use veil_transport::adapter::TransportAdapter;
+
+use crate::ack::register_pending_ack;
+use crate::batch::FeedBatcher;
+use crate::config::NodeRuntimeConfig;
+use crate::state::NodeState;
+
+#[derive(Debug, Error)]
+pub enum PublishError {
+    #[error("codec error: {0}")]
+    Codec(#[from] CodecError),
+    #[error("fec error: {0}")]
+    Fec(#[from] FecError),
+    #[error("aead error: {0}")]
+    Aead(#[from] AeadError),
+    #[error("signing error: {0}")]
+    Signing(#[from] SigningError),
+    #[error("payload encoding error: {0}")]
+    PayloadEncode(#[from] serde_cbor::Error),
+    #[error("signed object requested but signer was not provided")]
+    MissingSigner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublishResult {
+    pub object_root: ObjectRoot,
+    pub shards_total: usize,
+    pub sent_fast: usize,
+    pub sent_fallback: usize,
+    pub ack_tracked: bool,
+}
+
+/// Parameters for queue-driven publish ticks.
+#[derive(Debug, Clone, Copy)]
+pub struct PublishQueueTickParams<'a, P> {
+    pub namespace: Namespace,
+    pub epoch: Epoch,
+    pub tag: Tag,
+    pub encrypt_key: &'a [u8; 32],
+    pub now_step: u64,
+    pub flags: u16,
+    pub interactive_flush: bool,
+    pub fast_peers: &'a [P],
+    pub fallback_peers: &'a [P],
+}
+
+fn derive_object_nonce(
+    tag: Tag,
+    namespace: Namespace,
+    epoch: Epoch,
+    now_step: u64,
+    payload: &[u8],
+) -> [u8; 24] {
+    let mut preimage = Vec::with_capacity(10 + 32 + 2 + 4 + 8 + 32);
+    preimage.extend_from_slice(b"objnonce-v1");
+    preimage.extend_from_slice(&tag);
+    preimage.extend_from_slice(&namespace.0.to_be_bytes());
+    preimage.extend_from_slice(&epoch.0.to_be_bytes());
+    preimage.extend_from_slice(&now_step.to_be_bytes());
+    preimage.extend_from_slice(&blake3_32(payload));
+    let hash = blake3_32(&preimage);
+    let mut nonce = [0_u8; 24];
+    nonce.copy_from_slice(&hash[..24]);
+    nonce
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_encoded_object(
+    payload: &[u8],
+    namespace: Namespace,
+    epoch: Epoch,
+    tag: Tag,
+    encrypt_key: &[u8; 32],
+    now_step: u64,
+    flags: u16,
+    cipher: &impl AeadCipher,
+    signer: Option<&impl Signer>,
+) -> Result<Vec<u8>, PublishError> {
+    if (flags & OBJECT_FLAG_SIGNED) != 0 && signer.is_none() {
+        return Err(PublishError::MissingSigner);
+    }
+
+    let nonce = derive_object_nonce(tag, namespace, epoch, now_step, payload);
+    let aad = build_veil_aad(tag, namespace, epoch);
+    let envelope = cipher.encrypt(encrypt_key, nonce, &aad, payload)?;
+    let payload_root = derive_object_root(payload);
+
+    let mut object = ObjectV1 {
+        version: OBJECT_V1_VERSION,
+        namespace,
+        epoch,
+        flags,
+        tag,
+        object_root: payload_root,
+        sender_pubkey: None,
+        signature: None,
+        nonce: envelope.nonce,
+        ciphertext: envelope.ciphertext,
+        padding: vec![0_u8; 8],
+    };
+
+    if (flags & OBJECT_FLAG_SIGNED) != 0 {
+        let signer = signer.ok_or(PublishError::MissingSigner)?;
+        object.sender_pubkey = Some(signer.public_key());
+        object.signature = Some(Signature([0_u8; 64]));
+        let digest = object_signature_message_digest(&object)?;
+        object.signature = Some(Signature(signer.sign(&digest)?));
+    }
+
+    Ok(encode_object_cbor(&object)?)
+}
+
+/// Publishes an encoded VEIL object over fast/fallback lanes and optionally
+/// registers ACK-timeout retry state when `ack_requested` is set.
+#[allow(clippy::too_many_arguments)]
+pub fn publish_encoded_object_multi_lane<A: TransportAdapter>(
+    node: &mut NodeState,
+    fast_adapter: &mut A,
+    fallback_adapter: &mut A,
+    encoded_object: &[u8],
+    fast_peers: &[A::Peer],
+    fallback_peers: &[A::Peer],
+    now_step: u64,
+    config: &NodeRuntimeConfig,
+) -> Result<PublishResult, PublishError> {
+    let object = decode_object_cbor(encoded_object)?;
+    let wire_root = derive_object_root(encoded_object);
+    let shards = object_to_shards(
+        encoded_object,
+        object.namespace,
+        object.epoch,
+        object.tag,
+        wire_root,
+    )?;
+    let k = shards.first().map(|s| s.header.k as usize).unwrap_or(0);
+
+    let mut shard_bytes = Vec::with_capacity(shards.len());
+    for shard in &shards {
+        shard_bytes.push(encode_shard_cbor(shard)?);
+    }
+
+    let fast_count = shard_bytes.len().min(k.saturating_add(2));
+    let fallback_start = fast_count;
+    let fallback_end = shard_bytes.len().min(fallback_start.saturating_add(2));
+
+    let mut sent_fast = 0usize;
+    for bytes in shard_bytes.iter().take(fast_count) {
+        for peer in fast_peers.iter().take(config.base_fast_fanout.min(2)) {
+            if fast_adapter.send(peer, bytes).is_ok() {
+                sent_fast += 1;
+            }
+        }
+    }
+
+    let mut sent_fallback = 0usize;
+    for bytes in shard_bytes.iter().take(fallback_end).skip(fallback_start) {
+        for peer in fallback_peers
+            .iter()
+            .take(config.base_fallback_fanout.max(1))
+        {
+            if fallback_adapter.send(peer, bytes).is_ok() {
+                sent_fallback += 1;
+            }
+        }
+    }
+
+    let mut ack_tracked = false;
+    if (object.flags & OBJECT_FLAG_ACK_REQUESTED) != 0 {
+        let unsent = shard_bytes[fallback_end..].to_vec();
+        register_pending_ack(node, wire_root, unsent, now_step, config.ack_retry_policy());
+        ack_tracked = true;
+    }
+
+    Ok(PublishResult {
+        object_root: wire_root,
+        shards_total: shard_bytes.len(),
+        sent_fast,
+        sent_fallback,
+        ack_tracked,
+    })
+}
+
+/// Drains queued feed items, builds one object, and publishes it multi-lane.
+///
+/// Returns `Ok(None)` when the queue is empty.
+#[allow(clippy::too_many_arguments)]
+pub fn publish_queue_tick_multi_lane<A: TransportAdapter, S: Signer>(
+    node: &mut NodeState,
+    fast_adapter: &mut A,
+    fallback_adapter: &mut A,
+    batcher: &mut FeedBatcher,
+    params: PublishQueueTickParams<'_, A::Peer>,
+    config: &NodeRuntimeConfig,
+    cipher: &impl AeadCipher,
+    signer: Option<&S>,
+) -> Result<Option<PublishResult>, PublishError> {
+    let items = if params.interactive_flush {
+        batcher.drain_interactive()
+    } else {
+        batcher.drain_next_batch()
+    };
+    if items.is_empty() {
+        return Ok(None);
+    }
+
+    let payload = serde_cbor::to_vec(&items)?;
+    let mut flags = params.flags;
+    if items.len() > 1 {
+        flags |= OBJECT_FLAG_BATCHED;
+    }
+    let encoded_object = build_encoded_object(
+        &payload,
+        params.namespace,
+        params.epoch,
+        params.tag,
+        params.encrypt_key,
+        params.now_step,
+        flags,
+        cipher,
+        signer,
+    )?;
+
+    let result = publish_encoded_object_multi_lane(
+        node,
+        fast_adapter,
+        fallback_adapter,
+        &encoded_object,
+        params.fast_peers,
+        params.fallback_peers,
+        params.now_step,
+        config,
+    )?;
+    Ok(Some(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use veil_codec::object::{
+        encode_object_cbor, object_signature_message_digest, ObjectV1, Signature,
+        OBJECT_FLAG_ACK_REQUESTED, OBJECT_FLAG_SIGNED, OBJECT_V1_VERSION,
+    };
+    use veil_core::{Epoch, Namespace};
+    use veil_crypto::aead::{build_veil_aad, AeadCipher, XChaCha20Poly1305Cipher};
+    use veil_crypto::signing::{Ed25519Signer, Signer};
+    use veil_fec::sharder::derive_object_root;
+    use veil_transport::adapter::InMemoryAdapter;
+
+    use super::{
+        publish_encoded_object_multi_lane, publish_queue_tick_multi_lane, PublishQueueTickParams,
+    };
+    use crate::batch::{BatchLimits, FeedBatcher};
+    use crate::config::NodeRuntimeConfig;
+    use crate::state::NodeState;
+
+    fn make_encoded_object(payload: &[u8], tag: [u8; 32], key: &[u8; 32], flags: u16) -> Vec<u8> {
+        let namespace = Namespace(77);
+        let epoch = Epoch(88);
+        let nonce = [0x33_u8; 24];
+        let cipher = XChaCha20Poly1305Cipher;
+        let signer = Ed25519Signer::from_secret([0x42_u8; 32]);
+
+        let aad = build_veil_aad(tag, namespace, epoch);
+        let env = cipher
+            .encrypt(key, nonce, &aad, payload)
+            .expect("encryption should succeed");
+        let mut obj = ObjectV1 {
+            version: OBJECT_V1_VERSION,
+            namespace,
+            epoch,
+            flags,
+            tag,
+            object_root: derive_object_root(payload),
+            sender_pubkey: Some(signer.public_key()),
+            signature: Some(Signature([0_u8; 64])),
+            nonce: env.nonce,
+            ciphertext: env.ciphertext,
+            padding: vec![0_u8; 8],
+        };
+        let digest = object_signature_message_digest(&obj).expect("digest should compute");
+        obj.signature = Some(Signature(
+            signer.sign(&digest).expect("signature should succeed"),
+        ));
+        encode_object_cbor(&obj).expect("encoding should succeed")
+    }
+
+    #[test]
+    fn publish_tracks_pending_ack_when_requested() {
+        let mut node = NodeState::default();
+        let mut fast = InMemoryAdapter::default();
+        let mut fallback = InMemoryAdapter::default();
+        let cfg = NodeRuntimeConfig::default();
+        let key = [0xAA_u8; 32];
+        let tag = [0x11_u8; 32];
+        let encoded = make_encoded_object(
+            b"hello publish",
+            tag,
+            &key,
+            OBJECT_FLAG_SIGNED | OBJECT_FLAG_ACK_REQUESTED,
+        );
+        let peers = vec!["peer-a".to_string(), "peer-b".to_string()];
+
+        let out = publish_encoded_object_multi_lane(
+            &mut node,
+            &mut fast,
+            &mut fallback,
+            &encoded,
+            &peers,
+            &peers,
+            10,
+            &cfg,
+        )
+        .expect("publish should succeed");
+
+        assert!(out.sent_fast > 0);
+        assert!(out.sent_fallback > 0);
+        assert!(out.ack_tracked);
+        assert!(node.pending_acks.contains_key(&out.object_root));
+    }
+
+    #[test]
+    fn publish_skips_ack_tracking_without_flag() {
+        let mut node = NodeState::default();
+        let mut fast = InMemoryAdapter::default();
+        let mut fallback = InMemoryAdapter::default();
+        let cfg = NodeRuntimeConfig::default();
+        let key = [0xBB_u8; 32];
+        let tag = [0x22_u8; 32];
+        let encoded = make_encoded_object(b"no ack", tag, &key, OBJECT_FLAG_SIGNED);
+        let peers = vec!["peer-a".to_string(), "peer-b".to_string()];
+
+        let out = publish_encoded_object_multi_lane(
+            &mut node,
+            &mut fast,
+            &mut fallback,
+            &encoded,
+            &peers,
+            &peers,
+            10,
+            &cfg,
+        )
+        .expect("publish should succeed");
+
+        assert!(!out.ack_tracked);
+        assert!(node.pending_acks.is_empty());
+    }
+
+    #[test]
+    fn publish_queue_tick_drains_batch_and_publishes() {
+        let mut node = NodeState::default();
+        let mut fast = InMemoryAdapter::default();
+        let mut fallback = InMemoryAdapter::default();
+        let cfg = NodeRuntimeConfig::default();
+        let mut batcher = FeedBatcher::with_limits(BatchLimits {
+            target_batch_size: 64,
+            max_object_size: 512,
+        });
+        batcher.enqueue(vec![1_u8; 40]);
+        batcher.enqueue(vec![2_u8; 40]);
+
+        let peers = vec!["peer-a".to_string(), "peer-b".to_string()];
+        let signer = Ed25519Signer::from_secret([0x55; 32]);
+        let out = publish_queue_tick_multi_lane(
+            &mut node,
+            &mut fast,
+            &mut fallback,
+            &mut batcher,
+            PublishQueueTickParams {
+                namespace: Namespace(7),
+                epoch: Epoch(9),
+                tag: [0x33; 32],
+                encrypt_key: &[0xAA; 32],
+                now_step: 10,
+                flags: OBJECT_FLAG_SIGNED,
+                interactive_flush: false,
+                fast_peers: &peers,
+                fallback_peers: &peers,
+            },
+            &cfg,
+            &XChaCha20Poly1305Cipher,
+            Some(&signer),
+        )
+        .expect("queue publish should succeed")
+        .expect("queue should yield one publish result");
+
+        assert!(out.sent_fast > 0);
+        assert_eq!(batcher.len(), 0);
+    }
+
+    #[test]
+    fn publish_queue_tick_requires_signer_when_signed_flag_set() {
+        let mut node = NodeState::default();
+        let mut fast = InMemoryAdapter::default();
+        let mut fallback = InMemoryAdapter::default();
+        let cfg = NodeRuntimeConfig::default();
+        let mut batcher = FeedBatcher::default();
+        batcher.enqueue(vec![9_u8; 8]);
+        let peers = vec!["peer-a".to_string()];
+
+        let err = publish_queue_tick_multi_lane::<InMemoryAdapter, Ed25519Signer>(
+            &mut node,
+            &mut fast,
+            &mut fallback,
+            &mut batcher,
+            PublishQueueTickParams {
+                namespace: Namespace(1),
+                epoch: Epoch(1),
+                tag: [0x11; 32],
+                encrypt_key: &[0xAB; 32],
+                now_step: 1,
+                flags: OBJECT_FLAG_SIGNED,
+                interactive_flush: true,
+                fast_peers: &peers,
+                fallback_peers: &peers,
+            },
+            &cfg,
+            &XChaCha20Poly1305Cipher,
+            None,
+        )
+        .expect_err("missing signer should fail");
+
+        assert!(err.to_string().contains("signer"));
+    }
+}

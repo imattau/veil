@@ -1,0 +1,143 @@
+use serde::{Deserialize, Serialize};
+use veil_core::types::{Epoch, Namespace};
+use veil_core::{ObjectRoot, Tag};
+
+use crate::error::CodecError;
+
+/// Shard schema version for `ShardV1`.
+pub const SHARD_V1_VERSION: u16 = 1;
+/// Fixed serialized shard-header length in bytes.
+pub const SHARD_HEADER_LEN: usize = 2 + 2 + 4 + 32 + 32 + 2 + 2 + 2;
+/// Allowed total shard bucket sizes.
+pub const SHARD_BUCKET_SIZES: [usize; 3] = [16 * 1024, 32 * 1024, 64 * 1024];
+
+/// Shard metadata header.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShardHeaderV1 {
+    /// Wire version.
+    pub version: u16,
+    /// Logical namespace.
+    pub namespace: Namespace,
+    /// Epoch window.
+    pub epoch: Epoch,
+    /// Subscription tag.
+    pub tag: Tag,
+    /// Root grouping sibling shards for one object.
+    pub object_root: ObjectRoot,
+    /// Reconstruction threshold.
+    pub k: u16,
+    /// Total shards in set.
+    pub n: u16,
+    /// Shard index in `[0, n)`.
+    pub index: u16,
+}
+
+/// Full shard payload unit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShardV1 {
+    pub header: ShardHeaderV1,
+    pub payload: Vec<u8>,
+}
+
+impl ShardHeaderV1 {
+    /// Validates header invariants.
+    pub fn validate(&self) -> Result<(), CodecError> {
+        if self.version != SHARD_V1_VERSION {
+            return Err(CodecError::InvalidShard("unsupported shard version"));
+        }
+        if self.k == 0 || self.n == 0 {
+            return Err(CodecError::InvalidShard("k and n must be > 0"));
+        }
+        if self.k > self.n {
+            return Err(CodecError::InvalidShard("k must be <= n"));
+        }
+        if self.index >= self.n {
+            return Err(CodecError::InvalidShard("index out of range"));
+        }
+        Ok(())
+    }
+}
+
+impl ShardV1 {
+    /// Validates header and payload bucket sizing.
+    pub fn validate(&self) -> Result<(), CodecError> {
+        self.header.validate()?;
+        if self.payload.is_empty() {
+            return Err(CodecError::InvalidShard("payload must not be empty"));
+        }
+
+        let total_len = SHARD_HEADER_LEN + self.payload.len();
+        if !SHARD_BUCKET_SIZES.contains(&total_len) {
+            return Err(CodecError::InvalidShard(
+                "shard does not match allowed bucket size",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Encodes `ShardV1` as CBOR after validation.
+pub fn encode_shard_cbor(shard: &ShardV1) -> Result<Vec<u8>, CodecError> {
+    shard.validate()?;
+    serde_cbor::to_vec(shard).map_err(CodecError::from)
+}
+
+/// Decodes and validates a CBOR shard.
+pub fn decode_shard_cbor(bytes: &[u8]) -> Result<ShardV1, CodecError> {
+    let shard: ShardV1 = serde_cbor::from_slice(bytes)?;
+    shard.validate()?;
+    Ok(shard)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ShardHeaderV1, ShardV1, SHARD_HEADER_LEN, SHARD_V1_VERSION};
+    use veil_core::{Epoch, Namespace};
+
+    fn sample_shard() -> ShardV1 {
+        ShardV1 {
+            header: ShardHeaderV1 {
+                version: SHARD_V1_VERSION,
+                namespace: Namespace(1),
+                epoch: Epoch(1),
+                tag: [0x11_u8; 32],
+                object_root: [0x22_u8; 32],
+                k: 6,
+                n: 10,
+                index: 0,
+            },
+            payload: vec![0x33_u8; 16 * 1024 - SHARD_HEADER_LEN],
+        }
+    }
+
+    #[test]
+    fn validate_rejects_k_greater_than_n() {
+        let mut s = sample_shard();
+        s.header.k = 11;
+        s.header.n = 10;
+        let err = s.validate().expect_err("k > n should fail");
+        assert!(err.to_string().contains("k must be <= n"));
+    }
+
+    #[test]
+    fn validate_rejects_index_out_of_range() {
+        let mut s = sample_shard();
+        s.header.index = s.header.n;
+        let err = s.validate().expect_err("index >= n should fail");
+        assert!(err.to_string().contains("index out of range"));
+    }
+
+    #[test]
+    fn validate_accepts_known_bucket_sizes() {
+        let s16 = sample_shard();
+        assert!(s16.validate().is_ok());
+
+        let mut s32 = sample_shard();
+        s32.payload = vec![0x33_u8; 32 * 1024 - SHARD_HEADER_LEN];
+        assert!(s32.validate().is_ok());
+
+        let mut s64 = sample_shard();
+        s64.payload = vec![0x33_u8; 64 * 1024 - SHARD_HEADER_LEN];
+        assert!(s64.validate().is_ok());
+    }
+}
