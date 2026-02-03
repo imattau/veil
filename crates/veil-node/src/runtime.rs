@@ -22,6 +22,8 @@ pub struct RuntimeStats {
     pub forwarded_messages: usize,
     /// Inbound messages ignored as non-shards, duplicates, or unsubscribed.
     pub ignored_messages: usize,
+    /// Inbound shard messages ignored due to duplicate shard id.
+    pub duplicate_messages: usize,
     /// Delivered reconstructed objects.
     pub delivered_messages: usize,
     /// ACK payload objects recognized and matched to pending ACK state.
@@ -199,10 +201,11 @@ fn process_inbound<A: TransportAdapter>(
             }
         }
     }
-    if matches!(
-        event,
-        ReceiveEvent::IgnoredDuplicate | ReceiveEvent::IgnoredNotSubscribed
-    ) {
+    if matches!(event, ReceiveEvent::IgnoredDuplicate) {
+        stats.duplicate_messages += 1;
+        stats.ignored_messages += 1;
+    }
+    if matches!(event, ReceiveEvent::IgnoredNotSubscribed) {
         stats.ignored_messages += 1;
     }
 

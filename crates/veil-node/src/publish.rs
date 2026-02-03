@@ -17,6 +17,7 @@ use veil_transport::adapter::TransportAdapter;
 use crate::ack::register_pending_ack;
 use crate::batch::FeedBatcher;
 use crate::config::NodeRuntimeConfig;
+use crate::runtime::{pump_ack_timeouts, RuntimeStats};
 use crate::state::NodeState;
 
 #[derive(Debug, Error)]
@@ -56,6 +57,18 @@ pub struct PublishQueueTickParams<'a, P> {
     pub interactive_flush: bool,
     pub fast_peers: &'a [P],
     pub fallback_peers: &'a [P],
+}
+
+/// Parameters for one publisher service tick.
+pub struct PublishServiceTickParams<'a, P> {
+    pub batcher: &'a mut FeedBatcher,
+    pub publish: PublishQueueTickParams<'a, P>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublishServiceTickResult {
+    pub published: Option<PublishResult>,
+    pub ack_retry_sends: usize,
 }
 
 fn derive_object_nonce(
@@ -247,6 +260,48 @@ pub fn publish_queue_tick_multi_lane<A: TransportAdapter, S: Signer>(
     Ok(Some(result))
 }
 
+/// Runs one publish service tick:
+/// - drains and publishes one queued batch (if present)
+/// - sends due ACK-timeout retries over fallback peers
+pub fn publish_service_tick_multi_lane<A: TransportAdapter, S: Signer>(
+    node: &mut NodeState,
+    fast_adapter: &mut A,
+    fallback_adapter: &mut A,
+    params: PublishServiceTickParams<'_, A::Peer>,
+    config: &NodeRuntimeConfig,
+    cipher: &impl AeadCipher,
+    signer: Option<&S>,
+) -> Result<PublishServiceTickResult, PublishError> {
+    let publish_params = params.publish;
+    let retry_peers = publish_params.fallback_peers;
+    let now_step = publish_params.now_step;
+    let published = publish_queue_tick_multi_lane(
+        node,
+        fast_adapter,
+        fallback_adapter,
+        params.batcher,
+        publish_params,
+        config,
+        cipher,
+        signer,
+    )?;
+
+    let mut runtime_stats = RuntimeStats::default();
+    let ack_retry_sends = pump_ack_timeouts(
+        node,
+        fallback_adapter,
+        retry_peers,
+        now_step,
+        config.base_fallback_fanout.max(1),
+        &mut runtime_stats,
+    );
+
+    Ok(PublishServiceTickResult {
+        published,
+        ack_retry_sends,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use veil_codec::object::{
@@ -260,8 +315,10 @@ mod tests {
     use veil_transport::adapter::InMemoryAdapter;
 
     use super::{
-        publish_encoded_object_multi_lane, publish_queue_tick_multi_lane, PublishQueueTickParams,
+        publish_encoded_object_multi_lane, publish_queue_tick_multi_lane,
+        publish_service_tick_multi_lane, PublishQueueTickParams, PublishServiceTickParams,
     };
+    use crate::ack::{register_pending_ack, AckRetryPolicy};
     use crate::batch::{BatchLimits, FeedBatcher};
     use crate::config::NodeRuntimeConfig;
     use crate::state::NodeState;
@@ -433,5 +490,56 @@ mod tests {
         .expect_err("missing signer should fail");
 
         assert!(err.to_string().contains("signer"));
+    }
+
+    #[test]
+    fn publish_service_tick_sends_due_ack_retries_without_new_batch() {
+        let mut node = NodeState::default();
+        register_pending_ack(
+            &mut node,
+            [0x55; 32],
+            vec![vec![1, 2, 3], vec![4, 5, 6]],
+            0,
+            AckRetryPolicy {
+                initial_timeout_steps: 1,
+                retry_batch_size: 2,
+                backoff_step: 2,
+                max_retries: 3,
+            },
+        );
+
+        let mut fast = InMemoryAdapter::default();
+        let mut fallback = InMemoryAdapter::default();
+        let mut batcher = FeedBatcher::default();
+        let peers = vec!["peer-a".to_string(), "peer-b".to_string()];
+        let cfg = NodeRuntimeConfig::default();
+        let signer = Ed25519Signer::from_secret([0x42_u8; 32]);
+
+        let out = publish_service_tick_multi_lane(
+            &mut node,
+            &mut fast,
+            &mut fallback,
+            PublishServiceTickParams {
+                batcher: &mut batcher,
+                publish: PublishQueueTickParams {
+                    namespace: Namespace(1),
+                    epoch: Epoch(1),
+                    tag: [0x11; 32],
+                    encrypt_key: &[0xAA; 32],
+                    now_step: 1,
+                    flags: OBJECT_FLAG_SIGNED,
+                    interactive_flush: false,
+                    fast_peers: &peers,
+                    fallback_peers: &peers,
+                },
+            },
+            &cfg,
+            &XChaCha20Poly1305Cipher,
+            Some(&signer),
+        )
+        .expect("service tick should succeed");
+
+        assert!(out.published.is_none());
+        assert!(out.ack_retry_sends > 0);
     }
 }

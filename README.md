@@ -19,3 +19,11 @@ VEIL is a transport-agnostic, shard-native overlay for censorship-resistant publ
 ```bash
 cargo test --workspace
 ```
+
+## Fuzzing (optional)
+
+```bash
+cargo install cargo-fuzz
+cargo fuzz run codec_decode --manifest-path fuzz/Cargo.toml
+cargo fuzz run node_runtime_ingest --manifest-path fuzz/Cargo.toml
+```

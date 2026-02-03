@@ -18,6 +18,22 @@ use veil_node::runtime::{pump_once, PumpParams, RuntimePolicyHooks, RuntimeStats
 use veil_node::state::NodeState;
 use veil_transport::adapter::InMemoryAdapter;
 
+#[derive(Debug, Clone)]
+struct ExpectedDelivery {
+    payload: Vec<u8>,
+    enqueued_step: u64,
+}
+
+fn p95(values: &[u64]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+    let idx = ((sorted.len() as f64) * 0.95).ceil() as usize - 1;
+    sorted[idx.min(sorted.len() - 1)]
+}
+
 fn build_signed_encrypted_object(
     payload: &[u8],
     namespace: Namespace,
@@ -58,9 +74,10 @@ struct PumpHarness<'a> {
     adapter: &'a mut InMemoryAdapter,
     decrypt_key: &'a [u8; 32],
     stats: &'a mut RuntimeStats,
-    expected: &'a mut HashMap<ObjectRoot, Vec<u8>>,
+    expected: &'a mut HashMap<ObjectRoot, ExpectedDelivery>,
     delivered_count: &'a mut usize,
     delivered_bytes: &'a mut usize,
+    latencies_steps: &'a mut Vec<u64>,
     step: &'a mut u64,
 }
 
@@ -99,11 +116,13 @@ impl PumpHarness<'_> {
                 ..
             } = event
             {
-                let expected_payload = self
+                let expected = self
                     .expected
                     .remove(&object_root)
                     .expect("delivered root should be expected");
-                assert_eq!(payload, expected_payload);
+                assert_eq!(payload, expected.payload);
+                self.latencies_steps
+                    .push((*self.step).saturating_sub(expected.enqueued_step));
                 *self.delivered_count += 1;
                 *self.delivered_bytes += payload.len();
             }
@@ -124,9 +143,10 @@ fn e2e_performance_smoke() {
     node.subscriptions.insert(tag);
     let mut adapter = InMemoryAdapter::default();
     let mut stats = RuntimeStats::default();
-    let mut expected = HashMap::<ObjectRoot, Vec<u8>>::new();
+    let mut expected = HashMap::<ObjectRoot, ExpectedDelivery>::new();
     let mut delivered_count = 0usize;
     let mut delivered_bytes = 0usize;
+    let mut latencies_steps = Vec::<u64>::new();
     let mut step = 0u64;
 
     let start = Instant::now();
@@ -143,7 +163,13 @@ fn e2e_performance_smoke() {
         let encoded =
             build_signed_encrypted_object(&payload, namespace, epoch, tag, &key, nonce, &signer);
         let wire_root = blake3_32(&encoded);
-        expected.insert(wire_root, payload);
+        expected.insert(
+            wire_root,
+            ExpectedDelivery {
+                payload,
+                enqueued_step: step,
+            },
+        );
 
         let mut shards = object_to_shards(&encoded, namespace, epoch, tag, wire_root)
             .expect("sharding should succeed");
@@ -162,6 +188,7 @@ fn e2e_performance_smoke() {
             expected: &mut expected,
             delivered_count: &mut delivered_count,
             delivered_bytes: &mut delivered_bytes,
+            latencies_steps: &mut latencies_steps,
             step: &mut step,
         }
         .run_until_empty();
@@ -170,6 +197,7 @@ fn e2e_performance_smoke() {
     let elapsed = start.elapsed();
     let secs = elapsed.as_secs_f64();
     let throughput_mib_s = (delivered_bytes as f64 / (1024.0 * 1024.0)) / secs.max(1e-9);
+    let p95_latency_steps = p95(&latencies_steps);
 
     assert_eq!(delivered_count, OBJECTS, "all objects should be delivered");
     assert!(
@@ -179,6 +207,10 @@ fn e2e_performance_smoke() {
     assert!(
         throughput_mib_s >= 0.3,
         "throughput too low: {throughput_mib_s:.2} MiB/s over {secs:.2}s",
+    );
+    assert!(
+        p95_latency_steps <= 64,
+        "p95 latency too high: {p95_latency_steps} steps",
     );
 }
 
@@ -195,9 +227,10 @@ fn e2e_load_with_noise_and_duplicates() {
     node.subscriptions.insert(tag);
     let mut adapter = InMemoryAdapter::default();
     let mut stats = RuntimeStats::default();
-    let mut expected = HashMap::<ObjectRoot, Vec<u8>>::new();
+    let mut expected = HashMap::<ObjectRoot, ExpectedDelivery>::new();
     let mut delivered_count = 0usize;
     let mut delivered_bytes = 0usize;
+    let mut latencies_steps = Vec::<u64>::new();
     let mut step = 0u64;
 
     let start = Instant::now();
@@ -220,7 +253,13 @@ fn e2e_load_with_noise_and_duplicates() {
         let encoded =
             build_signed_encrypted_object(&payload, namespace, epoch, tag, &key, nonce, &signer);
         let wire_root = blake3_32(&encoded);
-        expected.insert(wire_root, payload);
+        expected.insert(
+            wire_root,
+            ExpectedDelivery {
+                payload,
+                enqueued_step: step,
+            },
+        );
 
         let mut shards = object_to_shards(&encoded, namespace, epoch, tag, wire_root)
             .expect("sharding should succeed");
@@ -249,6 +288,7 @@ fn e2e_load_with_noise_and_duplicates() {
             expected: &mut expected,
             delivered_count: &mut delivered_count,
             delivered_bytes: &mut delivered_bytes,
+            latencies_steps: &mut latencies_steps,
             step: &mut step,
         }
         .run_until_empty();
@@ -258,6 +298,12 @@ fn e2e_load_with_noise_and_duplicates() {
     let elapsed = start.elapsed();
     let secs = elapsed.as_secs_f64();
     let throughput_mib_s = (delivered_bytes as f64 / (1024.0 * 1024.0)) / secs.max(1e-9);
+    let p95_latency_steps = p95(&latencies_steps);
+    let cache_hit_rate = if stats.parsed_shards > 0 {
+        stats.duplicate_messages as f64 / stats.parsed_shards as f64
+    } else {
+        0.0
+    };
 
     assert_eq!(delivered_count, OBJECTS, "all objects should be delivered");
     assert!(
@@ -271,5 +317,14 @@ fn e2e_load_with_noise_and_duplicates() {
     assert!(
         throughput_mib_s >= 0.2,
         "load throughput too low: {throughput_mib_s:.2} MiB/s over {secs:.2}s",
+    );
+    assert!(
+        p95_latency_steps <= 128,
+        "load p95 latency too high: {p95_latency_steps} steps",
+    );
+    assert!(
+        cache_hit_rate >= 0.03,
+        "cache hit rate too low: {:.2}%",
+        cache_hit_rate * 100.0,
     );
 }

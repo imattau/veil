@@ -1,0 +1,10 @@
+/target/
+
+# Rust/cargo-fuzz outputs
+fuzz/artifacts/
+fuzz/corpus/
+fuzz/coverage/
+
+# OS/editor noise
+.DS_Store
+*.swp

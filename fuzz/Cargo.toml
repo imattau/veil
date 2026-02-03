@@ -1,0 +1,31 @@
+[package]
+name = "veil-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+veil-codec = { path = "../crates/veil-codec" }
+veil-node = { path = "../crates/veil-node" }
+veil-crypto = { path = "../crates/veil-crypto" }
+veil-transport = { path = "../crates/veil-transport" }
+
+[[bin]]
+name = "codec_decode"
+path = "fuzz_targets/codec_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "node_runtime_ingest"
+path = "fuzz_targets/node_runtime_ingest.rs"
+test = false
+doc = false
+bench = false
