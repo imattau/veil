@@ -8,3 +8,9 @@ fuzz/coverage/
 # OS/editor noise
 .DS_Store
 *.swp
+
+# JS workspace artifacts
+node_modules/
+packages/*/dist/
+packages/*/wasm/
+apps/*/dist/

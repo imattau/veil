@@ -47,7 +47,7 @@ High-level helper APIs in `veil-node` simplify integration:
 Run the facade example:
 
 ```bash
-cargo run --example runtime_facade
+cargo run -p veil-sim --example runtime_facade
 ```
 
 Profile examples:
@@ -59,6 +59,40 @@ cargo run -p veil-sim --example bootstrap_peer
 
 - `edge_forwarder_hot_cache`: edge forwarder + hot cache defaults for VPS-style hosts.
 - `bootstrap_peer`: minimal bootstrap/discovery profile with conservative forwarding.
+
+## Client-native Node.js / React / React Native
+
+This repo now includes a client-native foundation for JS frontends:
+
+- Rust wasm bindings: `crates/veil-wasm`
+- JS SDK scaffold: `packages/veil-sdk-js`
+- React demo scaffold: `apps/react-demo`
+- React Native scaffold notes: `apps/react-native-demo`
+- Implementation plan: `CLIENT_NATIVE_PLAN.md`
+
+Build wasm + SDK:
+
+```bash
+npm install
+npm run wasm:build
+npm run sdk:build
+```
+
+Run React demo:
+
+```bash
+npm run react:dev
+```
+
+React Native note:
+
+- SDK supports `auto`/`wasm`/`pure-js` backend selection.
+- Use `pure-js` mode in React Native:
+
+```ts
+import { configureTagBackend } from "@veil/sdk-js";
+configureTagBackend("pure-js");
+```
 
 ## Optional fuzzing
 

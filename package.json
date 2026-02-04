@@ -1,0 +1,21 @@
+{
+  "name": "veil-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "wasm:build": "wasm-pack build crates/veil-wasm --target web --out-dir ../../packages/veil-sdk-js/wasm",
+    "sdk:build": "npm run build -w @veil/sdk-js",
+    "react:dev": "npm run dev -w @veil/react-demo",
+    "lint": "npm run lint -w @veil/sdk-js && npm run lint -w @veil/react-demo"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "globals": "^15.14.0",
+    "typescript-eslint": "^8.18.2"
+  }
+}
