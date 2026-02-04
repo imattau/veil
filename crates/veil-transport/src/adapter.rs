@@ -63,6 +63,22 @@ impl InMemoryAdapter {
     }
 }
 
+/// Routes all captured outbound messages from one in-memory adapter into
+/// another adapter's inbound queue, tagging them as sent by `from_peer`.
+pub fn route_in_memory_outbound(
+    from_adapter: &mut InMemoryAdapter,
+    to_adapter: &mut InMemoryAdapter,
+    from_peer: impl Into<String>,
+) -> usize {
+    let from_peer = from_peer.into();
+    let outbound = from_adapter.take_outbound();
+    let moved = outbound.len();
+    for (_, bytes) in outbound {
+        to_adapter.enqueue_inbound(from_peer.clone(), bytes);
+    }
+    moved
+}
+
 /// In-memory adapter variant with explicit capability toggles and payload cap.
 #[derive(Debug, Clone)]
 pub struct CappedInMemoryAdapter {
@@ -180,7 +196,9 @@ impl TransportAdapter for CappedInMemoryAdapter {
 
 #[cfg(test)]
 mod tests {
-    use super::{CappedInMemoryAdapter, InMemoryAdapter, TransportAdapter};
+    use super::{
+        route_in_memory_outbound, CappedInMemoryAdapter, InMemoryAdapter, TransportAdapter,
+    };
 
     #[test]
     fn in_memory_adapter_send_and_recv_work() {
@@ -234,5 +252,26 @@ mod tests {
         adapter.set_allow_recv(false);
         assert!(!adapter.can_recv());
         assert!(adapter.recv().is_none());
+    }
+
+    #[test]
+    fn route_in_memory_outbound_moves_messages_to_receiver_inbox() {
+        let mut src = InMemoryAdapter::default();
+        let mut dst = InMemoryAdapter::default();
+        src.send(&"peer-a".to_string(), &[1, 2, 3])
+            .expect("send should succeed");
+        src.send(&"peer-b".to_string(), &[4, 5])
+            .expect("send should succeed");
+
+        let moved = route_in_memory_outbound(&mut src, &mut dst, "src-peer");
+        assert_eq!(moved, 2);
+
+        let (peer1, bytes1) = dst.recv().expect("first inbound expected");
+        assert_eq!(peer1, "src-peer");
+        assert_eq!(bytes1, vec![1, 2, 3]);
+
+        let (peer2, bytes2) = dst.recv().expect("second inbound expected");
+        assert_eq!(peer2, "src-peer");
+        assert_eq!(bytes2, vec![4, 5]);
     }
 }

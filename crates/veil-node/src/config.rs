@@ -49,6 +49,11 @@ impl Default for NodeRuntimeConfig {
 }
 
 impl NodeRuntimeConfig {
+    /// Starts a fluent builder for runtime config.
+    pub fn builder() -> NodeRuntimeConfigBuilder {
+        NodeRuntimeConfigBuilder::default()
+    }
+
     /// Binds a transport peer identifier to a publisher pubkey.
     pub fn bind_peer_publisher(&mut self, peer: impl Into<String>, publisher: [u8; 32]) {
         self.peer_publishers.insert(peer.into(), publisher);
@@ -100,6 +105,67 @@ impl NodeRuntimeConfig {
     }
 }
 
+/// Fluent builder for `NodeRuntimeConfig`.
+#[derive(Debug, Clone, Default)]
+pub struct NodeRuntimeConfigBuilder {
+    cfg: NodeRuntimeConfig,
+}
+
+impl NodeRuntimeConfigBuilder {
+    pub fn base_fast_fanout(mut self, value: usize) -> Self {
+        self.cfg.base_fast_fanout = value;
+        self
+    }
+
+    pub fn base_fallback_fanout(mut self, value: usize) -> Self {
+        self.cfg.base_fallback_fanout = value;
+        self
+    }
+
+    pub fn fallback_redundancy_fanout(mut self, value: usize) -> Self {
+        self.cfg.fallback_redundancy_fanout = value;
+        self
+    }
+
+    pub fn ttl_steps(mut self, value: u64) -> Self {
+        self.cfg.ttl_steps = value;
+        self
+    }
+
+    pub fn max_cache_shards(mut self, value: usize) -> Self {
+        self.cfg.max_cache_shards = value;
+        self
+    }
+
+    pub fn ack_retry(
+        mut self,
+        initial_timeout_steps: u64,
+        retry_batch_size: usize,
+        backoff_steps: u64,
+        max_retries: u32,
+    ) -> Self {
+        self.cfg.ack_initial_timeout_steps = initial_timeout_steps;
+        self.cfg.ack_retry_batch_size = retry_batch_size;
+        self.cfg.ack_backoff_steps = backoff_steps;
+        self.cfg.ack_max_retries = max_retries;
+        self
+    }
+
+    pub fn with_peer_publisher(mut self, peer: impl Into<String>, publisher: [u8; 32]) -> Self {
+        self.cfg.bind_peer_publisher(peer, publisher);
+        self
+    }
+
+    pub fn with_wot_policy(mut self, wot_policy: LocalWotPolicy) -> Self {
+        self.cfg.wot_policy = wot_policy;
+        self
+    }
+
+    pub fn build(self) -> NodeRuntimeConfig {
+        self.cfg
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::NodeRuntimeConfig;
@@ -142,5 +208,28 @@ mod tests {
         assert_eq!(p.retry_batch_size, 3);
         assert_eq!(p.backoff_step, 7);
         assert_eq!(p.max_retries, 9);
+    }
+
+    #[test]
+    fn builder_sets_selected_fields() {
+        let cfg = NodeRuntimeConfig::builder()
+            .base_fast_fanout(5)
+            .base_fallback_fanout(2)
+            .ttl_steps(42)
+            .ack_retry(3, 4, 5, 6)
+            .max_cache_shards(77)
+            .with_peer_publisher("peer-a", [0x99; 32])
+            .build();
+
+        assert_eq!(cfg.base_fast_fanout, 5);
+        assert_eq!(cfg.base_fallback_fanout, 2);
+        assert_eq!(cfg.ttl_steps, 42);
+        assert_eq!(cfg.max_cache_shards, 77);
+        assert_eq!(cfg.classify_peer_tier("peer-a", 0), TrustTier::Unknown);
+        let p = cfg.ack_retry_policy();
+        assert_eq!(p.initial_timeout_steps, 3);
+        assert_eq!(p.retry_batch_size, 4);
+        assert_eq!(p.backoff_step, 5);
+        assert_eq!(p.max_retries, 6);
     }
 }

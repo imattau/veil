@@ -16,3 +16,7 @@ rand.workspace = true
 [[example]]
 name = "end_to_end"
 path = "../../examples/end_to_end.rs"
+
+[[example]]
+name = "runtime_facade"
+path = "../../examples/runtime_facade.rs"

@@ -47,6 +47,45 @@ pub struct PublishResult {
     pub ack_tracked: bool,
 }
 
+/// Typed publish flag options to avoid manual bitfield management.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PublishOptions {
+    pub signed: bool,
+    pub ack_requested: bool,
+    /// Additional raw flag bits (advanced/experimental).
+    pub extra_flags: u16,
+}
+
+impl PublishOptions {
+    pub fn signed() -> Self {
+        Self {
+            signed: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_ack_requested(mut self, ack_requested: bool) -> Self {
+        self.ack_requested = ack_requested;
+        self
+    }
+
+    pub fn with_extra_flags(mut self, extra_flags: u16) -> Self {
+        self.extra_flags = extra_flags;
+        self
+    }
+
+    pub fn to_flags(self) -> u16 {
+        let mut flags = self.extra_flags;
+        if self.signed {
+            flags |= OBJECT_FLAG_SIGNED;
+        }
+        if self.ack_requested {
+            flags |= OBJECT_FLAG_ACK_REQUESTED;
+        }
+        flags
+    }
+}
+
 /// Parameters for queue-driven publish ticks.
 #[derive(Debug, Clone, Copy)]
 pub struct PublishQueueTickParams<'a, PFast, PFallback> {
@@ -338,7 +377,8 @@ mod tests {
 
     use super::{
         publish_encoded_object_multi_lane, publish_queue_tick_multi_lane,
-        publish_service_tick_multi_lane, PublishQueueTickParams, PublishServiceTickParams,
+        publish_service_tick_multi_lane, PublishOptions, PublishQueueTickParams,
+        PublishServiceTickParams,
     };
     use crate::ack::{register_pending_ack, AckRetryPolicy};
     use crate::batch::{BatchLimits, FeedBatcher};
@@ -563,5 +603,17 @@ mod tests {
 
         assert!(out.published.is_none());
         assert!(out.ack_retry_sends > 0);
+    }
+
+    #[test]
+    fn publish_options_build_expected_flag_bits() {
+        let flags = PublishOptions::signed()
+            .with_ack_requested(true)
+            .with_extra_flags(0x0008)
+            .to_flags();
+
+        assert!((flags & OBJECT_FLAG_SIGNED) != 0);
+        assert!((flags & OBJECT_FLAG_ACK_REQUESTED) != 0);
+        assert!((flags & 0x0008) != 0);
     }
 }
