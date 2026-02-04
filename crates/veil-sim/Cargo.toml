@@ -20,3 +20,11 @@ path = "../../examples/end_to_end.rs"
 [[example]]
 name = "runtime_facade"
 path = "../../examples/runtime_facade.rs"
+
+[[example]]
+name = "edge_forwarder_hot_cache"
+path = "../../examples/edge_forwarder_hot_cache.rs"
+
+[[example]]
+name = "bootstrap_peer"
+path = "../../examples/bootstrap_peer.rs"

@@ -50,6 +50,16 @@ Run the facade example:
 cargo run --example runtime_facade
 ```
 
+Profile examples:
+
+```bash
+cargo run -p veil-sim --example edge_forwarder_hot_cache
+cargo run -p veil-sim --example bootstrap_peer
+```
+
+- `edge_forwarder_hot_cache`: edge forwarder + hot cache defaults for VPS-style hosts.
+- `bootstrap_peer`: minimal bootstrap/discovery profile with conservative forwarding.
+
 ## Optional fuzzing
 
 ```bash

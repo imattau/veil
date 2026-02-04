@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::ack::AckRetryPolicy;
 use crate::policy::{
-    fanout_for_tier as fanout_for_tier_impl, LocalWotPolicy, TrustTier, WotPolicy,
+    fanout_for_tier as fanout_for_tier_impl, LocalWotPolicy, TrustTier, WotConfig, WotPolicy,
 };
 
 #[derive(Debug, Clone)]
@@ -52,6 +52,60 @@ impl NodeRuntimeConfig {
     /// Starts a fluent builder for runtime config.
     pub fn builder() -> NodeRuntimeConfigBuilder {
         NodeRuntimeConfigBuilder::default()
+    }
+
+    /// Conservative defaults for an edge-forwarder with a hot cache.
+    ///
+    /// Intended for publicly reachable VPS nodes that maintain many peer links
+    /// and prioritize fast shard convergence without acting as an unbounded
+    /// flood source.
+    pub fn edge_forwarder_hot_cache_defaults() -> Self {
+        let wot_cfg = WotConfig {
+            trusted_forward_quota: 0.70,
+            known_forward_quota: 0.22,
+            unknown_forward_quota: 0.06,
+            muted_forward_quota: 0.02,
+            trusted_storage_budget: 120_000,
+            known_storage_budget: 60_000,
+            unknown_storage_budget: 20_000,
+            muted_storage_budget: 2_000,
+            ..WotConfig::default()
+        };
+
+        Self::builder()
+            .base_fast_fanout(3)
+            .base_fallback_fanout(1)
+            .fallback_redundancy_fanout(1)
+            .ttl_steps(15_000)
+            .max_cache_shards(200_000)
+            .ack_retry(2, 2, 2, 6)
+            .with_wot_policy(LocalWotPolicy::new(wot_cfg))
+            .build()
+    }
+
+    /// Minimal bootstrap-peer defaults focused on reliable initial discovery.
+    pub fn bootstrap_peer_defaults() -> Self {
+        let wot_cfg = WotConfig {
+            trusted_forward_quota: 0.65,
+            known_forward_quota: 0.25,
+            unknown_forward_quota: 0.05,
+            muted_forward_quota: 0.01,
+            trusted_storage_budget: 40_000,
+            known_storage_budget: 15_000,
+            unknown_storage_budget: 3_000,
+            muted_storage_budget: 300,
+            ..WotConfig::default()
+        };
+
+        Self::builder()
+            .base_fast_fanout(2)
+            .base_fallback_fanout(1)
+            .fallback_redundancy_fanout(1)
+            .ttl_steps(8_000)
+            .max_cache_shards(50_000)
+            .ack_retry(2, 2, 2, 4)
+            .with_wot_policy(LocalWotPolicy::new(wot_cfg))
+            .build()
     }
 
     /// Binds a transport peer identifier to a publisher pubkey.
@@ -231,5 +285,18 @@ mod tests {
         assert_eq!(p.retry_batch_size, 4);
         assert_eq!(p.backoff_step, 5);
         assert_eq!(p.max_retries, 6);
+    }
+
+    #[test]
+    fn profile_defaults_are_conservative_and_nonzero() {
+        let edge = NodeRuntimeConfig::edge_forwarder_hot_cache_defaults();
+        assert!(edge.base_fast_fanout >= 2);
+        assert!(edge.max_cache_shards >= 100_000);
+        assert!(edge.wot_policy.config.unknown_forward_quota <= 0.10);
+
+        let bootstrap = NodeRuntimeConfig::bootstrap_peer_defaults();
+        assert!(bootstrap.base_fast_fanout <= edge.base_fast_fanout);
+        assert!(bootstrap.max_cache_shards < edge.max_cache_shards);
+        assert!(bootstrap.wot_policy.config.unknown_forward_quota <= 0.10);
     }
 }
