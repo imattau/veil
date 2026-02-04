@@ -1,6 +1,7 @@
 use veil_codec::shard::ShardV1;
 
 /// Legacy lane-level send abstraction used by some forwarding helpers.
+#[deprecated(note = "use adapter::TransportAdapter for new integrations")]
 pub trait TransportLane {
     /// Sends a shard to one peer selected by the lane implementation.
     fn send_to_one_peer(&self, shard: &ShardV1) -> Result<(), &'static str>;
@@ -10,6 +11,7 @@ pub trait TransportLane {
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
     use std::cell::Cell;
 
     use super::TransportLane;

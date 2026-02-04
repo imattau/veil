@@ -1,7 +1,7 @@
 //! Transport abstractions for VEIL.
 //!
-//! The node/runtime only depends on byte-oriented adapter and lane traits
-//! defined in this crate.
+//! The node/runtime depends on the byte-oriented `adapter::TransportAdapter`.
+//! `lane::TransportLane` is legacy and kept for compatibility only.
 
 pub mod adapter;
 pub mod lane;

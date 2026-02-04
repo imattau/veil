@@ -16,6 +16,8 @@ use crate::state::NodeState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReceiveEvent {
+    /// Payload could not be parsed as a valid shard.
+    IgnoredMalformed,
     /// Shard already cached; ignored.
     IgnoredDuplicate,
     /// Tag not subscribed locally; ignored.

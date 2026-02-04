@@ -42,12 +42,14 @@ pub struct PublishResult {
     pub shards_total: usize,
     pub sent_fast: usize,
     pub sent_fallback: usize,
+    pub failed_fast: usize,
+    pub failed_fallback: usize,
     pub ack_tracked: bool,
 }
 
 /// Parameters for queue-driven publish ticks.
 #[derive(Debug, Clone, Copy)]
-pub struct PublishQueueTickParams<'a, P> {
+pub struct PublishQueueTickParams<'a, PFast, PFallback> {
     pub namespace: Namespace,
     pub epoch: Epoch,
     pub tag: Tag,
@@ -55,14 +57,14 @@ pub struct PublishQueueTickParams<'a, P> {
     pub now_step: u64,
     pub flags: u16,
     pub interactive_flush: bool,
-    pub fast_peers: &'a [P],
-    pub fallback_peers: &'a [P],
+    pub fast_peers: &'a [PFast],
+    pub fallback_peers: &'a [PFallback],
 }
 
 /// Parameters for one publisher service tick.
-pub struct PublishServiceTickParams<'a, P> {
+pub struct PublishServiceTickParams<'a, PFast, PFallback> {
     pub batcher: &'a mut FeedBatcher,
-    pub publish: PublishQueueTickParams<'a, P>,
+    pub publish: PublishQueueTickParams<'a, PFast, PFallback>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,13 +142,13 @@ fn build_encoded_object(
 /// Publishes an encoded VEIL object over fast/fallback lanes and optionally
 /// registers ACK-timeout retry state when `ack_requested` is set.
 #[allow(clippy::too_many_arguments)]
-pub fn publish_encoded_object_multi_lane<A: TransportAdapter>(
+pub fn publish_encoded_object_multi_lane<AFast: TransportAdapter, AFallback: TransportAdapter>(
     node: &mut NodeState,
-    fast_adapter: &mut A,
-    fallback_adapter: &mut A,
+    fast_adapter: &mut AFast,
+    fallback_adapter: &mut AFallback,
     encoded_object: &[u8],
-    fast_peers: &[A::Peer],
-    fallback_peers: &[A::Peer],
+    fast_peers: &[AFast::Peer],
+    fallback_peers: &[AFallback::Peer],
     now_step: u64,
     config: &NodeRuntimeConfig,
 ) -> Result<PublishResult, PublishError> {
@@ -171,15 +173,19 @@ pub fn publish_encoded_object_multi_lane<A: TransportAdapter>(
     let fallback_end = shard_bytes.len().min(fallback_start.saturating_add(2));
 
     let mut sent_fast = 0usize;
+    let mut failed_fast = 0usize;
     for bytes in shard_bytes.iter().take(fast_count) {
         for peer in fast_peers.iter().take(config.base_fast_fanout.min(2)) {
             if fast_adapter.send(peer, bytes).is_ok() {
                 sent_fast += 1;
+            } else {
+                failed_fast += 1;
             }
         }
     }
 
     let mut sent_fallback = 0usize;
+    let mut failed_fallback = 0usize;
     for bytes in shard_bytes.iter().take(fallback_end).skip(fallback_start) {
         for peer in fallback_peers
             .iter()
@@ -187,6 +193,8 @@ pub fn publish_encoded_object_multi_lane<A: TransportAdapter>(
         {
             if fallback_adapter.send(peer, bytes).is_ok() {
                 sent_fallback += 1;
+            } else {
+                failed_fallback += 1;
             }
         }
     }
@@ -203,6 +211,8 @@ pub fn publish_encoded_object_multi_lane<A: TransportAdapter>(
         shards_total: shard_bytes.len(),
         sent_fast,
         sent_fallback,
+        failed_fast,
+        failed_fallback,
         ack_tracked,
     })
 }
@@ -211,12 +221,16 @@ pub fn publish_encoded_object_multi_lane<A: TransportAdapter>(
 ///
 /// Returns `Ok(None)` when the queue is empty.
 #[allow(clippy::too_many_arguments)]
-pub fn publish_queue_tick_multi_lane<A: TransportAdapter, S: Signer>(
+pub fn publish_queue_tick_multi_lane<
+    AFast: TransportAdapter,
+    AFallback: TransportAdapter,
+    S: Signer,
+>(
     node: &mut NodeState,
-    fast_adapter: &mut A,
-    fallback_adapter: &mut A,
+    fast_adapter: &mut AFast,
+    fallback_adapter: &mut AFallback,
     batcher: &mut FeedBatcher,
-    params: PublishQueueTickParams<'_, A::Peer>,
+    params: PublishQueueTickParams<'_, AFast::Peer, AFallback::Peer>,
     config: &NodeRuntimeConfig,
     cipher: &impl AeadCipher,
     signer: Option<&S>,
@@ -263,11 +277,19 @@ pub fn publish_queue_tick_multi_lane<A: TransportAdapter, S: Signer>(
 /// Runs one publish service tick:
 /// - drains and publishes one queued batch (if present)
 /// - sends due ACK-timeout retries over fallback peers
-pub fn publish_service_tick_multi_lane<A: TransportAdapter, S: Signer>(
+///
+/// This is the recommended publisher-side entrypoint for steady-state operation.
+/// Call it once per scheduler step/tick after enqueuing feed payloads into the
+/// batcher. The function may publish a new object, emit retry shards, or both.
+pub fn publish_service_tick_multi_lane<
+    AFast: TransportAdapter,
+    AFallback: TransportAdapter,
+    S: Signer,
+>(
     node: &mut NodeState,
-    fast_adapter: &mut A,
-    fallback_adapter: &mut A,
-    params: PublishServiceTickParams<'_, A::Peer>,
+    fast_adapter: &mut AFast,
+    fallback_adapter: &mut AFallback,
+    params: PublishServiceTickParams<'_, AFast::Peer, AFallback::Peer>,
     config: &NodeRuntimeConfig,
     cipher: &impl AeadCipher,
     signer: Option<&S>,
@@ -467,7 +489,7 @@ mod tests {
         batcher.enqueue(vec![9_u8; 8]);
         let peers = vec!["peer-a".to_string()];
 
-        let err = publish_queue_tick_multi_lane::<InMemoryAdapter, Ed25519Signer>(
+        let err = publish_queue_tick_multi_lane::<InMemoryAdapter, InMemoryAdapter, Ed25519Signer>(
             &mut node,
             &mut fast,
             &mut fallback,

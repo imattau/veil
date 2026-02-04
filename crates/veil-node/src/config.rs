@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use crate::ack::AckRetryPolicy;
-use crate::policy::{fanout_for_tier, LocalWotPolicy, TrustTier, WotPolicy};
+use crate::policy::{
+    fanout_for_tier as fanout_for_tier_impl, LocalWotPolicy, TrustTier, WotPolicy,
+};
 
 #[derive(Debug, Clone)]
 pub struct NodeRuntimeConfig {
@@ -52,6 +54,11 @@ impl NodeRuntimeConfig {
         self.peer_publishers.insert(peer.into(), publisher);
     }
 
+    /// Looks up the configured publisher pubkey for a transport peer id.
+    pub fn publisher_for_peer(&self, peer: &str) -> Option<[u8; 32]> {
+        self.peer_publishers.get(peer).copied()
+    }
+
     /// Classifies an inbound peer's mapped publisher into a local trust tier.
     pub fn classify_peer_tier(&self, peer: &str, now_step: u64) -> TrustTier {
         if let Some(pubkey) = self.peer_publishers.get(peer) {
@@ -61,10 +68,25 @@ impl NodeRuntimeConfig {
         }
     }
 
+    /// Classifies an optional publisher pubkey into a local trust tier.
+    ///
+    /// This is useful for runtimes that keep peer->publisher mapping outside
+    /// `NodeRuntimeConfig` and want to avoid string-based peer identifiers.
+    pub fn classify_publisher_tier(&self, publisher: Option<[u8; 32]>, now_step: u64) -> TrustTier {
+        publisher
+            .map(|pubkey| self.wot_policy.classify_publisher(pubkey, now_step))
+            .unwrap_or(TrustTier::Unknown)
+    }
+
     /// Computes effective fanout for a peer using current WoT policy quotas.
     pub fn fanout_for_peer(&self, peer: &str, now_step: u64, base_fanout: usize) -> usize {
         let tier = self.classify_peer_tier(peer, now_step);
-        fanout_for_tier(base_fanout, tier, &self.wot_policy)
+        fanout_for_tier_impl(base_fanout, tier, &self.wot_policy)
+    }
+
+    /// Computes effective fanout for a trust tier using current WoT quotas.
+    pub fn fanout_for_tier(&self, tier: TrustTier, base_fanout: usize) -> usize {
+        fanout_for_tier_impl(base_fanout, tier, &self.wot_policy)
     }
 
     /// Returns ACK timeout/retry policy derived from runtime config.

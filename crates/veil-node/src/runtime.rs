@@ -28,6 +28,10 @@ pub struct RuntimeStats {
     pub delivered_messages: usize,
     /// ACK payload objects recognized and matched to pending ACK state.
     pub ack_messages: usize,
+    /// Inbound payloads that failed shard decode.
+    pub malformed_messages: usize,
+    /// Outbound send attempts that failed at transport level.
+    pub send_failures: usize,
 }
 
 /// Parameters for a single-lane `pump_once` call.
@@ -57,21 +61,22 @@ pub struct LaneForwardParams<'a, P> {
 }
 
 /// Parameters for `pump_multi_lane_once`.
-pub struct MultiLanePumpParams<'a, P> {
-    pub fast_lane: LaneForwardParams<'a, P>,
-    pub fallback_lane: LaneForwardParams<'a, P>,
+pub struct MultiLanePumpParams<'a, PFast, PFallback> {
+    pub fast_lane: LaneForwardParams<'a, PFast>,
+    pub fallback_lane: LaneForwardParams<'a, PFallback>,
     pub fallback_redundancy_fanout: usize,
     pub now_step: u64,
     pub ttl_steps: u64,
-    pub policy_hooks: RuntimePolicyHooks<'a, P>,
+    pub fast_policy_hooks: RuntimePolicyHooks<'a, PFast>,
+    pub fallback_policy_hooks: RuntimePolicyHooks<'a, PFallback>,
     pub decrypt_key: &'a [u8; 32],
     pub stats: &'a mut RuntimeStats,
 }
 
 /// Configuration-driven wrapper parameters for `pump_multi_lane_once_with_config`.
-pub struct ConfigMultiLanePumpParams<'a, P> {
-    pub fast_peers: &'a [P],
-    pub fallback_peers: &'a [P],
+pub struct ConfigMultiLanePumpParams<'a, PFast, PFallback> {
+    pub fast_peers: &'a [PFast],
+    pub fallback_peers: &'a [PFallback],
     pub now_step: u64,
     pub decrypt_key: &'a [u8; 32],
     pub config: &'a NodeRuntimeConfig,
@@ -82,6 +87,8 @@ pub struct ConfigMultiLanePumpParams<'a, P> {
 pub type PeerFanoutFn<'a, P> = dyn Fn(&P, u64, usize) -> usize + 'a;
 /// Optional callback used to classify peer trust tier for cache policy.
 pub type PeerTierFn<'a, P> = dyn Fn(&P, u64) -> TrustTier + 'a;
+/// Optional callback resolving an inbound peer to publisher pubkey.
+pub type PeerPublisherResolver<'a, P> = dyn Fn(&P) -> Option<[u8; 32]> + 'a;
 
 #[derive(Clone, Copy)]
 pub struct RuntimePolicyHooks<'a, P> {
@@ -146,7 +153,8 @@ fn process_inbound<A: TransportAdapter>(
         Ok(shard) => shard,
         Err(_) => {
             stats.ignored_messages += 1;
-            return Ok(ReceiveEvent::IgnoredNotSubscribed);
+            stats.malformed_messages += 1;
+            return Ok(ReceiveEvent::IgnoredMalformed);
         }
     };
     stats.parsed_shards += 1;
@@ -170,6 +178,8 @@ fn process_inbound<A: TransportAdapter>(
         {
             if adapter.send(peer, bytes).is_ok() {
                 stats.forwarded_messages += 1;
+            } else {
+                stats.send_failures += 1;
             }
         }
     }
@@ -196,6 +206,8 @@ fn process_inbound<A: TransportAdapter>(
                 for ack_shard in &ack_shards {
                     if adapter.send(from_peer, ack_shard).is_ok() {
                         stats.forwarded_messages += 1;
+                    } else {
+                        stats.send_failures += 1;
                     }
                 }
             }
@@ -283,11 +295,46 @@ where
         config,
         stats,
     } = params;
+    let resolver = |peer: &A::Peer| config.publisher_for_peer(&peer.to_string());
+    pump_once_with_config_resolver(
+        node,
+        adapter,
+        ConfigPumpParams {
+            peers,
+            now_step,
+            decrypt_key,
+            config,
+            stats,
+        },
+        &resolver,
+        cipher,
+        verifier,
+    )
+}
+
+/// Convenience wrapper around `pump_once` using `NodeRuntimeConfig` and an
+/// external peer->publisher resolver.
+pub fn pump_once_with_config_resolver<A: TransportAdapter>(
+    node: &mut NodeState,
+    adapter: &mut A,
+    params: ConfigPumpParams<'_, A::Peer>,
+    resolver: &PeerPublisherResolver<'_, A::Peer>,
+    cipher: &impl AeadCipher,
+    verifier: &impl Verifier,
+) -> Result<Option<ReceiveEvent>, ReceiveError> {
+    let ConfigPumpParams {
+        peers,
+        now_step,
+        decrypt_key,
+        config,
+        stats,
+    } = params;
 
     let fanout_fn = |peer: &A::Peer, step: u64, base: usize| {
-        config.fanout_for_peer(&peer.to_string(), step, base)
+        let tier = config.classify_publisher_tier(resolver(peer), step);
+        config.fanout_for_tier(tier, base)
     };
-    let tier_fn = |peer: &A::Peer, step: u64| config.classify_peer_tier(&peer.to_string(), step);
+    let tier_fn = |peer: &A::Peer, step: u64| config.classify_publisher_tier(resolver(peer), step);
 
     pump_once(
         node,
@@ -317,7 +364,26 @@ pub fn pump_multi_lane_once<A: TransportAdapter>(
     node: &mut NodeState,
     fast_adapter: &mut A,
     fallback_adapter: &mut A,
-    params: MultiLanePumpParams<'_, A::Peer>,
+    params: MultiLanePumpParams<'_, A::Peer, A::Peer>,
+    cipher: &impl AeadCipher,
+    verifier: &impl Verifier,
+) -> Result<Option<ReceiveEvent>, ReceiveError> {
+    pump_multi_lane_once_split(
+        node,
+        fast_adapter,
+        fallback_adapter,
+        params,
+        cipher,
+        verifier,
+    )
+}
+
+/// Runs one multi-lane runtime step with independent adapter types per lane.
+pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportAdapter>(
+    node: &mut NodeState,
+    fast_adapter: &mut AFast,
+    fallback_adapter: &mut AFallback,
+    params: MultiLanePumpParams<'_, AFast::Peer, AFallback::Peer>,
     cipher: &impl AeadCipher,
     verifier: &impl Verifier,
 ) -> Result<Option<ReceiveEvent>, ReceiveError> {
@@ -327,20 +393,24 @@ pub fn pump_multi_lane_once<A: TransportAdapter>(
         fallback_redundancy_fanout,
         now_step,
         ttl_steps,
-        policy_hooks,
+        fast_policy_hooks,
+        fallback_policy_hooks,
         decrypt_key,
         stats,
     } = params;
 
     if let Some((from_peer, bytes)) = fast_adapter.recv() {
-        let effective_fast_fanout = policy_hooks
+        let effective_fast_fanout = fast_policy_hooks
             .fanout_for_peer
             .map(|f| f(&from_peer, now_step, fast_lane.fanout))
             .unwrap_or(fast_lane.fanout);
-        let cache_policy = match (policy_hooks.classify_peer_tier, policy_hooks.wot_policy) {
+        let cache_policy = match (
+            fast_policy_hooks.classify_peer_tier,
+            fast_policy_hooks.wot_policy,
+        ) {
             (Some(classify_peer_tier), Some(wot_policy)) => Some(ReceiveCachePolicy {
                 tier: classify_peer_tier(&from_peer, now_step),
-                max_cache_shards: policy_hooks.max_cache_shards,
+                max_cache_shards: fast_policy_hooks.max_cache_shards,
                 wot_policy,
             }),
             _ => None,
@@ -363,20 +433,17 @@ pub fn pump_multi_lane_once<A: TransportAdapter>(
             verifier,
         )?;
 
-        let effective_redundancy = policy_hooks
+        let effective_redundancy = fast_policy_hooks
             .fanout_for_peer
             .map(|f| f(&from_peer, now_step, fallback_redundancy_fanout))
             .unwrap_or(fallback_redundancy_fanout);
 
         if is_forwardable(&event) && effective_redundancy > 0 {
-            for peer in fallback_lane
-                .peers
-                .iter()
-                .filter(|peer| **peer != from_peer)
-                .take(effective_redundancy)
-            {
+            for peer in fallback_lane.peers.iter().take(effective_redundancy) {
                 if fallback_adapter.send(peer, &bytes).is_ok() {
                     stats.forwarded_messages += 1;
+                } else {
+                    stats.send_failures += 1;
                 }
             }
         }
@@ -384,14 +451,17 @@ pub fn pump_multi_lane_once<A: TransportAdapter>(
     }
 
     if let Some((from_peer, bytes)) = fallback_adapter.recv() {
-        let effective_fallback_fanout = policy_hooks
+        let effective_fallback_fanout = fallback_policy_hooks
             .fanout_for_peer
             .map(|f| f(&from_peer, now_step, fallback_lane.fanout))
             .unwrap_or(fallback_lane.fanout);
-        let cache_policy = match (policy_hooks.classify_peer_tier, policy_hooks.wot_policy) {
+        let cache_policy = match (
+            fallback_policy_hooks.classify_peer_tier,
+            fallback_policy_hooks.wot_policy,
+        ) {
             (Some(classify_peer_tier), Some(wot_policy)) => Some(ReceiveCachePolicy {
                 tier: classify_peer_tier(&from_peer, now_step),
-                max_cache_shards: policy_hooks.max_cache_shards,
+                max_cache_shards: fallback_policy_hooks.max_cache_shards,
                 wot_policy,
             }),
             _ => None,
@@ -424,7 +494,7 @@ pub fn pump_multi_lane_once_with_config<A>(
     node: &mut NodeState,
     fast_adapter: &mut A,
     fallback_adapter: &mut A,
-    params: ConfigMultiLanePumpParams<'_, A::Peer>,
+    params: ConfigMultiLanePumpParams<'_, A::Peer, A::Peer>,
     cipher: &impl AeadCipher,
     verifier: &impl Verifier,
 ) -> Result<Option<ReceiveEvent>, ReceiveError>
@@ -440,13 +510,66 @@ where
         config,
         stats,
     } = params;
+    let resolver = |peer: &A::Peer| config.publisher_for_peer(&peer.to_string());
+    pump_multi_lane_once_with_config_resolvers_split(
+        node,
+        fast_adapter,
+        fallback_adapter,
+        ConfigMultiLanePumpParams {
+            fast_peers,
+            fallback_peers,
+            now_step,
+            decrypt_key,
+            config,
+            stats,
+        },
+        &resolver,
+        &resolver,
+        cipher,
+        verifier,
+    )
+}
 
-    let fanout_fn = |peer: &A::Peer, step: u64, base: usize| {
-        config.fanout_for_peer(&peer.to_string(), step, base)
+/// Convenience wrapper around `pump_multi_lane_once_split` using
+/// `NodeRuntimeConfig` and explicit peer->publisher resolvers.
+pub fn pump_multi_lane_once_with_config_resolvers_split<AFast, AFallback>(
+    node: &mut NodeState,
+    fast_adapter: &mut AFast,
+    fallback_adapter: &mut AFallback,
+    params: ConfigMultiLanePumpParams<'_, AFast::Peer, AFallback::Peer>,
+    fast_resolver: &PeerPublisherResolver<'_, AFast::Peer>,
+    fallback_resolver: &PeerPublisherResolver<'_, AFallback::Peer>,
+    cipher: &impl AeadCipher,
+    verifier: &impl Verifier,
+) -> Result<Option<ReceiveEvent>, ReceiveError>
+where
+    AFast: TransportAdapter,
+    AFallback: TransportAdapter,
+{
+    let ConfigMultiLanePumpParams {
+        fast_peers,
+        fallback_peers,
+        now_step,
+        decrypt_key,
+        config,
+        stats,
+    } = params;
+
+    let fast_fanout_fn = |peer: &AFast::Peer, step: u64, base: usize| {
+        let tier = config.classify_publisher_tier(fast_resolver(peer), step);
+        config.fanout_for_tier(tier, base)
     };
-    let tier_fn = |peer: &A::Peer, step: u64| config.classify_peer_tier(&peer.to_string(), step);
+    let fast_tier_fn =
+        |peer: &AFast::Peer, step: u64| config.classify_publisher_tier(fast_resolver(peer), step);
+    let fallback_fanout_fn = |peer: &AFallback::Peer, step: u64, base: usize| {
+        let tier = config.classify_publisher_tier(fallback_resolver(peer), step);
+        config.fanout_for_tier(tier, base)
+    };
+    let fallback_tier_fn = |peer: &AFallback::Peer, step: u64| {
+        config.classify_publisher_tier(fallback_resolver(peer), step)
+    };
 
-    pump_multi_lane_once(
+    pump_multi_lane_once_split(
         node,
         fast_adapter,
         fallback_adapter,
@@ -462,9 +585,15 @@ where
             fallback_redundancy_fanout: config.fallback_redundancy_fanout,
             now_step,
             ttl_steps: config.ttl_steps,
-            policy_hooks: RuntimePolicyHooks {
-                fanout_for_peer: Some(&fanout_fn),
-                classify_peer_tier: Some(&tier_fn),
+            fast_policy_hooks: RuntimePolicyHooks {
+                fanout_for_peer: Some(&fast_fanout_fn),
+                classify_peer_tier: Some(&fast_tier_fn),
+                max_cache_shards: config.max_cache_shards,
+                wot_policy: Some(&config.wot_policy),
+            },
+            fallback_policy_hooks: RuntimePolicyHooks {
+                fanout_for_peer: Some(&fallback_fanout_fn),
+                classify_peer_tier: Some(&fallback_tier_fn),
                 max_cache_shards: config.max_cache_shards,
                 wot_policy: Some(&config.wot_policy),
             },
@@ -476,12 +605,62 @@ where
     )
 }
 
+pub fn pump_multi_lane_once_with_config_split<AFast, AFallback>(
+    node: &mut NodeState,
+    fast_adapter: &mut AFast,
+    fallback_adapter: &mut AFallback,
+    params: ConfigMultiLanePumpParams<'_, AFast::Peer, AFallback::Peer>,
+    cipher: &impl AeadCipher,
+    verifier: &impl Verifier,
+) -> Result<Option<ReceiveEvent>, ReceiveError>
+where
+    AFast: TransportAdapter,
+    AFallback: TransportAdapter,
+    AFast::Peer: ToString,
+    AFallback::Peer: ToString,
+{
+    let ConfigMultiLanePumpParams {
+        fast_peers,
+        fallback_peers,
+        now_step,
+        decrypt_key,
+        config,
+        stats,
+    } = params;
+    let fast_resolver = |peer: &AFast::Peer| config.publisher_for_peer(&peer.to_string());
+    let fallback_resolver = |peer: &AFallback::Peer| config.publisher_for_peer(&peer.to_string());
+    pump_multi_lane_once_with_config_resolvers_split(
+        node,
+        fast_adapter,
+        fallback_adapter,
+        ConfigMultiLanePumpParams {
+            fast_peers,
+            fallback_peers,
+            now_step,
+            decrypt_key,
+            config,
+            stats,
+        },
+        &fast_resolver,
+        &fallback_resolver,
+        cipher,
+        verifier,
+    )
+}
+
 /// Runs one multi-lane runtime tick and then processes due ACK-timeout retries.
+///
+/// This is the recommended node-side runtime entrypoint:
+/// - ingests one message (fast lane first, then fallback)
+/// - applies forwarding/reconstruction/decrypt pipeline
+/// - auto-emits ACK objects for delivered inbound objects with
+///   `ack_requested`
+/// - sends due retry shards for locally pending outbound ACK waits
 pub fn pump_multi_lane_tick_with_config<A>(
     node: &mut NodeState,
     fast_adapter: &mut A,
     fallback_adapter: &mut A,
-    params: ConfigMultiLanePumpParams<'_, A::Peer>,
+    params: ConfigMultiLanePumpParams<'_, A::Peer, A::Peer>,
     cipher: &impl AeadCipher,
     verifier: &impl Verifier,
 ) -> Result<Option<ReceiveEvent>, ReceiveError>
@@ -497,8 +676,8 @@ where
         config,
         stats,
     } = params;
-
-    let event = pump_multi_lane_once_with_config(
+    let resolver = |peer: &A::Peer| config.publisher_for_peer(&peer.to_string());
+    pump_multi_lane_tick_with_config_resolvers_split(
         node,
         fast_adapter,
         fallback_adapter,
@@ -510,6 +689,52 @@ where
             config,
             stats,
         },
+        &resolver,
+        &resolver,
+        cipher,
+        verifier,
+    )
+}
+
+/// Runs one multi-lane runtime tick for independent adapter types and then
+/// processes due ACK-timeout retries using explicit peer resolvers.
+pub fn pump_multi_lane_tick_with_config_resolvers_split<AFast, AFallback>(
+    node: &mut NodeState,
+    fast_adapter: &mut AFast,
+    fallback_adapter: &mut AFallback,
+    params: ConfigMultiLanePumpParams<'_, AFast::Peer, AFallback::Peer>,
+    fast_resolver: &PeerPublisherResolver<'_, AFast::Peer>,
+    fallback_resolver: &PeerPublisherResolver<'_, AFallback::Peer>,
+    cipher: &impl AeadCipher,
+    verifier: &impl Verifier,
+) -> Result<Option<ReceiveEvent>, ReceiveError>
+where
+    AFast: TransportAdapter,
+    AFallback: TransportAdapter,
+{
+    let ConfigMultiLanePumpParams {
+        fast_peers,
+        fallback_peers,
+        now_step,
+        decrypt_key,
+        config,
+        stats,
+    } = params;
+
+    let event = pump_multi_lane_once_with_config_resolvers_split(
+        node,
+        fast_adapter,
+        fallback_adapter,
+        ConfigMultiLanePumpParams {
+            fast_peers,
+            fallback_peers,
+            now_step,
+            decrypt_key,
+            config,
+            stats,
+        },
+        fast_resolver,
+        fallback_resolver,
         cipher,
         verifier,
     )?;
@@ -524,6 +749,51 @@ where
     );
 
     Ok(event)
+}
+
+/// Runs one multi-lane runtime tick for independent adapter types and then
+/// processes due ACK-timeout retries.
+pub fn pump_multi_lane_tick_with_config_split<AFast, AFallback>(
+    node: &mut NodeState,
+    fast_adapter: &mut AFast,
+    fallback_adapter: &mut AFallback,
+    params: ConfigMultiLanePumpParams<'_, AFast::Peer, AFallback::Peer>,
+    cipher: &impl AeadCipher,
+    verifier: &impl Verifier,
+) -> Result<Option<ReceiveEvent>, ReceiveError>
+where
+    AFast: TransportAdapter,
+    AFallback: TransportAdapter,
+    AFast::Peer: ToString,
+    AFallback::Peer: ToString,
+{
+    let ConfigMultiLanePumpParams {
+        fast_peers,
+        fallback_peers,
+        now_step,
+        decrypt_key,
+        config,
+        stats,
+    } = params;
+    let fast_resolver = |peer: &AFast::Peer| config.publisher_for_peer(&peer.to_string());
+    let fallback_resolver = |peer: &AFallback::Peer| config.publisher_for_peer(&peer.to_string());
+    pump_multi_lane_tick_with_config_resolvers_split(
+        node,
+        fast_adapter,
+        fallback_adapter,
+        ConfigMultiLanePumpParams {
+            fast_peers,
+            fallback_peers,
+            now_step,
+            decrypt_key,
+            config,
+            stats,
+        },
+        &fast_resolver,
+        &fallback_resolver,
+        cipher,
+        verifier,
+    )
 }
 
 /// Sends due ACK-timeout retry batches over the fallback lane.
@@ -544,6 +814,8 @@ pub fn pump_ack_timeouts<A: TransportAdapter>(
                 if fallback_adapter.send(peer, &shard_bytes).is_ok() {
                     stats.forwarded_messages += 1;
                     sent += 1;
+                } else {
+                    stats.send_failures += 1;
                 }
             }
         }
@@ -697,10 +969,11 @@ mod tests {
 
         assert!(matches!(
             event,
-            Some(crate::receive::ReceiveEvent::IgnoredNotSubscribed)
+            Some(crate::receive::ReceiveEvent::IgnoredMalformed)
         ));
         assert_eq!(stats.parsed_shards, 0);
         assert_eq!(stats.ignored_messages, 1);
+        assert_eq!(stats.malformed_messages, 1);
     }
 
     #[test]
@@ -748,7 +1021,8 @@ mod tests {
                     fallback_redundancy_fanout: 1,
                     now_step: step as u64,
                     ttl_steps: 100,
-                    policy_hooks: RuntimePolicyHooks::default(),
+                    fast_policy_hooks: RuntimePolicyHooks::default(),
+                    fallback_policy_hooks: RuntimePolicyHooks::default(),
                     decrypt_key: &key,
                     stats: &mut stats,
                 },
@@ -805,7 +1079,8 @@ mod tests {
                 fallback_redundancy_fanout: 1,
                 now_step: 0,
                 ttl_steps: 100,
-                policy_hooks: RuntimePolicyHooks::default(),
+                fast_policy_hooks: RuntimePolicyHooks::default(),
+                fallback_policy_hooks: RuntimePolicyHooks::default(),
                 decrypt_key: &key,
                 stats: &mut stats,
             },
