@@ -133,6 +133,7 @@ where
     C: AeadCipher,
     S: Signer,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         state: NodeState,
         batcher: FeedBatcher,

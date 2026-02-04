@@ -532,6 +532,7 @@ where
 
 /// Convenience wrapper around `pump_multi_lane_once_split` using
 /// `NodeRuntimeConfig` and explicit peer->publisher resolvers.
+#[allow(clippy::too_many_arguments)]
 pub fn pump_multi_lane_once_with_config_resolvers_split<AFast, AFallback>(
     node: &mut NodeState,
     fast_adapter: &mut AFast,
@@ -698,6 +699,7 @@ where
 
 /// Runs one multi-lane runtime tick for independent adapter types and then
 /// processes due ACK-timeout retries using explicit peer resolvers.
+#[allow(clippy::too_many_arguments)]
 pub fn pump_multi_lane_tick_with_config_resolvers_split<AFast, AFallback>(
     node: &mut NodeState,
     fast_adapter: &mut AFast,
