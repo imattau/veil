@@ -25,6 +25,7 @@ VEIL is designed to be practical first:
 - `crates/veil-fec` - profile selection and erasure-coding sharder
 - `crates/veil-node` - runtime, forwarding, cache, ACK handling
 - `crates/veil-transport` - transport adapter abstractions
+- `crates/veil-transport-websocket` - websocket `TransportAdapter` implementation
 - `crates/veil-sim` - e2e, performance, stress, and memory tests
 
 ## Quick start

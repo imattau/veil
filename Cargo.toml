@@ -6,6 +6,7 @@ members = [
   "crates/veil-fec",
   "crates/veil-node",
   "crates/veil-transport",
+  "crates/veil-transport-websocket",
   "crates/veil-sim",
   "crates/veil-wasm",
 ]
