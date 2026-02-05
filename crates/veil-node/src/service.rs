@@ -5,7 +5,7 @@ use veil_crypto::signing::{Signer, Verifier};
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
 use crate::batch::FeedBatcher;
-use crate::config::NodeRuntimeConfig;
+use crate::config::{AdaptiveLaneScoringConfig, NodeRuntimeConfig};
 use crate::policy::EndorsementIngestResult;
 use crate::publish::{
     publish_service_tick_multi_lane, PublishError, PublishOptions, PublishQueueTickParams,
@@ -62,6 +62,45 @@ pub struct NodeRuntimeTransportHealth {
     pub fallback_lane: TransportHealthSnapshot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AdaptiveLaneScoreSnapshot {
+    pub fast_score: f64,
+    pub fallback_score: f64,
+    pub effective_fast_fanout: usize,
+    pub effective_fallback_fanout: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AdaptiveLaneScoringState {
+    fast_score: f64,
+    fallback_score: f64,
+    fast_send_success_ewma: f64,
+    fallback_send_success_ewma: f64,
+    fast_ack_ewma: f64,
+    fallback_ack_ewma: f64,
+    last_fast_snapshot: TransportHealthSnapshot,
+    last_fallback_snapshot: TransportHealthSnapshot,
+    effective_fast_fanout: usize,
+    effective_fallback_fanout: usize,
+}
+
+impl AdaptiveLaneScoringState {
+    fn new(base_fast: usize, base_fallback: usize) -> Self {
+        Self {
+            fast_score: 0.5,
+            fallback_score: 0.5,
+            fast_send_success_ewma: 0.8,
+            fallback_send_success_ewma: 0.8,
+            fast_ack_ewma: 0.5,
+            fallback_ack_ewma: 0.5,
+            last_fast_snapshot: TransportHealthSnapshot::default(),
+            last_fallback_snapshot: TransportHealthSnapshot::default(),
+            effective_fast_fanout: base_fast,
+            effective_fallback_fanout: base_fallback,
+        }
+    }
+}
+
 /// Runtime loop configuration for `NodeRuntime` orchestration.
 #[derive(Debug, Clone, Copy)]
 pub struct NodeRuntimeRunnerConfig {
@@ -84,6 +123,64 @@ impl Default for NodeRuntimeRunnerConfig {
             max_consecutive_errors: Some(32),
         }
     }
+}
+
+fn clamp01(value: f64) -> f64 {
+    value.clamp(0.0, 1.0)
+}
+
+fn ewma_update(previous: f64, next: f64, alpha: f64) -> f64 {
+    let a = alpha.clamp(0.0, 1.0);
+    (1.0 - a) * previous + a * next
+}
+
+fn ratio_or_neutral(ok: u64, total: u64, neutral: f64) -> f64 {
+    if total == 0 {
+        neutral
+    } else {
+        ok as f64 / total as f64
+    }
+}
+
+fn latency_to_score(p95_latency_ms: Option<u64>, scale_ms: u64) -> f64 {
+    let Some(p95) = p95_latency_ms else {
+        return 0.5;
+    };
+    let scale = scale_ms.max(1) as f64;
+    clamp01(1.0 - (p95 as f64 / scale))
+}
+
+fn send_delta(previous: TransportHealthSnapshot, current: TransportHealthSnapshot) -> (u64, u64) {
+    let ok = current
+        .outbound_send_ok
+        .saturating_sub(previous.outbound_send_ok);
+    let err = current
+        .outbound_send_err
+        .saturating_sub(previous.outbound_send_err);
+    (ok, ok.saturating_add(err))
+}
+
+fn rebalance_fanout(
+    base_fast: usize,
+    base_fallback: usize,
+    fast_score: f64,
+    fallback_score: f64,
+    cfg: AdaptiveLaneScoringConfig,
+) -> (usize, usize) {
+    let total = base_fast.saturating_add(base_fallback).max(1);
+    let mut fast = base_fast;
+    let mut fallback = base_fallback.max(cfg.min_fallback_fanout.min(total));
+
+    let score_sum = (fast_score + fallback_score).max(0.000_1);
+    let gap = fast_score - fallback_score;
+    if gap.abs() >= cfg.hysteresis_margin {
+        fast = ((total as f64) * (fast_score / score_sum)).round() as usize;
+        fast = fast.min(total);
+        fallback = total.saturating_sub(fast);
+        fallback = fallback.max(cfg.min_fallback_fanout.min(total));
+        fast = total.saturating_sub(fallback);
+    }
+    (fast, fallback)
 }
 
 /// Exit reason for `NodeRuntime` loop helpers.
@@ -114,6 +211,7 @@ where
     pub config: NodeRuntimeConfig,
     pub decrypt_key: [u8; 32],
     pub stats: RuntimeStats,
+    adaptive_lane_state: AdaptiveLaneScoringState,
     cipher: C,
     verifier: V,
 }
@@ -134,6 +232,8 @@ where
         cipher: C,
         verifier: V,
     ) -> Self {
+        let adaptive_lane_state =
+            AdaptiveLaneScoringState::new(config.base_fast_fanout, config.base_fallback_fanout);
         Self {
             state,
             fast_adapter,
@@ -141,6 +241,7 @@ where
             config,
             decrypt_key,
             stats: RuntimeStats::default(),
+            adaptive_lane_state,
             cipher,
             verifier,
         }
@@ -154,6 +255,99 @@ where
         }
     }
 
+    pub fn adaptive_lane_scores(&self) -> Option<AdaptiveLaneScoreSnapshot> {
+        if !self.config.adaptive_lane_scoring.enabled {
+            return None;
+        }
+        Some(AdaptiveLaneScoreSnapshot {
+            fast_score: self.adaptive_lane_state.fast_score,
+            fallback_score: self.adaptive_lane_state.fallback_score,
+            effective_fast_fanout: self.adaptive_lane_state.effective_fast_fanout,
+            effective_fallback_fanout: self.adaptive_lane_state.effective_fallback_fanout,
+        })
+    }
+
+    fn effective_lane_fanouts(&self) -> (usize, usize) {
+        if self.config.adaptive_lane_scoring.enabled {
+            (
+                self.adaptive_lane_state.effective_fast_fanout,
+                self.adaptive_lane_state.effective_fallback_fanout,
+            )
+        } else {
+            (
+                self.config.base_fast_fanout,
+                self.config.base_fallback_fanout,
+            )
+        }
+    }
+
+    fn update_adaptive_lane_scoring(&mut self, ack_delta: usize) {
+        let cfg = self.config.adaptive_lane_scoring;
+        if !cfg.enabled {
+            return;
+        }
+        let fast = self.fast_adapter.health_snapshot();
+        let fallback = self.fallback_adapter.health_snapshot();
+        let fast_latency = self.fast_adapter.p95_latency_ms();
+        let fallback_latency = self.fallback_adapter.p95_latency_ms();
+        let fast_ack = self.fast_adapter.ack_success_rate();
+        let fallback_ack = self.fallback_adapter.ack_success_rate();
+
+        let (fast_send_ok, fast_send_total) =
+            send_delta(self.adaptive_lane_state.last_fast_snapshot, fast);
+        let (fallback_send_ok, fallback_send_total) =
+            send_delta(self.adaptive_lane_state.last_fallback_snapshot, fallback);
+
+        self.adaptive_lane_state.fast_send_success_ewma = ewma_update(
+            self.adaptive_lane_state.fast_send_success_ewma,
+            ratio_or_neutral(fast_send_ok, fast_send_total, 0.5),
+            cfg.ewma_alpha,
+        );
+        self.adaptive_lane_state.fallback_send_success_ewma = ewma_update(
+            self.adaptive_lane_state.fallback_send_success_ewma,
+            ratio_or_neutral(fallback_send_ok, fallback_send_total, 0.5),
+            cfg.ewma_alpha,
+        );
+
+        let ack_hint = if ack_delta > 0 { 0.8 } else { 0.5 };
+        self.adaptive_lane_state.fast_ack_ewma = ewma_update(
+            self.adaptive_lane_state.fast_ack_ewma,
+            fast_ack.unwrap_or(ack_hint),
+            cfg.ewma_alpha,
+        );
+        self.adaptive_lane_state.fallback_ack_ewma = ewma_update(
+            self.adaptive_lane_state.fallback_ack_ewma,
+            fallback_ack.unwrap_or(ack_hint),
+            cfg.ewma_alpha,
+        );
+
+        let fast_latency_score = latency_to_score(fast_latency, cfg.latency_scale_ms);
+        let fallback_latency_score = latency_to_score(fallback_latency, cfg.latency_scale_ms);
+
+        self.adaptive_lane_state.fast_score = clamp01(
+            cfg.weight_send_success * self.adaptive_lane_state.fast_send_success_ewma
+                + cfg.weight_ack_success * self.adaptive_lane_state.fast_ack_ewma
+                + cfg.weight_latency * fast_latency_score,
+        );
+        self.adaptive_lane_state.fallback_score = clamp01(
+            cfg.weight_send_success * self.adaptive_lane_state.fallback_send_success_ewma
+                + cfg.weight_ack_success * self.adaptive_lane_state.fallback_ack_ewma
+                + cfg.weight_latency * fallback_latency_score,
+        );
+
+        let (fast_fanout, fallback_fanout) = rebalance_fanout(
+            self.config.base_fast_fanout,
+            self.config.base_fallback_fanout,
+            self.adaptive_lane_state.fast_score,
+            self.adaptive_lane_state.fallback_score,
+            cfg,
+        );
+        self.adaptive_lane_state.effective_fast_fanout = fast_fanout;
+        self.adaptive_lane_state.effective_fallback_fanout = fallback_fanout;
+        self.adaptive_lane_state.last_fast_snapshot = fast;
+        self.adaptive_lane_state.last_fallback_snapshot = fallback;
+    }
+
     pub fn tick(
         &mut self,
         now_step: u64,
@@ -164,7 +358,13 @@ where
         AFast::Peer: ToString,
         AFallback::Peer: ToString,
     {
-        pump_multi_lane_tick_with_config_split(
+        let (effective_fast_fanout, effective_fallback_fanout) = self.effective_lane_fanouts();
+        let mut cfg = self.config.clone();
+        cfg.base_fast_fanout = effective_fast_fanout;
+        cfg.base_fallback_fanout = effective_fallback_fanout;
+
+        let prev_ack = self.stats.ack_messages;
+        let result = pump_multi_lane_tick_with_config_split(
             &mut self.state,
             &mut self.fast_adapter,
             &mut self.fallback_adapter,
@@ -173,12 +373,17 @@ where
                 fallback_peers,
                 now_step,
                 decrypt_key: &self.decrypt_key,
-                config: &self.config,
+                config: &cfg,
                 stats: &mut self.stats,
             },
             &self.cipher,
             &self.verifier,
-        )
+        );
+        if result.is_ok() {
+            let ack_delta = self.stats.ack_messages.saturating_sub(prev_ack);
+            self.update_adaptive_lane_scoring(ack_delta);
+        }
+        result
     }
 
     pub fn tick_with_callbacks(
@@ -473,9 +678,12 @@ mod tests {
     use std::time::Duration;
 
     use veil_codec::object::OBJECT_FLAG_SIGNED;
+    use veil_codec::shard::encode_shard_cbor;
+    use veil_core::{Epoch, Namespace};
     use veil_crypto::aead::XChaCha20Poly1305Cipher;
     use veil_crypto::signing::{Ed25519Signer, Ed25519Verifier};
-    use veil_transport::adapter::InMemoryAdapter;
+    use veil_fec::sharder::{derive_object_root, object_to_shards};
+    use veil_transport::adapter::{CappedInMemoryAdapter, InMemoryAdapter};
 
     use super::{
         NodeRuntime, NodeRuntimeCallbacks, NodeRuntimeRunnerConfig, NodeRuntimeRunnerExit,
@@ -664,5 +872,58 @@ mod tests {
         );
 
         assert_eq!(exit, NodeRuntimeRunnerExit::Cancelled { steps: 3 });
+    }
+
+    #[test]
+    fn adaptive_lane_scoring_shifts_fanout_to_fallback_on_fast_failures() {
+        let mut fast = CappedInMemoryAdapter::with_max_send_bytes(16 * 1024);
+        fast.set_allow_send(false);
+        let mut fallback = CappedInMemoryAdapter::with_max_send_bytes(16 * 1024);
+        fallback.set_allow_send(true);
+
+        let mut rt = NodeRuntime::new(
+            crate::state::NodeState::default(),
+            fast,
+            fallback,
+            crate::config::NodeRuntimeConfig::builder()
+                .base_fast_fanout(3)
+                .base_fallback_fanout(1)
+                .adaptive_lane_scoring(crate::config::AdaptiveLaneScoringConfig {
+                    enabled: true,
+                    hysteresis_margin: 0.0,
+                    min_fallback_fanout: 1,
+                    ..crate::config::AdaptiveLaneScoringConfig::default()
+                })
+                .build(),
+            [0xAA; 32],
+            XChaCha20Poly1305Cipher,
+            Ed25519Verifier,
+        );
+        let tag = [0x44; 32];
+        rt.state.subscriptions.insert(tag);
+        let encoded = b"adaptive lane scoring probe".to_vec();
+        let root = derive_object_root(&encoded);
+        let shard = object_to_shards(&encoded, Namespace(1), Epoch(1), tag, root)
+            .expect("shard build should work")
+            .remove(0);
+        let shard_bytes = encode_shard_cbor(&shard).expect("shard should encode");
+
+        let peers = vec![
+            "peer-a".to_string(),
+            "peer-b".to_string(),
+            "peer-c".to_string(),
+        ];
+        // Drive repeated send failures on fast lane by attempting to forward.
+        for _ in 0..5 {
+            rt.fast_adapter
+                .enqueue_inbound("origin", shard_bytes.clone());
+            let _ = rt.tick(1, &peers, &peers);
+        }
+
+        let adaptive = rt
+            .adaptive_lane_scores()
+            .expect("adaptive scoring should be enabled");
+        assert!(adaptive.effective_fallback_fanout >= 2);
+        assert!(adaptive.effective_fast_fanout <= 2);
     }
 }

@@ -9,6 +9,15 @@ pub struct Profile {
     pub buckets: &'static [usize],
 }
 
+/// Erasure coding mode used by shard split/reconstruct routines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErasureCodingMode {
+    /// Classic systematic RS encoding (first `k` shards are data blocks).
+    Systematic,
+    /// Hardened mode: deterministic non-systematic pre-transform before RS.
+    HardenedNonSystematic,
+}
+
 /// Default profile for smaller objects.
 pub const PROFILE_SMALL: Profile = Profile {
     k: 6,

@@ -4,6 +4,38 @@ use crate::ack::AckRetryPolicy;
 use crate::policy::{
     fanout_for_tier as fanout_for_tier_impl, LocalWotPolicy, TrustTier, WotConfig, WotPolicy,
 };
+use veil_fec::profile::ErasureCodingMode;
+
+#[derive(Debug, Clone, Copy)]
+pub struct AdaptiveLaneScoringConfig {
+    pub enabled: bool,
+    /// Smoothing factor for EWMA updates (0..=1).
+    pub ewma_alpha: f64,
+    pub weight_send_success: f64,
+    pub weight_ack_success: f64,
+    pub weight_latency: f64,
+    /// Latency normalization scale for converting p95 ms to score.
+    pub latency_scale_ms: u64,
+    /// If one lane underperforms by this margin, bias traffic away.
+    pub hysteresis_margin: f64,
+    /// Minimum fallback fanout while adaptive mode is enabled.
+    pub min_fallback_fanout: usize,
+}
+
+impl Default for AdaptiveLaneScoringConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            ewma_alpha: 0.25,
+            weight_send_success: 0.45,
+            weight_ack_success: 0.35,
+            weight_latency: 0.20,
+            latency_scale_ms: 1_500,
+            hysteresis_margin: 0.10,
+            min_fallback_fanout: 1,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct NodeRuntimeConfig {
@@ -25,6 +57,10 @@ pub struct NodeRuntimeConfig {
     pub ack_max_retries: u32,
     /// Global max shard entries allowed in cache.
     pub max_cache_shards: usize,
+    /// Erasure coding mode used when producing/reconstructing shards.
+    pub erasure_coding_mode: ErasureCodingMode,
+    /// Adaptive lane-scoring policy for fanout rebalancing.
+    pub adaptive_lane_scoring: AdaptiveLaneScoringConfig,
     /// Local WoT policy used for trust classification and quotas.
     pub wot_policy: LocalWotPolicy,
     peer_publishers: HashMap<String, [u8; 32]>,
@@ -42,6 +78,8 @@ impl Default for NodeRuntimeConfig {
             ack_backoff_steps: 2,
             ack_max_retries: 6,
             max_cache_shards: 100_000,
+            erasure_coding_mode: ErasureCodingMode::Systematic,
+            adaptive_lane_scoring: AdaptiveLaneScoringConfig::default(),
             wot_policy: LocalWotPolicy::default(),
             peer_publishers: HashMap::new(),
         }
@@ -191,6 +229,11 @@ impl NodeRuntimeConfigBuilder {
         self
     }
 
+    pub fn erasure_coding_mode(mut self, value: ErasureCodingMode) -> Self {
+        self.cfg.erasure_coding_mode = value;
+        self
+    }
+
     pub fn ack_retry(
         mut self,
         initial_timeout_steps: u64,
@@ -215,6 +258,11 @@ impl NodeRuntimeConfigBuilder {
         self
     }
 
+    pub fn adaptive_lane_scoring(mut self, value: AdaptiveLaneScoringConfig) -> Self {
+        self.cfg.adaptive_lane_scoring = value;
+        self
+    }
+
     pub fn build(self) -> NodeRuntimeConfig {
         self.cfg
     }
@@ -222,8 +270,9 @@ impl NodeRuntimeConfigBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::NodeRuntimeConfig;
+    use super::{AdaptiveLaneScoringConfig, NodeRuntimeConfig};
     use crate::policy::TrustTier;
+    use veil_fec::profile::ErasureCodingMode;
 
     #[test]
     fn classify_peer_uses_bound_publisher_tier() {
@@ -272,6 +321,11 @@ mod tests {
             .ttl_steps(42)
             .ack_retry(3, 4, 5, 6)
             .max_cache_shards(77)
+            .erasure_coding_mode(ErasureCodingMode::HardenedNonSystematic)
+            .adaptive_lane_scoring(AdaptiveLaneScoringConfig {
+                enabled: true,
+                ..AdaptiveLaneScoringConfig::default()
+            })
             .with_peer_publisher("peer-a", [0x99; 32])
             .build();
 
@@ -279,6 +333,11 @@ mod tests {
         assert_eq!(cfg.base_fallback_fanout, 2);
         assert_eq!(cfg.ttl_steps, 42);
         assert_eq!(cfg.max_cache_shards, 77);
+        assert_eq!(
+            cfg.erasure_coding_mode,
+            ErasureCodingMode::HardenedNonSystematic
+        );
+        assert!(cfg.adaptive_lane_scoring.enabled);
         assert_eq!(cfg.classify_peer_tier("peer-a", 0), TrustTier::Unknown);
         let p = cfg.ack_retry_policy();
         assert_eq!(p.initial_timeout_steps, 3);

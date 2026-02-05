@@ -43,6 +43,20 @@ pub trait TransportAdapter {
     fn health_snapshot(&self) -> TransportHealthSnapshot {
         TransportHealthSnapshot::default()
     }
+
+    /// Optional p95 end-to-end latency estimate in milliseconds.
+    ///
+    /// Adapters may derive this from transport-specific telemetry.
+    fn p95_latency_ms(&self) -> Option<u64> {
+        None
+    }
+
+    /// Optional transport-level ACK success ratio in `[0.0, 1.0]`.
+    ///
+    /// If unavailable, lane-scoring logic should fall back to neutral/defaults.
+    fn ack_success_rate(&self) -> Option<f64> {
+        None
+    }
 }
 
 /// In-memory adapter for tests and simulations.

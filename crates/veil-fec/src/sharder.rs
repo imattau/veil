@@ -9,7 +9,7 @@ use veil_core::hash::blake3_32;
 use veil_core::types::{Epoch, Namespace};
 use veil_core::{ObjectRoot, ShardId, Tag};
 
-use crate::profile::{choose_profile, Profile};
+use crate::profile::{choose_profile, ErasureCodingMode, Profile};
 
 /// Errors returned by FEC profile/sharding/reconstruction helpers.
 #[derive(Debug, Error)]
@@ -66,6 +66,25 @@ pub fn object_to_shards(
     tag: Tag,
     object_root: ObjectRoot,
 ) -> Result<Vec<ShardV1>, FecError> {
+    object_to_shards_with_mode(
+        object_bytes,
+        namespace,
+        epoch,
+        tag,
+        object_root,
+        ErasureCodingMode::Systematic,
+    )
+}
+
+/// Splits encoded object bytes into `n` shards using the requested coding mode.
+pub fn object_to_shards_with_mode(
+    object_bytes: &[u8],
+    namespace: Namespace,
+    epoch: Epoch,
+    tag: Tag,
+    object_root: ObjectRoot,
+    mode: ErasureCodingMode,
+) -> Result<Vec<ShardV1>, FecError> {
     let (profile, bucket) = choose_profile_and_bucket(object_bytes.len())?;
     let k = profile.k as usize;
     let n = profile.n as usize;
@@ -79,12 +98,19 @@ pub fn object_to_shards(
     let mut padded = vec![0_u8; total_capacity];
     padded[..object_bytes.len()].copy_from_slice(object_bytes);
 
-    let mut shards_data: Vec<Vec<u8>> = Vec::with_capacity(n);
+    let mut source_blocks: Vec<Vec<u8>> = Vec::with_capacity(k);
     for i in 0..k {
         let start = i * chunk_len;
         let end = start + chunk_len;
-        shards_data.push(padded[start..end].to_vec());
+        source_blocks.push(padded[start..end].to_vec());
     }
+
+    if mode == ErasureCodingMode::HardenedNonSystematic {
+        source_blocks = hardened_forward_transform(source_blocks, object_root);
+    }
+
+    let mut shards_data: Vec<Vec<u8>> = Vec::with_capacity(n);
+    shards_data.extend(source_blocks);
     for _ in k..n {
         shards_data.push(vec![0_u8; chunk_len]);
     }
@@ -118,7 +144,8 @@ pub fn reconstruct_object(
     object_len: usize,
     expected_root: ObjectRoot,
 ) -> Result<Vec<u8>, FecError> {
-    let mut out = reconstruct_object_padded(shards, expected_root)?;
+    let mut out =
+        reconstruct_object_padded_with_mode(shards, expected_root, ErasureCodingMode::Systematic)?;
     if object_len > out.len() {
         return Err(FecError::InvalidShardSet(
             "requested object length too large",
@@ -132,6 +159,32 @@ pub fn reconstruct_object(
 pub fn reconstruct_object_padded(
     shards: &[ShardV1],
     expected_root: ObjectRoot,
+) -> Result<Vec<u8>, FecError> {
+    reconstruct_object_padded_with_mode(shards, expected_root, ErasureCodingMode::Systematic)
+}
+
+/// Reconstructs object bytes (truncated to `object_len`) from a shard subset.
+pub fn reconstruct_object_with_mode(
+    shards: &[ShardV1],
+    object_len: usize,
+    expected_root: ObjectRoot,
+    mode: ErasureCodingMode,
+) -> Result<Vec<u8>, FecError> {
+    let mut out = reconstruct_object_padded_with_mode(shards, expected_root, mode)?;
+    if object_len > out.len() {
+        return Err(FecError::InvalidShardSet(
+            "requested object length too large",
+        ));
+    }
+    out.truncate(object_len);
+    Ok(out)
+}
+
+/// Reconstructs padded object block bytes from a shard subset using coding mode.
+pub fn reconstruct_object_padded_with_mode(
+    shards: &[ShardV1],
+    expected_root: ObjectRoot,
+    mode: ErasureCodingMode,
 ) -> Result<Vec<u8>, FecError> {
     if shards.is_empty() {
         return Err(FecError::InvalidShardSet("no shards"));
@@ -183,10 +236,18 @@ pub fn reconstruct_object_padded(
     rs.reconstruct(&mut slots)
         .map_err(|_| FecError::ReedSolomon)?;
 
-    let mut out = Vec::with_capacity(k * chunk_len);
+    let mut source_blocks = Vec::with_capacity(k);
     for shard in slots.into_iter().take(k) {
         let bytes = shard.ok_or(FecError::ReedSolomon)?;
-        out.extend_from_slice(&bytes);
+        source_blocks.push(bytes);
+    }
+    if mode == ErasureCodingMode::HardenedNonSystematic {
+        source_blocks = hardened_inverse_transform(source_blocks, expected_root);
+    }
+
+    let mut out = Vec::with_capacity(k * chunk_len);
+    for block in source_blocks {
+        out.extend_from_slice(&block);
     }
     Ok(out)
 }
@@ -203,12 +264,69 @@ pub fn is_valid_bucket_size(payload_len: usize) -> bool {
     SHARD_BUCKET_SIZES.contains(&total)
 }
 
+fn hardened_rotation(root: ObjectRoot, len: usize) -> usize {
+    if len <= 1 {
+        return 0;
+    }
+    let r = (root[0] as usize) % len;
+    if r == 0 {
+        1
+    } else {
+        r
+    }
+}
+
+fn xor_in_place(lhs: &mut [u8], rhs: &[u8]) {
+    for (a, b) in lhs.iter_mut().zip(rhs.iter()) {
+        *a ^= *b;
+    }
+}
+
+fn hardened_forward_transform(mut source_blocks: Vec<Vec<u8>>, root: ObjectRoot) -> Vec<Vec<u8>> {
+    let k = source_blocks.len();
+    if k <= 1 {
+        return source_blocks;
+    }
+    let rot = hardened_rotation(root, k);
+    source_blocks.rotate_left(rot);
+
+    let mut mixed = Vec::with_capacity(k);
+    for i in 0..k {
+        if i == 0 {
+            mixed.push(source_blocks[0].clone());
+            continue;
+        }
+        let mut out = source_blocks[i].clone();
+        xor_in_place(&mut out, &source_blocks[i - 1]);
+        mixed.push(out);
+    }
+    mixed
+}
+
+fn hardened_inverse_transform(mut transformed: Vec<Vec<u8>>, root: ObjectRoot) -> Vec<Vec<u8>> {
+    let k = transformed.len();
+    if k <= 1 {
+        return transformed;
+    }
+
+    for i in 1..k {
+        let prev = transformed[i - 1].clone();
+        xor_in_place(&mut transformed[i], &prev);
+    }
+
+    let rot = hardened_rotation(root, k);
+    transformed.rotate_right(rot);
+    transformed
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         choose_profile_and_bucket, derive_object_root, is_valid_bucket_size, object_to_shards,
-        reconstruct_object, reconstruct_object_padded, shard_id, FecError,
+        object_to_shards_with_mode, reconstruct_object, reconstruct_object_padded,
+        reconstruct_object_with_mode, shard_id, FecError,
     };
+    use crate::profile::ErasureCodingMode;
     use veil_core::types::{Epoch, Namespace};
 
     #[test]
@@ -287,5 +405,62 @@ mod tests {
         let recovered_padded =
             reconstruct_object_padded(&subset, root).expect("should reconstruct");
         assert_eq!(&recovered_padded[..object.len()], object.as_slice());
+    }
+
+    #[test]
+    fn hardened_mode_reconstructs_from_any_k_shards() {
+        let object = b"hardened mode reconstruct check".to_vec();
+        let root = derive_object_root(&object);
+        let shards = object_to_shards_with_mode(
+            &object,
+            Namespace(12),
+            Epoch(3),
+            [0xA5; 32],
+            root,
+            ErasureCodingMode::HardenedNonSystematic,
+        )
+        .expect("object should shard");
+        let k = shards[0].header.k as usize;
+        let subset = [1usize, 2, 4, 5, 7, 9];
+        assert_eq!(subset.len(), k);
+        let selected: Vec<_> = subset.iter().map(|i| shards[*i].clone()).collect();
+        let recovered = reconstruct_object_with_mode(
+            &selected,
+            object.len(),
+            root,
+            ErasureCodingMode::HardenedNonSystematic,
+        )
+        .expect("reconstruction should work");
+        assert_eq!(recovered, object);
+    }
+
+    #[test]
+    fn hardened_mode_first_k_shards_are_not_plain_chunk_layout() {
+        let object = b"0123456789abcdefghijklmnopqrstuvwxyz".repeat(512);
+        let root = derive_object_root(&object);
+        let systematic = object_to_shards_with_mode(
+            &object,
+            Namespace(14),
+            Epoch(7),
+            [0xBE; 32],
+            root,
+            ErasureCodingMode::Systematic,
+        )
+        .expect("systematic should shard");
+        let hardened = object_to_shards_with_mode(
+            &object,
+            Namespace(14),
+            Epoch(7),
+            [0xBE; 32],
+            root,
+            ErasureCodingMode::HardenedNonSystematic,
+        )
+        .expect("hardened should shard");
+
+        let k = systematic[0].header.k as usize;
+        let differing = (0..k)
+            .filter(|i| systematic[*i].payload != hardened[*i].payload)
+            .count();
+        assert!(differing > 0);
     }
 }

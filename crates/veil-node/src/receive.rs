@@ -7,7 +7,8 @@ use veil_codec::shard::{encode_shard_cbor, ShardV1};
 use veil_core::{Epoch, Namespace, ObjectRoot, Tag};
 use veil_crypto::aead::{build_veil_aad, AeadCipher, AeadError};
 use veil_crypto::signing::{SigningError, Verifier};
-use veil_fec::sharder::{reconstruct_object_padded, shard_id, FecError};
+use veil_fec::profile::ErasureCodingMode;
+use veil_fec::sharder::{reconstruct_object_padded_with_mode, shard_id, FecError};
 
 use crate::cache::{cache_put, cache_put_with_policy};
 use crate::forwarding::should_forward;
@@ -55,6 +56,7 @@ pub enum ReceiveError {
     SignatureInvalid,
 }
 
+#[derive(Clone, Copy)]
 pub struct ReceiveCachePolicy<'a> {
     /// Trust tier applied to inbound shard cache accounting.
     pub tier: TrustTier,
@@ -62,6 +64,8 @@ pub struct ReceiveCachePolicy<'a> {
     pub max_cache_shards: usize,
     /// WoT policy used for storage budget and eviction priority.
     pub wot_policy: &'a dyn WotPolicy,
+    /// Erasure coding mode used to reconstruct inbound shard sets.
+    pub erasure_coding_mode: ErasureCodingMode,
 }
 
 /// Decodes a queue-batched app payload into its original item list.
@@ -141,7 +145,11 @@ pub fn receive_shard_with_policy(
     }
 
     let collected: Vec<_> = root_inbox.values().cloned().collect();
-    let reconstructed = reconstruct_object_padded(&collected, root)?;
+    let erasure_mode = cache_policy
+        .as_ref()
+        .map(|p| p.erasure_coding_mode)
+        .unwrap_or(ErasureCodingMode::Systematic);
+    let reconstructed = reconstruct_object_padded_with_mode(&collected, root, erasure_mode)?;
     let (object, _) = decode_object_cbor_prefix(&reconstructed)?;
 
     if (object.flags & OBJECT_FLAG_SIGNED) != 0 {
@@ -184,6 +192,7 @@ mod tests {
     use veil_core::{Epoch, Namespace};
     use veil_crypto::aead::{build_veil_aad, AeadCipher, XChaCha20Poly1305Cipher};
     use veil_crypto::signing::{Ed25519Signer, Ed25519Verifier, Signer};
+    use veil_fec::profile::ErasureCodingMode;
     use veil_fec::sharder::{derive_object_root, object_to_shards};
 
     use super::{
@@ -354,6 +363,7 @@ mod tests {
             tier: TrustTier::Unknown,
             max_cache_shards: 1,
             wot_policy: &wot_policy,
+            erasure_coding_mode: ErasureCodingMode::Systematic,
         };
 
         let first_obj =
@@ -382,6 +392,7 @@ mod tests {
                 tier: cache_policy.tier,
                 max_cache_shards: cache_policy.max_cache_shards,
                 wot_policy: cache_policy.wot_policy,
+                erasure_coding_mode: cache_policy.erasure_coding_mode,
             }),
         )
         .expect("receive should work");
