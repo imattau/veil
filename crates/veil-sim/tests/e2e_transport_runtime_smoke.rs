@@ -22,7 +22,9 @@ async fn e2e_transport_runtime_smoke_starts_and_stops() {
 
     let ws_server = tokio::spawn(async move {
         let (stream, _) = ws_listener.accept().await.expect("ws accept should work");
-        let ws = accept_async(stream).await.expect("ws handshake should work");
+        let ws = accept_async(stream)
+            .await
+            .expect("ws handshake should work");
         let (mut write, mut read) = ws.split();
         write
             .send(Message::Binary(vec![0xDE, 0xAD]))
@@ -46,10 +48,14 @@ async fn e2e_transport_runtime_smoke_starts_and_stops() {
 
         let mut hello = [0_u8; 3];
         sock.read_exact(&mut hello).await.expect("socks hello");
-        sock.write_all(&[0x05, 0x00]).await.expect("socks method ack");
+        sock.write_all(&[0x05, 0x00])
+            .await
+            .expect("socks method ack");
 
         let mut head = [0_u8; 4];
-        sock.read_exact(&mut head).await.expect("socks connect head");
+        sock.read_exact(&mut head)
+            .await
+            .expect("socks connect head");
         let atyp = head[3];
         if atyp == 0x03 {
             let mut len = [0_u8; 1];

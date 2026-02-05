@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   currentEpoch,
-  deriveFeedTagHex,
+  deriveChannelFeedTagHex,
+  deriveChannelNamespace,
   InMemoryLaneAdapter,
   VeilClient,
 } from "@veil/sdk-js";
@@ -20,15 +21,6 @@ import type { PostBundle, ProfileBundle } from "./feed/types";
 
 const BASE_CHANNELS = ["general", "dev", "media"];
 
-function channelHash16(channelId: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < channelId.length; i += 1) {
-    hash ^= channelId.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash & 0xffff;
-}
-
 export function App() {
   const [pubkey, setPubkey] = useState("11".repeat(32));
   const [namespace, setNamespace] = useState(7);
@@ -46,7 +38,7 @@ export function App() {
     [channelId],
   );
   const effectiveNamespace = useMemo(
-    () => (namespace + channelHash16(normalizedChannel)) & 0xffff,
+    () => deriveChannelNamespace(namespace, normalizedChannel),
     [namespace, normalizedChannel],
   );
   const channelOptions = useMemo(() => {
@@ -69,7 +61,11 @@ export function App() {
     async function hydrateTag() {
       const now = Math.floor(Date.now() / 1000);
       const nextEpoch = await currentEpoch(now);
-      const nextFeedTag = await deriveFeedTagHex(pubkey, effectiveNamespace);
+      const nextFeedTag = await deriveChannelFeedTagHex(
+        pubkey,
+        namespace,
+        normalizedChannel,
+      );
       if (!disposed) {
         setEpoch(nextEpoch);
         setFeedTag(nextFeedTag);
@@ -79,7 +75,7 @@ export function App() {
     return () => {
       disposed = true;
     };
-  }, [effectiveNamespace, pubkey]);
+  }, [namespace, normalizedChannel, pubkey]);
 
   useEffect(() => {
     if (!feedTag) {

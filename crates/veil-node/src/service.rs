@@ -1,8 +1,8 @@
+use std::time::Duration;
 use veil_core::{Epoch, Namespace, Tag};
 use veil_crypto::aead::AeadCipher;
 use veil_crypto::signing::{Signer, Verifier};
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
-use std::time::Duration;
 
 use crate::batch::FeedBatcher;
 use crate::config::NodeRuntimeConfig;
@@ -92,10 +92,7 @@ pub enum NodeRuntimeRunnerExit {
     /// Loop ended because requested step budget was fully consumed.
     Completed { steps: u64 },
     /// Loop ended because max consecutive errors threshold was reached.
-    MaxConsecutiveErrors {
-        steps: u64,
-        consecutive_errors: u32,
-    },
+    MaxConsecutiveErrors { steps: u64, consecutive_errors: u32 },
 }
 
 /// Stateful node runtime facade around `pump_multi_lane_tick_with_config_split`.
@@ -463,7 +460,8 @@ mod tests {
 
     use super::{
         NodeRuntime, NodeRuntimeCallbacks, NodeRuntimeRunnerConfig, NodeRuntimeRunnerExit,
-        NodeRuntimeTransportHealth, PublisherRuntime, PublisherTickInput, PublisherTickOptionsInput,
+        NodeRuntimeTransportHealth, PublisherRuntime, PublisherTickInput,
+        PublisherTickOptionsInput,
     };
 
     #[test]

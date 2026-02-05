@@ -6,7 +6,7 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -54,7 +54,11 @@ pub struct QuicAdapterConfig {
 }
 
 impl QuicAdapterConfig {
-    pub fn new(bind_addr: SocketAddr, server_name: impl Into<String>, identity: QuicIdentity) -> Self {
+    pub fn new(
+        bind_addr: SocketAddr,
+        server_name: impl Into<String>,
+        identity: QuicIdentity,
+    ) -> Self {
         Self {
             bind_addr,
             server_name: server_name.into(),
@@ -398,10 +402,18 @@ mod tests {
         let addr_a = free_udp_addr();
         let _addr_b = free_udp_addr();
 
-        let mut a = QuicAdapter::connect(QuicAdapterConfig::new(addr_a, "localhost", identity.clone()))
-            .expect("adapter a should initialize");
-        let _b = QuicAdapter::connect(QuicAdapterConfig::new(free_udp_addr(), "localhost", identity))
-            .expect("adapter b should initialize");
+        let mut a = QuicAdapter::connect(QuicAdapterConfig::new(
+            addr_a,
+            "localhost",
+            identity.clone(),
+        ))
+        .expect("adapter a should initialize");
+        let _b = QuicAdapter::connect(QuicAdapterConfig::new(
+            free_udp_addr(),
+            "localhost",
+            identity,
+        ))
+        .expect("adapter b should initialize");
 
         a.send(&"127.0.0.1:9".to_string(), b"ping")
             .expect("send should queue");

@@ -84,8 +84,10 @@ struct WebSocketAdapterMetricsInner {
 
 impl WebSocketAdapter {
     pub fn connect(config: WebSocketAdapterConfig) -> Result<Self, WebSocketAdapterError> {
-        let (outbound_tx, outbound_rx) = tokio_mpsc::channel::<Vec<u8>>(config.outbound_queue_capacity);
-        let (inbound_tx, inbound_rx) = mpsc::sync_channel::<(String, Vec<u8>)>(config.inbound_queue_capacity);
+        let (outbound_tx, outbound_rx) =
+            tokio_mpsc::channel::<Vec<u8>>(config.outbound_queue_capacity);
+        let (inbound_tx, inbound_rx) =
+            mpsc::sync_channel::<(String, Vec<u8>)>(config.inbound_queue_capacity);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let connected = Arc::new(AtomicBool::new(false));
         let metrics = Arc::new(WebSocketAdapterMetricsInner::default());
@@ -283,8 +285,8 @@ async fn run_websocket_worker(
 mod tests {
     use std::time::Duration;
 
-    use futures_util::{SinkExt, StreamExt};
     use super::{WebSocketAdapter, WebSocketAdapterConfig};
+    use futures_util::{SinkExt, StreamExt};
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
     use veil_transport::adapter::TransportAdapter;

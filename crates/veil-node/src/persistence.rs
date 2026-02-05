@@ -29,7 +29,10 @@ pub fn decode_state_cbor(bytes: &[u8]) -> Result<NodeState, PersistenceError> {
 }
 
 /// Saves state to the given path as CBOR.
-pub fn save_state_to_path(path: impl AsRef<Path>, state: &NodeState) -> Result<(), PersistenceError> {
+pub fn save_state_to_path(
+    path: impl AsRef<Path>,
+    state: &NodeState,
+) -> Result<(), PersistenceError> {
     let bytes = encode_state_cbor(state)?;
     fs::write(path.as_ref(), bytes).map_err(PersistenceError::Write)
 }
@@ -55,7 +58,10 @@ mod tests {
     use crate::policy::TrustTier;
     use crate::state::{CachedShard, NodeState};
 
-    use super::{decode_state_cbor, encode_state_cbor, load_state_from_path, load_state_or_default, save_state_to_path};
+    use super::{
+        decode_state_cbor, encode_state_cbor, load_state_from_path, load_state_or_default,
+        save_state_to_path,
+    };
 
     fn temp_path(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
@@ -105,7 +111,8 @@ mod tests {
         assert_eq!(loaded.subscriptions, state.subscriptions);
 
         let missing = temp_path("missing");
-        let defaulted = load_state_or_default(&missing).expect("missing file should return default");
+        let defaulted =
+            load_state_or_default(&missing).expect("missing file should return default");
         assert!(defaulted.subscriptions.is_empty());
 
         let _ = std::fs::remove_file(&file);

@@ -3,6 +3,34 @@ use crate::{
     types::{Epoch, Namespace, Tag},
 };
 
+/// Normalizes app-level channel identifiers for deterministic derivation.
+///
+/// Empty/whitespace-only IDs map to `"general"`.
+pub fn normalize_channel_id(channel_id: &str) -> String {
+    let normalized = channel_id.trim().to_lowercase();
+    if normalized.is_empty() {
+        "general".to_string()
+    } else {
+        normalized
+    }
+}
+
+fn fnv1a_32(bytes: &[u8]) -> u32 {
+    let mut hash: u32 = 2_166_136_261;
+    for byte in bytes {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(16_777_619);
+    }
+    hash
+}
+
+/// Derives a deterministic per-channel namespace from base namespace + channel id.
+pub fn derive_channel_namespace(base_namespace: Namespace, channel_id: &str) -> Namespace {
+    let channel = normalize_channel_id(channel_id);
+    let channel_hash16 = (fnv1a_32(channel.as_bytes()) & 0xffff) as u16;
+    Namespace(base_namespace.0.wrapping_add(channel_hash16))
+}
+
 /// Derives a stable public feed tag:
 /// `H("feed" || publisher_pubkey || namespace_be)`.
 pub fn derive_feed_tag(publisher_pubkey: &[u8; 32], namespace: Namespace) -> Tag {
@@ -11,6 +39,18 @@ pub fn derive_feed_tag(publisher_pubkey: &[u8; 32], namespace: Namespace) -> Tag
     buf.extend_from_slice(publisher_pubkey);
     buf.extend_from_slice(&namespace.0.to_be_bytes());
     blake3_32(&buf)
+}
+
+/// Derives a stable public feed tag scoped by `channel_id`.
+pub fn derive_channel_feed_tag(
+    publisher_pubkey: &[u8; 32],
+    base_namespace: Namespace,
+    channel_id: &str,
+) -> Tag {
+    derive_feed_tag(
+        publisher_pubkey,
+        derive_channel_namespace(base_namespace, channel_id),
+    )
 }
 
 /// Derives a rotating rendezvous tag:
@@ -24,9 +64,26 @@ pub fn derive_rv_tag(recipient_pubkey: &[u8; 32], epoch: Epoch, namespace: Names
     blake3_32(&buf)
 }
 
+/// Derives a rotating rendezvous tag scoped by `channel_id`.
+pub fn derive_channel_rv_tag(
+    recipient_pubkey: &[u8; 32],
+    epoch: Epoch,
+    base_namespace: Namespace,
+    channel_id: &str,
+) -> Tag {
+    derive_rv_tag(
+        recipient_pubkey,
+        epoch,
+        derive_channel_namespace(base_namespace, channel_id),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{derive_feed_tag, derive_rv_tag};
+    use super::{
+        derive_channel_feed_tag, derive_channel_namespace, derive_channel_rv_tag, derive_feed_tag,
+        derive_rv_tag, normalize_channel_id,
+    };
     use crate::hash::blake3_32;
     use crate::types::{Epoch, Namespace};
 
@@ -84,5 +141,42 @@ mod tests {
             derive_rv_tag(&key, epoch, ns),
             derive_rv_tag(&key, epoch, ns)
         );
+    }
+
+    #[test]
+    fn channel_id_normalization_is_stable() {
+        assert_eq!(normalize_channel_id(" General "), "general");
+        assert_eq!(normalize_channel_id(""), "general");
+    }
+
+    #[test]
+    fn channel_namespace_derivation_matches_expected_vectors() {
+        let base = Namespace(7);
+        assert_eq!(derive_channel_namespace(base, "general"), Namespace(8_562));
+        assert_eq!(derive_channel_namespace(base, "dev"), Namespace(38_851));
+        assert_eq!(derive_channel_namespace(base, "media"), Namespace(57_098));
+        assert_eq!(
+            derive_channel_namespace(base, " General "),
+            Namespace(8_562)
+        );
+        assert_eq!(derive_channel_namespace(base, ""), Namespace(8_562));
+    }
+
+    #[test]
+    fn channel_scoped_tag_derivation_is_deterministic_and_separated() {
+        let key = [0xCD_u8; 32];
+        let base = Namespace(7);
+        let epoch = Epoch(123);
+        let general_feed = derive_channel_feed_tag(&key, base, "general");
+        let dev_feed = derive_channel_feed_tag(&key, base, "dev");
+        assert_ne!(general_feed, dev_feed);
+        assert_eq!(
+            general_feed,
+            derive_channel_feed_tag(&key, base, " General "),
+        );
+
+        let general_rv = derive_channel_rv_tag(&key, epoch, base, "general");
+        let dev_rv = derive_channel_rv_tag(&key, epoch, base, "dev");
+        assert_ne!(general_rv, dev_rv);
     }
 }

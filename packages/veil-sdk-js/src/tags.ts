@@ -57,6 +57,29 @@ function deriveRvTagPure(recipientPubkey: Uint8Array, epoch: number, namespace: 
   return blake3_32(preimage);
 }
 
+export function normalizeChannelId(channelId: string): string {
+  const normalized = channelId.trim().toLowerCase();
+  return normalized.length === 0 ? "general" : normalized;
+}
+
+function fnv1a32(bytes: Uint8Array): number {
+  let hash = 2166136261 >>> 0;
+  for (const b of bytes) {
+    hash ^= b;
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+export function deriveChannelNamespace(baseNamespace: number, channelId: string): number {
+  if (!Number.isInteger(baseNamespace) || baseNamespace < 0 || baseNamespace > 0xffff) {
+    throw new Error("baseNamespace must be a u16");
+  }
+  const normalized = normalizeChannelId(channelId);
+  const hash16 = fnv1a32(textBytes(normalized)) & 0xffff;
+  return (baseNamespace + hash16) & 0xffff;
+}
+
 export async function deriveFeedTagHex(
   publisherPubkeyHex: string,
   namespace: number,
@@ -94,6 +117,25 @@ export async function deriveRvTagHex(
     }
   }
   return bytesToHex(deriveRvTagPure(pubkey, epoch, namespace));
+}
+
+export async function deriveChannelFeedTagHex(
+  publisherPubkeyHex: string,
+  baseNamespace: number,
+  channelId: string,
+): Promise<string> {
+  const namespace = deriveChannelNamespace(baseNamespace, channelId);
+  return deriveFeedTagHex(publisherPubkeyHex, namespace);
+}
+
+export async function deriveChannelRvTagHex(
+  recipientPubkeyHex: string,
+  epoch: number,
+  baseNamespace: number,
+  channelId: string,
+): Promise<string> {
+  const namespace = deriveChannelNamespace(baseNamespace, channelId);
+  return deriveRvTagHex(recipientPubkeyHex, epoch, namespace);
 }
 
 export async function currentEpoch(nowSeconds: number, epochSeconds = 86_400): Promise<number> {

@@ -24,6 +24,17 @@ configureTagBackend("auto");
 `LaneAdapter` can optionally expose `healthSnapshot()` so client telemetry aligns
 with Rust transport counters (`outbound*`, `inbound*`, reconnect attempts).
 
+## Channel-scoped helpers
+
+Use channel-scoped helpers to avoid cross-channel feed collisions:
+
+```ts
+import { deriveChannelNamespace, deriveChannelFeedTagHex } from "@veil/sdk-js";
+
+const ns = deriveChannelNamespace(7, "general");
+const tag = await deriveChannelFeedTagHex(pubkeyHex, 7, "general");
+```
+
 ## Build
 
 ```bash

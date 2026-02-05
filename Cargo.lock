@@ -1407,6 +1407,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "veil-schema-feed"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "veil-core",
+]
+
+[[package]]
 name = "veil-sim"
 version = "0.1.0"
 dependencies = [

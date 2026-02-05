@@ -1,0 +1,13 @@
+[package]
+name = "veil-schema-feed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+veil-core = { path = "../veil-core" }
+
+[dev-dependencies]
+serde_json = "1"

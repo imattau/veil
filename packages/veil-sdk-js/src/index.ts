@@ -29,9 +29,13 @@ export type { ObjectMeta, ShardMeta } from "./codec";
 export {
   configureTagBackend,
   currentEpoch,
+  deriveChannelFeedTagHex,
+  deriveChannelNamespace,
+  deriveChannelRvTagHex,
   deriveFeedTagHex,
   deriveRvTagHex,
   hexToBytes,
+  normalizeChannelId,
   initVeilWasm,
   bytesToHex,
 } from "./tags";

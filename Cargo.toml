@@ -11,6 +11,7 @@ members = [
   "crates/veil-transport-quic",
   "crates/veil-sim",
   "crates/veil-wasm",
+  "crates/veil-schema-feed",
 ]
 resolver = "2"
 

@@ -281,7 +281,9 @@ mod tests {
 
             // SOCKS5 method negotiation
             let mut hello = [0_u8; 3];
-            sock.read_exact(&mut hello).await.expect("hello should read");
+            sock.read_exact(&mut hello)
+                .await
+                .expect("hello should read");
             assert_eq!(hello[0], 0x05);
             sock.write_all(&[0x05, 0x00])
                 .await
@@ -289,7 +291,9 @@ mod tests {
 
             // CONNECT request: VER CMD RSV ATYP + DST + PORT
             let mut head = [0_u8; 4];
-            sock.read_exact(&mut head).await.expect("connect head should read");
+            sock.read_exact(&mut head)
+                .await
+                .expect("connect head should read");
             assert_eq!(head[0], 0x05);
             assert_eq!(head[1], 0x01);
             let atyp = head[3];

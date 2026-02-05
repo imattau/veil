@@ -257,8 +257,8 @@ impl TransportAdapter for CappedInMemoryAdapter {
 #[cfg(test)]
 mod tests {
     use super::{
-        route_in_memory_outbound, CappedInMemoryAdapter, InMemoryAdapter,
-        TransportAdapter, TransportHealthSnapshot,
+        route_in_memory_outbound, CappedInMemoryAdapter, InMemoryAdapter, TransportAdapter,
+        TransportHealthSnapshot,
     };
 
     #[test]

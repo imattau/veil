@@ -29,6 +29,7 @@ VEIL is designed to be practical first:
 - `crates/veil-transport-websocket` - websocket `TransportAdapter` implementation
 - `crates/veil-transport-tor` - Tor SOCKS5 fallback `TransportAdapter`
 - `crates/veil-sim` - e2e, performance, stress, and memory tests
+- `crates/veil-schema-feed` - optional, non-normative app/feed bundle schema
 - `docs/runbooks/transport_profiles.md` - deployment notes for fast/fallback lane profiles
 
 ## Quick start
@@ -80,6 +81,7 @@ This repo now includes a client-native foundation for JS frontends:
 
 SDK now includes:
 - backend-aware tag derivation (`wasm` or `pure-js`)
+- channel-scoped tag helpers (`deriveChannelNamespace`, `deriveChannelFeedTagHex`)
 - shard/object meta decode helpers (`decodeShardMeta`, `decodeObjectMeta`)
 - CBOR validation helpers (`validateShardCbor`, `validateObjectCbor`)
 - subscription-gated forwarding in `VeilClient` runtime scaffold
