@@ -2,6 +2,7 @@ use veil_core::{Epoch, Namespace, Tag};
 use veil_crypto::aead::AeadCipher;
 use veil_crypto::signing::{Signer, Verifier};
 use veil_transport::adapter::TransportAdapter;
+use std::time::Duration;
 
 use crate::batch::FeedBatcher;
 use crate::config::NodeRuntimeConfig;
@@ -50,6 +51,44 @@ pub struct NodeRuntimeCallbacks<'a> {
     pub on_delivered: Option<&'a mut DeliveredCallback<'a>>,
     pub on_ack_cleared: Option<&'a mut CountCallback<'a>>,
     pub on_send_failure: Option<&'a mut CountCallback<'a>>,
+}
+
+/// Runtime loop configuration for `NodeRuntime` orchestration.
+#[derive(Debug, Clone, Copy)]
+pub struct NodeRuntimeRunnerConfig {
+    /// Initial step value passed into the first `tick`.
+    pub start_step: u64,
+    /// Delay between successful ticks.
+    pub tick_interval: Duration,
+    /// Delay applied after an error before next attempt.
+    pub error_backoff: Duration,
+    /// If set, exits loop after this many consecutive tick errors.
+    pub max_consecutive_errors: Option<u32>,
+}
+
+impl Default for NodeRuntimeRunnerConfig {
+    fn default() -> Self {
+        Self {
+            start_step: 0,
+            tick_interval: Duration::from_millis(50),
+            error_backoff: Duration::from_millis(250),
+            max_consecutive_errors: Some(32),
+        }
+    }
+}
+
+/// Exit reason for `NodeRuntime` loop helpers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeRuntimeRunnerExit {
+    /// Loop ended because cancellation callback returned `true`.
+    Cancelled { steps: u64 },
+    /// Loop ended because requested step budget was fully consumed.
+    Completed { steps: u64 },
+    /// Loop ended because max consecutive errors threshold was reached.
+    MaxConsecutiveErrors {
+        steps: u64,
+        consecutive_errors: u32,
+    },
 }
 
 /// Stateful node runtime facade around `pump_multi_lane_tick_with_config_split`.
@@ -133,7 +172,22 @@ where
         now_step: u64,
         fast_peers: &[AFast::Peer],
         fallback_peers: &[AFallback::Peer],
-        mut callbacks: NodeRuntimeCallbacks<'_>,
+        callbacks: NodeRuntimeCallbacks<'_>,
+    ) -> Result<Option<ReceiveEvent>, ReceiveError>
+    where
+        AFast::Peer: ToString,
+        AFallback::Peer: ToString,
+    {
+        let mut callbacks = callbacks;
+        self.tick_with_callbacks_ref(now_step, fast_peers, fallback_peers, &mut callbacks)
+    }
+
+    pub fn tick_with_callbacks_ref(
+        &mut self,
+        now_step: u64,
+        fast_peers: &[AFast::Peer],
+        fallback_peers: &[AFallback::Peer],
+        callbacks: &mut NodeRuntimeCallbacks<'_>,
     ) -> Result<Option<ReceiveEvent>, ReceiveError>
     where
         AFast::Peer: ToString,
@@ -169,6 +223,117 @@ where
         }
 
         Ok(event)
+    }
+
+    /// Runs ticks until cancellation callback returns true.
+    pub fn run_until<F>(
+        &mut self,
+        fast_peers: &[AFast::Peer],
+        fallback_peers: &[AFallback::Peer],
+        config: NodeRuntimeRunnerConfig,
+        mut should_stop: F,
+        mut callbacks: Option<&mut NodeRuntimeCallbacks<'_>>,
+    ) -> NodeRuntimeRunnerExit
+    where
+        AFast::Peer: ToString,
+        AFallback::Peer: ToString,
+        F: FnMut() -> bool,
+    {
+        let mut step = config.start_step;
+        let mut steps = 0_u64;
+        let mut consecutive_errors = 0_u32;
+
+        loop {
+            if should_stop() {
+                return NodeRuntimeRunnerExit::Cancelled { steps };
+            }
+
+            let tick_result = if let Some(cb) = callbacks.as_deref_mut() {
+                self.tick_with_callbacks_ref(step, fast_peers, fallback_peers, cb)
+            } else {
+                self.tick(step, fast_peers, fallback_peers)
+            };
+
+            match tick_result {
+                Ok(_) => {
+                    consecutive_errors = 0;
+                    if !config.tick_interval.is_zero() {
+                        std::thread::sleep(config.tick_interval);
+                    }
+                }
+                Err(_) => {
+                    consecutive_errors = consecutive_errors.saturating_add(1);
+                    if let Some(max) = config.max_consecutive_errors {
+                        if consecutive_errors >= max {
+                            return NodeRuntimeRunnerExit::MaxConsecutiveErrors {
+                                steps,
+                                consecutive_errors,
+                            };
+                        }
+                    }
+                    if !config.error_backoff.is_zero() {
+                        std::thread::sleep(config.error_backoff);
+                    }
+                }
+            }
+
+            step = step.saturating_add(1);
+            steps = steps.saturating_add(1);
+        }
+    }
+
+    /// Runs a fixed number of ticks.
+    pub fn run_steps(
+        &mut self,
+        steps: u64,
+        fast_peers: &[AFast::Peer],
+        fallback_peers: &[AFallback::Peer],
+        config: NodeRuntimeRunnerConfig,
+        mut callbacks: Option<&mut NodeRuntimeCallbacks<'_>>,
+    ) -> NodeRuntimeRunnerExit
+    where
+        AFast::Peer: ToString,
+        AFallback::Peer: ToString,
+    {
+        let mut step = config.start_step;
+        let mut ran = 0_u64;
+        let mut consecutive_errors = 0_u32;
+
+        while ran < steps {
+            let tick_result = if let Some(cb) = callbacks.as_deref_mut() {
+                self.tick_with_callbacks_ref(step, fast_peers, fallback_peers, cb)
+            } else {
+                self.tick(step, fast_peers, fallback_peers)
+            };
+
+            match tick_result {
+                Ok(_) => {
+                    consecutive_errors = 0;
+                    if !config.tick_interval.is_zero() {
+                        std::thread::sleep(config.tick_interval);
+                    }
+                }
+                Err(_) => {
+                    consecutive_errors = consecutive_errors.saturating_add(1);
+                    if let Some(max) = config.max_consecutive_errors {
+                        if consecutive_errors >= max {
+                            return NodeRuntimeRunnerExit::MaxConsecutiveErrors {
+                                steps: ran,
+                                consecutive_errors,
+                            };
+                        }
+                    }
+                    if !config.error_backoff.is_zero() {
+                        std::thread::sleep(config.error_backoff);
+                    }
+                }
+            }
+
+            ran = ran.saturating_add(1);
+            step = step.saturating_add(1);
+        }
+
+        NodeRuntimeRunnerExit::Completed { steps: ran }
     }
 }
 
@@ -274,14 +439,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use veil_codec::object::OBJECT_FLAG_SIGNED;
     use veil_crypto::aead::XChaCha20Poly1305Cipher;
     use veil_crypto::signing::{Ed25519Signer, Ed25519Verifier};
     use veil_transport::adapter::InMemoryAdapter;
 
     use super::{
-        NodeRuntime, NodeRuntimeCallbacks, PublisherRuntime, PublisherTickInput,
-        PublisherTickOptionsInput,
+        NodeRuntime, NodeRuntimeCallbacks, NodeRuntimeRunnerConfig, NodeRuntimeRunnerExit,
+        PublisherRuntime, PublisherTickInput, PublisherTickOptionsInput,
     };
 
     #[test]
@@ -390,5 +557,65 @@ mod tests {
             .expect("tick should succeed");
 
         assert_eq!(send_failure_count, 0);
+    }
+
+    #[test]
+    fn node_runtime_run_steps_completes_requested_budget() {
+        let mut rt = NodeRuntime::new(
+            crate::state::NodeState::default(),
+            InMemoryAdapter::default(),
+            InMemoryAdapter::default(),
+            crate::config::NodeRuntimeConfig::default(),
+            [0xAA; 32],
+            XChaCha20Poly1305Cipher,
+            Ed25519Verifier,
+        );
+        let peers = vec!["peer-a".to_string()];
+        let exit = rt.run_steps(
+            5,
+            &peers,
+            &peers,
+            NodeRuntimeRunnerConfig {
+                start_step: 10,
+                tick_interval: Duration::ZERO,
+                error_backoff: Duration::ZERO,
+                max_consecutive_errors: Some(4),
+            },
+            None,
+        );
+
+        assert_eq!(exit, NodeRuntimeRunnerExit::Completed { steps: 5 });
+    }
+
+    #[test]
+    fn node_runtime_run_until_honors_cancellation() {
+        let mut rt = NodeRuntime::new(
+            crate::state::NodeState::default(),
+            InMemoryAdapter::default(),
+            InMemoryAdapter::default(),
+            crate::config::NodeRuntimeConfig::default(),
+            [0xAA; 32],
+            XChaCha20Poly1305Cipher,
+            Ed25519Verifier,
+        );
+        let peers = vec!["peer-a".to_string()];
+        let mut polls = 0_u32;
+        let exit = rt.run_until(
+            &peers,
+            &peers,
+            NodeRuntimeRunnerConfig {
+                start_step: 0,
+                tick_interval: Duration::ZERO,
+                error_backoff: Duration::ZERO,
+                max_consecutive_errors: Some(4),
+            },
+            || {
+                polls += 1;
+                polls > 3
+            },
+            None,
+        );
+
+        assert_eq!(exit, NodeRuntimeRunnerExit::Cancelled { steps: 3 });
     }
 }

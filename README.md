@@ -39,6 +39,7 @@ High-level helper APIs in `veil-node` simplify integration:
 
 - `service::PublisherRuntime` - queue + publish tick wrapper
 - `service::NodeRuntime` - ingest/forward/reconstruct tick wrapper
+- `service::NodeRuntime::run_steps/run_until` - built-in runtime loop orchestration
 - `service::NodeRuntimeCallbacks` - delivery/ACK/send-failure hooks per tick
 - `persistence` helpers - snapshot/load `NodeState` as CBOR for restart durability
 - `publish::PublishOptions` - typed publish flags (`signed`, `ack_requested`)
