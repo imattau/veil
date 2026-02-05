@@ -24,6 +24,27 @@ configureTagBackend("auto");
 `LaneAdapter` can optionally expose `healthSnapshot()` so client telemetry aligns
 with Rust transport counters (`outbound*`, `inbound*`, reconnect attempts).
 
+## Local WoT helpers (UI prioritization)
+
+SDK-js now includes a local WoT policy helper aligned with the Rust node policy
+model for tiering and explainability.
+
+```ts
+import { LocalWotPolicy, rankFeedItemsByTrust } from "@veil/sdk-js";
+
+const policy = new LocalWotPolicy();
+policy.trust(myFriendPubkeyHex);
+policy.addEndorsement(myFriendPubkeyHex, creatorPubkeyHex, nowStep - 5);
+
+const explanation = policy.explainPublisher(creatorPubkeyHex, nowStep);
+// explanation.tier => "trusted" | "known" | "unknown" | "muted" | "blocked"
+
+const ranked = rankFeedItemsByTrust(feedItems, policy, nowStep);
+```
+
+Use `policy.exportJson()` / `LocalWotPolicy.importJson(json)` to persist and
+restore trust lists + endorsements in app storage.
+
 ## Channel-scoped helpers
 
 Use channel-scoped helpers to avoid cross-channel feed collisions:

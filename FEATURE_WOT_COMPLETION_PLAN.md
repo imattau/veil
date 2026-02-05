@@ -23,9 +23,9 @@ Goal: move WoT from local-v1 prioritization to a complete, explainable, and port
 - [x] Add duplicate suppression + staleness pruning.
 
 ## Phase 5: Cache policy hardening
-- [ ] Enforce per-tier caps with global coordination.
-- [ ] Tune rarity/trust/age/request weights with scenario tests.
+- [x] Enforce per-tier caps with global coordination.
+- [x] Tune rarity/trust/age/request weights with scenario tests.
 
 ## Phase 6: SDK surface
-- [ ] Expose WoT score/explanation and trust import/export in SDK-js.
-- [ ] Add docs and integration examples for UI ranking.
+- [x] Expose WoT score/explanation and trust import/export in SDK-js.
+- [x] Add docs and integration examples for UI ranking.

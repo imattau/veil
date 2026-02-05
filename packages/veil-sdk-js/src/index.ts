@@ -48,3 +48,5 @@ export {
   signEd25519,
   verifyEd25519,
 } from "./keys";
+export { defaultWotConfig, LocalWotPolicy, rankFeedItemsByTrust } from "./wot";
+export type { Endorsement, RankableFeedItem, TrustScoreExplanation, TrustTier, WotConfig } from "./wot";

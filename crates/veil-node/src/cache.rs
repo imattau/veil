@@ -41,12 +41,7 @@ pub fn cache_put_with_policy(
 
     evict_expired(node, now_step);
 
-    let tier_budget = policy.storage_budget(tier);
-    while tier_count(node, tier) > tier_budget {
-        if !evict_one(node, now_step, policy, Some(tier)) {
-            break;
-        }
-    }
+    while evict_over_budget_tiers(node, now_step, policy) {}
 
     while node.cache.len() > max_cache_shards {
         if !evict_one(node, now_step, policy, None) {
@@ -62,6 +57,39 @@ pub fn note_shard_requested(node: &mut NodeState, shard_id: ShardId) {
 
 fn tier_count(node: &NodeState, tier: TrustTier) -> usize {
     node.shard_tier.values().filter(|t| **t == tier).count()
+}
+
+fn evict_over_budget_tiers(
+    node: &mut NodeState,
+    now_step: u64,
+    policy: &(impl WotPolicy + ?Sized),
+) -> bool {
+    let tiers = [
+        TrustTier::Blocked,
+        TrustTier::Muted,
+        TrustTier::Unknown,
+        TrustTier::Known,
+        TrustTier::Trusted,
+    ];
+    let mut over_budget: Option<(TrustTier, usize)> = None;
+    for tier in tiers {
+        let count = tier_count(node, tier);
+        let budget = policy.storage_budget(tier);
+        if count > budget {
+            let over = count - budget;
+            match over_budget {
+                None => over_budget = Some((tier, over)),
+                Some((_, max_over)) if over > max_over => over_budget = Some((tier, over)),
+                _ => {}
+            }
+        }
+    }
+
+    if let Some((tier, _)) = over_budget {
+        evict_one(node, now_step, policy, Some(tier))
+    } else {
+        false
+    }
 }
 
 fn evict_expired(node: &mut NodeState, now_step: u64) {
@@ -209,6 +237,56 @@ mod tests {
             .filter(|t| **t == TrustTier::Unknown)
             .count();
         assert_eq!(unknown_count, 1);
+    }
+
+    #[test]
+    fn policy_cache_rebalances_other_over_budget_tiers() {
+        let mut node = NodeState::default();
+        let cfg = WotConfig {
+            known_storage_budget: 1,
+            unknown_storage_budget: 2,
+            ..WotConfig::default()
+        };
+        let policy = LocalWotPolicy::new(cfg);
+
+        cache_put_with_policy(
+            &mut node,
+            [0x10; 32],
+            vec![1],
+            10,
+            100,
+            TrustTier::Known,
+            3,
+            &policy,
+        );
+        cache_put_with_policy(
+            &mut node,
+            [0x11; 32],
+            vec![2],
+            11,
+            100,
+            TrustTier::Known,
+            3,
+            &policy,
+        );
+        cache_put_with_policy(
+            &mut node,
+            [0x12; 32],
+            vec![3],
+            12,
+            100,
+            TrustTier::Unknown,
+            3,
+            &policy,
+        );
+
+        let known_count = node
+            .shard_tier
+            .values()
+            .filter(|t| **t == TrustTier::Known)
+            .count();
+        assert_eq!(known_count, 1);
+        assert!(node.cache.len() <= 2);
     }
 
     #[test]

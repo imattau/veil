@@ -66,6 +66,7 @@ pub trait WotPolicy {
 
 /// Tunable parameters for `LocalWotPolicy`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct WotConfig {
     pub endorsement_threshold: usize,
     pub max_hops: u8,
@@ -86,6 +87,10 @@ pub struct WotConfig {
     pub endorsement_window_steps: u64,
     pub endorsement_max_per_endorser_per_window: usize,
     pub endorsement_max_age_steps: u64,
+    pub eviction_weight_trust: f64,
+    pub eviction_weight_replica: f64,
+    pub eviction_weight_age: f64,
+    pub eviction_weight_requested: f64,
 }
 
 impl Default for WotConfig {
@@ -110,6 +115,10 @@ impl Default for WotConfig {
             endorsement_window_steps: 10_000,
             endorsement_max_per_endorser_per_window: 256,
             endorsement_max_age_steps: 100_000,
+            eviction_weight_trust: 0.5,
+            eviction_weight_replica: 0.4,
+            eviction_weight_age: 0.1,
+            eviction_weight_requested: 1.0,
         }
     }
 }
@@ -490,7 +499,10 @@ impl WotPolicy for LocalWotPolicy {
         let age_factor = (meta.age_steps as f64 / 20_000.0).clamp(0.0, 1.0);
         let request_bonus = (meta.requested_count as f64 / 16.0).clamp(0.0, 0.6);
 
-        let score = 0.5 * trust_factor + 0.4 * replica_factor + 0.1 * age_factor - request_bonus;
+        let score = self.config.eviction_weight_trust * trust_factor
+            + self.config.eviction_weight_replica * replica_factor
+            + self.config.eviction_weight_age * age_factor
+            - self.config.eviction_weight_requested * request_bonus;
         score.clamp(0.0, 1.0)
     }
 }
@@ -576,6 +588,41 @@ mod tests {
             requested_count: 0,
         };
         assert!(policy.eviction_priority(common_unknown) > policy.eviction_priority(rare_trusted));
+    }
+
+    #[test]
+    fn eviction_weight_tuning_changes_priority_order() {
+        let mut cfg = super::WotConfig::default();
+        cfg.eviction_weight_replica = 1.0;
+        cfg.eviction_weight_trust = 0.0;
+        let replica_policy = LocalWotPolicy::new(cfg);
+
+        let mut cfg = super::WotConfig::default();
+        cfg.eviction_weight_replica = 0.0;
+        cfg.eviction_weight_trust = 1.0;
+        let trust_policy = LocalWotPolicy::new(cfg);
+
+        let high_replica_known = ShardMeta {
+            tier: TrustTier::Known,
+            replica_estimate: 40,
+            age_steps: 100,
+            requested_count: 0,
+        };
+        let low_replica_unknown = ShardMeta {
+            tier: TrustTier::Unknown,
+            replica_estimate: 1,
+            age_steps: 100,
+            requested_count: 0,
+        };
+
+        assert!(
+            replica_policy.eviction_priority(high_replica_known)
+                > replica_policy.eviction_priority(low_replica_unknown)
+        );
+        assert!(
+            trust_policy.eviction_priority(high_replica_known)
+                < trust_policy.eviction_priority(low_replica_unknown)
+        );
     }
 
     #[test]
