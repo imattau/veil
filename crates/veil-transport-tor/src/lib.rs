@@ -6,7 +6,7 @@
 //! - intended as a censorship-resistant fallback lane
 
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -62,6 +62,23 @@ pub struct TorSocksAdapter {
     shutdown_tx: Option<oneshot::Sender<()>>,
     worker: Option<JoinHandle<()>>,
     running: Arc<AtomicBool>,
+    metrics: Arc<TorSocksAdapterMetricsInner>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TorSocksAdapterMetrics {
+    pub outbound_queued: u64,
+    pub send_attempts: u64,
+    pub send_success: u64,
+    pub send_errors: u64,
+}
+
+#[derive(Debug, Default)]
+struct TorSocksAdapterMetricsInner {
+    outbound_queued: AtomicU64,
+    send_attempts: AtomicU64,
+    send_success: AtomicU64,
+    send_errors: AtomicU64,
 }
 
 impl TorSocksAdapter {
@@ -70,7 +87,9 @@ impl TorSocksAdapter {
             tokio_mpsc::channel::<OutboundMessage>(config.outbound_queue_capacity);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let running = Arc::new(AtomicBool::new(true));
+        let metrics = Arc::new(TorSocksAdapterMetricsInner::default());
         let worker_running = Arc::clone(&running);
+        let worker_metrics = Arc::clone(&metrics);
         let worker_config = config.clone();
 
         let worker = thread::spawn(move || {
@@ -88,6 +107,7 @@ impl TorSocksAdapter {
             runtime.block_on(run_tor_worker(
                 worker_config,
                 worker_running,
+                worker_metrics,
                 outbound_rx,
                 shutdown_rx,
             ));
@@ -99,7 +119,17 @@ impl TorSocksAdapter {
             shutdown_tx: Some(shutdown_tx),
             worker: Some(worker),
             running,
+            metrics,
         })
+    }
+
+    pub fn metrics_snapshot(&self) -> TorSocksAdapterMetrics {
+        TorSocksAdapterMetrics {
+            outbound_queued: self.metrics.outbound_queued.load(Ordering::Relaxed),
+            send_attempts: self.metrics.send_attempts.load(Ordering::Relaxed),
+            send_success: self.metrics.send_success.load(Ordering::Relaxed),
+            send_errors: self.metrics.send_errors.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -134,6 +164,9 @@ impl TransportAdapter for TorSocksAdapter {
             .map_err(|err| match err {
                 tokio_mpsc::error::TrySendError::Full(_) => TorSocksAdapterError::QueueFull,
                 tokio_mpsc::error::TrySendError::Closed(_) => TorSocksAdapterError::Closed,
+            })
+            .map(|_| {
+                self.metrics.outbound_queued.fetch_add(1, Ordering::Relaxed);
             })
     }
 
@@ -171,6 +204,7 @@ fn parse_peer(peer: &str) -> Result<(String, u16), TorSocksAdapterError> {
 async fn run_tor_worker(
     config: TorSocksAdapterConfig,
     running: Arc<AtomicBool>,
+    metrics: Arc<TorSocksAdapterMetricsInner>,
     mut outbound_rx: tokio_mpsc::Receiver<OutboundMessage>,
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
@@ -182,15 +216,27 @@ async fn run_tor_worker(
             maybe_msg = outbound_rx.recv() => {
                 match maybe_msg {
                     Some(msg) => {
+                        metrics.send_attempts.fetch_add(1, Ordering::Relaxed);
                         if let Ok((host, port)) = parse_peer(&msg.peer) {
                             let connect = tokio::time::timeout(
                                 config.connect_timeout,
                                 Socks5Stream::connect(config.socks_proxy_addr.as_str(), (host.as_str(), port)),
                             ).await;
                             if let Ok(Ok(mut stream)) = connect {
-                                let _ = tokio::time::timeout(config.send_timeout, stream.write_all(&msg.bytes)).await;
-                                let _ = stream.shutdown().await;
+                                let write_res = tokio::time::timeout(config.send_timeout, stream.write_all(&msg.bytes)).await;
+                                if matches!(write_res, Ok(Ok(()))) {
+                                    metrics.send_success.fetch_add(1, Ordering::Relaxed);
+                                } else {
+                                    metrics.send_errors.fetch_add(1, Ordering::Relaxed);
+                                }
+                                if stream.shutdown().await.is_err() {
+                                    metrics.send_errors.fetch_add(1, Ordering::Relaxed);
+                                }
+                            } else {
+                                metrics.send_errors.fetch_add(1, Ordering::Relaxed);
                             }
+                        } else {
+                            metrics.send_errors.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     None => break,
@@ -280,6 +326,10 @@ mod tests {
             .expect("payload should arrive")
             .expect("payload channel should send");
         assert_eq!(payload, b"hello".to_vec());
+        let metrics = adapter.metrics_snapshot();
+        assert!(metrics.outbound_queued >= 1);
+        assert!(metrics.send_attempts >= 1);
+        assert!(metrics.send_success >= 1);
 
         server.await.expect("proxy task should complete");
     }

@@ -5,7 +5,7 @@
 
 use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -100,6 +100,27 @@ pub struct QuicAdapter {
     shutdown_tx: Option<oneshot::Sender<()>>,
     worker: Option<JoinHandle<()>>,
     running: Arc<AtomicBool>,
+    metrics: Arc<QuicAdapterMetricsInner>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct QuicAdapterMetrics {
+    pub outbound_queued: u64,
+    pub send_attempts: u64,
+    pub send_success: u64,
+    pub send_errors: u64,
+    pub inbound_received: u64,
+    pub inbound_dropped: u64,
+}
+
+#[derive(Debug, Default)]
+struct QuicAdapterMetricsInner {
+    outbound_queued: AtomicU64,
+    send_attempts: AtomicU64,
+    send_success: AtomicU64,
+    send_errors: AtomicU64,
+    inbound_received: AtomicU64,
+    inbound_dropped: AtomicU64,
 }
 
 impl QuicAdapter {
@@ -113,7 +134,9 @@ impl QuicAdapter {
             mpsc::sync_channel::<(String, Vec<u8>)>(config.inbound_queue_capacity);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let running = Arc::new(AtomicBool::new(true));
+        let metrics = Arc::new(QuicAdapterMetricsInner::default());
         let worker_running = Arc::clone(&running);
+        let worker_metrics = Arc::clone(&metrics);
         let bind_addr = config.bind_addr;
         let worker_config = config.clone();
 
@@ -131,6 +154,7 @@ impl QuicAdapter {
             runtime.block_on(run_quic_worker(
                 worker_config,
                 worker_running,
+                worker_metrics,
                 outbound_rx,
                 inbound_tx,
                 shutdown_rx,
@@ -152,11 +176,23 @@ impl QuicAdapter {
             shutdown_tx: Some(shutdown_tx),
             worker: Some(worker),
             running,
+            metrics,
         })
     }
 
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    pub fn metrics_snapshot(&self) -> QuicAdapterMetrics {
+        QuicAdapterMetrics {
+            outbound_queued: self.metrics.outbound_queued.load(Ordering::Relaxed),
+            send_attempts: self.metrics.send_attempts.load(Ordering::Relaxed),
+            send_success: self.metrics.send_success.load(Ordering::Relaxed),
+            send_errors: self.metrics.send_errors.load(Ordering::Relaxed),
+            inbound_received: self.metrics.inbound_received.load(Ordering::Relaxed),
+            inbound_dropped: self.metrics.inbound_dropped.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -191,6 +227,9 @@ impl TransportAdapter for QuicAdapter {
                 tokio_mpsc::error::TrySendError::Full(_) => QuicAdapterError::QueueFull,
                 tokio_mpsc::error::TrySendError::Closed(_) => QuicAdapterError::Closed,
             })
+            .map(|_| {
+                self.metrics.outbound_queued.fetch_add(1, Ordering::Relaxed);
+            })
     }
 
     fn recv(&mut self) -> Option<(Self::Peer, Vec<u8>)> {
@@ -209,6 +248,7 @@ impl TransportAdapter for QuicAdapter {
 async fn run_quic_worker(
     config: QuicAdapterConfig,
     running: Arc<AtomicBool>,
+    metrics: Arc<QuicAdapterMetricsInner>,
     mut outbound_rx: tokio_mpsc::Receiver<OutboundMessage>,
     inbound_tx: mpsc::SyncSender<(String, Vec<u8>)>,
     mut shutdown_rx: oneshot::Receiver<()>,
@@ -247,6 +287,7 @@ async fn run_quic_worker(
         tokio::select! {
             _ = &mut shutdown_rx => break,
             Some(msg) = outbound_rx.recv() => {
+                metrics.send_attempts.fetch_add(1, Ordering::Relaxed);
                 let connecting = endpoint.connect(msg.peer, &config.server_name);
                 if let Ok(connecting) = connecting {
                     let connection = tokio::time::timeout(config.connect_timeout, connecting).await;
@@ -258,13 +299,23 @@ async fn run_quic_worker(
                             let _ = stream.stopped().await;
                             Result::<(), quinn::WriteError>::Ok(())
                         };
-                        let _ = tokio::time::timeout(config.send_timeout, send_task).await;
+                        let sent = tokio::time::timeout(config.send_timeout, send_task).await;
+                        if matches!(sent, Ok(Ok(()))) {
+                            metrics.send_success.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            metrics.send_errors.fetch_add(1, Ordering::Relaxed);
+                        }
+                    } else {
+                        metrics.send_errors.fetch_add(1, Ordering::Relaxed);
                     }
+                } else {
+                    metrics.send_errors.fetch_add(1, Ordering::Relaxed);
                 }
             }
             maybe_incoming = endpoint.accept() => {
                 if let Some(incoming) = maybe_incoming {
                     let inbound_tx = inbound_tx.clone();
+                    let metrics = Arc::clone(&metrics);
                     let max_recv = config.max_recv_bytes;
                     tokio::spawn(async move {
                         if let Ok(conn) = incoming.await {
@@ -272,7 +323,14 @@ async fn run_quic_worker(
                             while let Ok(mut recv) = conn.accept_uni().await {
                                 match recv.read_to_end(max_recv).await {
                                     Ok(bytes) => {
-                                        let _ = inbound_tx.try_send((remote.clone(), bytes));
+                                        match inbound_tx.try_send((remote.clone(), bytes)) {
+                                            Ok(_) => {
+                                                metrics.inbound_received.fetch_add(1, Ordering::Relaxed);
+                                            }
+                                            Err(_) => {
+                                                metrics.inbound_dropped.fetch_add(1, Ordering::Relaxed);
+                                            }
+                                        }
                                     }
                                     Err(_) => break,
                                 }
@@ -337,6 +395,9 @@ mod tests {
             .expect("send should queue");
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(a.can_send());
+        let metrics = a.metrics_snapshot();
+        assert!(metrics.outbound_queued >= 1);
+        assert!(metrics.send_attempts >= 1);
     }
 
     #[test]

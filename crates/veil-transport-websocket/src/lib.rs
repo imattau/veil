@@ -3,7 +3,7 @@
 //! This crate provides a `TransportAdapter` implementation backed by a single
 //! outbound WebSocket connection with reconnect/backoff.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -59,6 +59,27 @@ pub struct WebSocketAdapter {
     shutdown_tx: Option<oneshot::Sender<()>>,
     worker: Option<JoinHandle<()>>,
     connected: Arc<AtomicBool>,
+    metrics: Arc<WebSocketAdapterMetricsInner>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WebSocketAdapterMetrics {
+    pub outbound_queued: u64,
+    pub outbound_send_ok: u64,
+    pub outbound_send_err: u64,
+    pub inbound_received: u64,
+    pub inbound_dropped: u64,
+    pub reconnect_attempts: u64,
+}
+
+#[derive(Debug, Default)]
+struct WebSocketAdapterMetricsInner {
+    outbound_queued: AtomicU64,
+    outbound_send_ok: AtomicU64,
+    outbound_send_err: AtomicU64,
+    inbound_received: AtomicU64,
+    inbound_dropped: AtomicU64,
+    reconnect_attempts: AtomicU64,
 }
 
 impl WebSocketAdapter {
@@ -67,8 +88,10 @@ impl WebSocketAdapter {
         let (inbound_tx, inbound_rx) = mpsc::sync_channel::<(String, Vec<u8>)>(config.inbound_queue_capacity);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let connected = Arc::new(AtomicBool::new(false));
+        let metrics = Arc::new(WebSocketAdapterMetricsInner::default());
 
         let worker_connected = Arc::clone(&connected);
+        let worker_metrics = Arc::clone(&metrics);
         let worker_config = config.clone();
         let worker = thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -81,6 +104,7 @@ impl WebSocketAdapter {
             runtime.block_on(run_websocket_worker(
                 worker_config,
                 worker_connected,
+                worker_metrics,
                 outbound_rx,
                 inbound_tx,
                 shutdown_rx,
@@ -94,7 +118,19 @@ impl WebSocketAdapter {
             shutdown_tx: Some(shutdown_tx),
             worker: Some(worker),
             connected,
+            metrics,
         })
+    }
+
+    pub fn metrics_snapshot(&self) -> WebSocketAdapterMetrics {
+        WebSocketAdapterMetrics {
+            outbound_queued: self.metrics.outbound_queued.load(Ordering::Relaxed),
+            outbound_send_ok: self.metrics.outbound_send_ok.load(Ordering::Relaxed),
+            outbound_send_err: self.metrics.outbound_send_err.load(Ordering::Relaxed),
+            inbound_received: self.metrics.inbound_received.load(Ordering::Relaxed),
+            inbound_dropped: self.metrics.inbound_dropped.load(Ordering::Relaxed),
+            reconnect_attempts: self.metrics.reconnect_attempts.load(Ordering::Relaxed),
+        }
     }
 }
 
@@ -125,6 +161,9 @@ impl TransportAdapter for WebSocketAdapter {
                 tokio_mpsc::error::TrySendError::Full(_) => WebSocketAdapterError::QueueFull,
                 tokio_mpsc::error::TrySendError::Closed(_) => WebSocketAdapterError::Closed,
             })
+            .map(|_| {
+                self.metrics.outbound_queued.fetch_add(1, Ordering::Relaxed);
+            })
     }
 
     fn recv(&mut self) -> Option<(Self::Peer, Vec<u8>)> {
@@ -143,6 +182,7 @@ impl TransportAdapter for WebSocketAdapter {
 async fn run_websocket_worker(
     config: WebSocketAdapterConfig,
     connected: Arc<AtomicBool>,
+    metrics: Arc<WebSocketAdapterMetricsInner>,
     mut outbound_rx: tokio_mpsc::Receiver<Vec<u8>>,
     inbound_tx: mpsc::SyncSender<(String, Vec<u8>)>,
     mut shutdown_rx: oneshot::Receiver<()>,
@@ -153,6 +193,7 @@ async fn run_websocket_worker(
         tokio::select! {
             _ = &mut shutdown_rx => break 'outer,
             connect_result = connect_async(&config.url) => {
+                metrics.reconnect_attempts.fetch_add(1, Ordering::Relaxed);
                 match connect_result {
                     Ok((stream, _)) => {
                         connected.store(true, Ordering::Relaxed);
@@ -169,9 +210,11 @@ async fn run_websocket_worker(
                                     match maybe_out {
                                         Some(bytes) => {
                                             if write.send(Message::Binary(bytes)).await.is_err() {
+                                                metrics.outbound_send_err.fetch_add(1, Ordering::Relaxed);
                                                 connected.store(false, Ordering::Relaxed);
                                                 break;
                                             }
+                                            metrics.outbound_send_ok.fetch_add(1, Ordering::Relaxed);
                                         }
                                         None => {
                                             connected.store(false, Ordering::Relaxed);
@@ -182,7 +225,14 @@ async fn run_websocket_worker(
                                 maybe_in = read.next() => {
                                     match maybe_in {
                                         Some(Ok(Message::Binary(bytes))) => {
-                                            let _ = inbound_tx.try_send((config.peer_id.clone(), bytes.to_vec()));
+                                            match inbound_tx.try_send((config.peer_id.clone(), bytes.to_vec())) {
+                                                Ok(_) => {
+                                                    metrics.inbound_received.fetch_add(1, Ordering::Relaxed);
+                                                }
+                                                Err(_) => {
+                                                    metrics.inbound_dropped.fetch_add(1, Ordering::Relaxed);
+                                                }
+                                            }
                                         }
                                         Some(Ok(Message::Close(_))) => {
                                             connected.store(false, Ordering::Relaxed);
@@ -275,6 +325,10 @@ mod tests {
         }
 
         assert_eq!(received, Some(b"hello".to_vec()));
+        let metrics = adapter.metrics_snapshot();
+        assert!(metrics.outbound_queued >= 1);
+        assert!(metrics.outbound_send_ok >= 1);
+        assert!(metrics.inbound_received >= 1);
         server.await.expect("server task should finish");
     }
 }
