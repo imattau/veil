@@ -6,9 +6,28 @@ import { MemoryShardCacheStore, type ShardCacheStore } from "./storage";
 
 export type TagHex = string;
 
+export interface TransportHealthSnapshot {
+  outboundQueued: number;
+  outboundSendOk: number;
+  outboundSendErr: number;
+  inboundReceived: number;
+  inboundDropped: number;
+  reconnectAttempts: number;
+}
+
+const EMPTY_TRANSPORT_HEALTH: TransportHealthSnapshot = {
+  outboundQueued: 0,
+  outboundSendOk: 0,
+  outboundSendErr: 0,
+  inboundReceived: 0,
+  inboundDropped: 0,
+  reconnectAttempts: 0,
+};
+
 export interface LaneAdapter {
   send(peer: string, bytes: Uint8Array): Promise<void>;
   recv(): Promise<{ peer: string; bytes: Uint8Array } | null>;
+  healthSnapshot?(): TransportHealthSnapshot;
 }
 
 export interface VeilClientHooks {
@@ -40,6 +59,7 @@ export interface LaneHealth {
   sendFailures: number;
   receives: number;
   consecutiveSendFailures: number;
+  transport: TransportHealthSnapshot;
 }
 
 export interface LaneHealthSnapshot {
@@ -73,6 +93,7 @@ export class VeilClient {
       sendFailures: 0,
       receives: 0,
       consecutiveSendFailures: 0,
+      transport: { ...EMPTY_TRANSPORT_HEALTH },
     },
   };
 
@@ -98,6 +119,7 @@ export class VeilClient {
         sendFailures: 0,
         receives: 0,
         consecutiveSendFailures: 0,
+        transport: { ...EMPTY_TRANSPORT_HEALTH },
       };
     }
   }
@@ -147,10 +169,36 @@ export class VeilClient {
   }
 
   getLaneHealth(): LaneHealthSnapshot {
+    this.applyTransportSnapshot("fast", this.fastLane);
+    this.applyTransportSnapshot("fallback", this.fallbackLane);
     return {
-      fast: { ...this.laneHealth.fast },
-      fallback: this.laneHealth.fallback ? { ...this.laneHealth.fallback } : undefined,
+      fast: {
+        ...this.laneHealth.fast,
+        transport: { ...this.laneHealth.fast.transport },
+      },
+      fallback: this.laneHealth.fallback
+        ? {
+            ...this.laneHealth.fallback,
+            transport: { ...this.laneHealth.fallback.transport },
+          }
+        : undefined,
     };
+  }
+
+  private applyTransportSnapshot(
+    lane: "fast" | "fallback",
+    adapter: LaneAdapter | undefined,
+  ): void {
+    const state = lane === "fast" ? this.laneHealth.fast : this.laneHealth.fallback;
+    if (!state || !adapter?.healthSnapshot) {
+      return;
+    }
+
+    const snapshot = adapter.healthSnapshot();
+    state.transport = { ...snapshot };
+    state.sends = snapshot.outboundSendOk + snapshot.outboundSendErr;
+    state.sendFailures = snapshot.outboundSendErr;
+    state.receives = snapshot.inboundReceived;
   }
 
   private shardIdHex(bytes: Uint8Array): string {
@@ -185,6 +233,9 @@ export class VeilClient {
     if (!this.hooks.onLaneHealth) {
       return;
     }
+    this.applyTransportSnapshot("fast", this.fastLane);
+    this.applyTransportSnapshot("fallback", this.fallbackLane);
+
     const now = Date.now();
     if (
       this.laneHealthEmitMs === 0 ||
@@ -237,24 +288,32 @@ export class VeilClient {
     lane: "fast" | "fallback",
     event: "send_ok" | "send_error" | "recv",
   ): void {
-    const state =
-      lane === "fast"
-        ? this.laneHealth.fast
-        : this.laneHealth.fallback;
+    const state = lane === "fast" ? this.laneHealth.fast : this.laneHealth.fallback;
     if (!state) {
       return;
     }
+    const adapter = lane === "fast" ? this.fastLane : this.fallbackLane;
+    const usingAdapterSnapshot = Boolean(adapter?.healthSnapshot);
 
     if (event === "recv") {
-      state.receives += 1;
+      if (!usingAdapterSnapshot) {
+        state.receives += 1;
+        state.transport.inboundReceived += 1;
+      }
       state.score = Math.min(1, state.score * 0.95 + 0.05);
     } else if (event === "send_ok") {
-      state.sends += 1;
+      if (!usingAdapterSnapshot) {
+        state.sends += 1;
+        state.transport.outboundSendOk += 1;
+      }
       state.consecutiveSendFailures = 0;
       state.score = Math.min(1, state.score * 0.9 + 0.1);
     } else {
-      state.sends += 1;
-      state.sendFailures += 1;
+      if (!usingAdapterSnapshot) {
+        state.sends += 1;
+        state.sendFailures += 1;
+        state.transport.outboundSendErr += 1;
+      }
       state.consecutiveSendFailures += 1;
       state.score = Math.max(0, state.score * 0.55);
     }

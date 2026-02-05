@@ -19,6 +19,11 @@ configureTagBackend("auto");
 - Provide a persistent `ShardCacheStore` implementation (AsyncStorage/MMKV/SQLite).
 - Use `WebSocketLaneAdapter` (or your own adapter) for transport lanes.
 
+## Transport health snapshots
+
+`LaneAdapter` can optionally expose `healthSnapshot()` so client telemetry aligns
+with Rust transport counters (`outbound*`, `inbound*`, reconnect attempts).
+
 ## Build
 
 ```bash

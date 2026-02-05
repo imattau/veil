@@ -3,6 +3,7 @@ export type {
   LaneAdapter,
   LaneHealth,
   LaneHealthSnapshot,
+  TransportHealthSnapshot,
   VeilClientHooks,
   VeilClientOptions,
 } from "./client";

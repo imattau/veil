@@ -1,19 +1,39 @@
-import type { LaneAdapter } from "./client";
+import type { LaneAdapter, TransportHealthSnapshot } from "./client";
 
 export class InMemoryLaneAdapter implements LaneAdapter {
   private readonly inbox: Array<{ peer: string; bytes: Uint8Array }> = [];
+  private readonly metrics: TransportHealthSnapshot = {
+    outboundQueued: 0,
+    outboundSendOk: 0,
+    outboundSendErr: 0,
+    inboundReceived: 0,
+    inboundDropped: 0,
+    reconnectAttempts: 0,
+  };
 
   async send(peer: string, bytes: Uint8Array): Promise<void> {
     this.inbox.push({ peer, bytes: new Uint8Array(bytes) });
+    this.metrics.outboundSendOk += 1;
+    this.metrics.outboundQueued = this.inbox.length;
   }
 
   async recv(): Promise<{ peer: string; bytes: Uint8Array } | null> {
     const next = this.inbox.shift();
+    if (next) {
+      this.metrics.inboundReceived += 1;
+      this.metrics.outboundQueued = this.inbox.length;
+    }
     return next ?? null;
   }
 
   enqueue(peer: string, bytes: Uint8Array): void {
     this.inbox.push({ peer, bytes });
+    this.metrics.outboundQueued = this.inbox.length;
+  }
+
+  healthSnapshot(): TransportHealthSnapshot {
+    this.metrics.outboundQueued = this.inbox.length;
+    return { ...this.metrics };
   }
 }
 
@@ -84,6 +104,14 @@ export class WebSocketLaneAdapter implements LaneAdapter {
   private reconnectDelayMs: number;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private readonly metrics: TransportHealthSnapshot = {
+    outboundQueued: 0,
+    outboundSendOk: 0,
+    outboundSendErr: 0,
+    inboundReceived: 0,
+    inboundDropped: 0,
+    reconnectAttempts: 0,
+  };
   private readonly wsFactory: (
     url: string,
     protocols?: string | string[],
@@ -107,8 +135,10 @@ export class WebSocketLaneAdapter implements LaneAdapter {
       try {
         const bytes = toBytes(event.data);
         this.inbox.push({ peer: this.options.peerId, bytes });
+        this.metrics.inboundReceived += 1;
       } catch {
         // Ignore malformed payloads from the websocket envelope layer.
+        this.metrics.inboundDropped += 1;
       }
     });
     socket.addEventListener("close", () => {
@@ -131,6 +161,7 @@ export class WebSocketLaneAdapter implements LaneAdapter {
     const maxDelay = this.options.reconnectMaxMs ?? 10_000;
     const multiplier = this.options.reconnectBackoffMultiplier ?? 2;
     this.reconnectDelayMs = Math.min(Math.floor(delay * multiplier), maxDelay);
+    this.metrics.reconnectAttempts += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
@@ -147,7 +178,9 @@ export class WebSocketLaneAdapter implements LaneAdapter {
         break;
       }
       this.socket.send(bytes);
+      this.metrics.outboundSendOk += 1;
     }
+    this.metrics.outboundQueued = this.sendBuffer.length;
   }
 
   async send(_peer: string, bytes: Uint8Array): Promise<void> {
@@ -156,14 +189,17 @@ export class WebSocketLaneAdapter implements LaneAdapter {
     }
     if (this.socket && this.socket.readyState === 1) {
       this.socket.send(bytes);
+      this.metrics.outboundSendOk += 1;
       return;
     }
 
     const maxBufferedMessages = this.options.maxBufferedMessages ?? 256;
     if (this.sendBuffer.length >= maxBufferedMessages) {
       this.sendBuffer.shift();
+      this.metrics.outboundSendErr += 1;
     }
     this.sendBuffer.push(new Uint8Array(bytes));
+    this.metrics.outboundQueued = this.sendBuffer.length;
   }
 
   async recv(): Promise<InboxMessage | null> {
@@ -181,5 +217,10 @@ export class WebSocketLaneAdapter implements LaneAdapter {
       this.socket.close();
       this.socket = null;
     }
+  }
+
+  healthSnapshot(): TransportHealthSnapshot {
+    this.metrics.outboundQueued = this.sendBuffer.length;
+    return { ...this.metrics };
   }
 }

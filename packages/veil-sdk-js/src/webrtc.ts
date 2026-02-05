@@ -1,4 +1,4 @@
-import type { LaneAdapter } from "./client";
+import type { LaneAdapter, TransportHealthSnapshot } from "./client";
 
 export interface WebRtcDataChannelLike {
   readonly readyState: string;
@@ -43,6 +43,14 @@ export class WebRtcLaneAdapter implements LaneAdapter {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectPromise: Promise<void> | null = null;
   private closed = false;
+  private readonly metrics: TransportHealthSnapshot = {
+    outboundQueued: 0,
+    outboundSendOk: 0,
+    outboundSendErr: 0,
+    inboundReceived: 0,
+    inboundDropped: 0,
+    reconnectAttempts: 0,
+  };
 
   constructor(private readonly options: WebRtcLaneOptions) {
     this.reconnectDelayMs = options.reconnectInitialMs ?? 250;
@@ -71,8 +79,10 @@ export class WebRtcLaneAdapter implements LaneAdapter {
           try {
             const bytes = toBytes(event.data);
             this.inbox.push({ peer: this.options.peerId, bytes });
+            this.metrics.inboundReceived += 1;
           } catch {
             // Ignore malformed payloads.
+            this.metrics.inboundDropped += 1;
           }
         });
         channel.addEventListener("close", () => {
@@ -106,6 +116,7 @@ export class WebRtcLaneAdapter implements LaneAdapter {
     const maxDelay = this.options.reconnectMaxMs ?? 10_000;
     const multiplier = this.options.reconnectBackoffMultiplier ?? 2;
     this.reconnectDelayMs = Math.min(Math.floor(delay * multiplier), maxDelay);
+    this.metrics.reconnectAttempts += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
@@ -122,7 +133,9 @@ export class WebRtcLaneAdapter implements LaneAdapter {
         break;
       }
       this.channel.send(bytes);
+      this.metrics.outboundSendOk += 1;
     }
+    this.metrics.outboundQueued = this.sendBuffer.length;
   }
 
   async send(_peer: string, bytes: Uint8Array): Promise<void> {
@@ -131,14 +144,17 @@ export class WebRtcLaneAdapter implements LaneAdapter {
     }
     if (this.channel && this.channel.readyState === "open") {
       this.channel.send(bytes);
+      this.metrics.outboundSendOk += 1;
       return;
     }
 
     const maxBufferedMessages = this.options.maxBufferedMessages ?? 256;
     if (this.sendBuffer.length >= maxBufferedMessages) {
       this.sendBuffer.shift();
+      this.metrics.outboundSendErr += 1;
     }
     this.sendBuffer.push(new Uint8Array(bytes));
+    this.metrics.outboundQueued = this.sendBuffer.length;
     this.connect();
   }
 
@@ -157,5 +173,10 @@ export class WebRtcLaneAdapter implements LaneAdapter {
       this.channel.close();
       this.channel = null;
     }
+  }
+
+  healthSnapshot(): TransportHealthSnapshot {
+    this.metrics.outboundQueued = this.sendBuffer.length;
+    return { ...this.metrics };
   }
 }

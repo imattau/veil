@@ -14,7 +14,11 @@ vi.mock("../src/codec", () => ({
   }),
 }));
 
-import { VeilClient, type LaneAdapter } from "../src/client";
+import {
+  VeilClient,
+  type LaneAdapter,
+  type TransportHealthSnapshot,
+} from "../src/client";
 
 class StubLane implements LaneAdapter {
   readonly sent: Array<{ peer: string; bytes: Uint8Array }> = [];
@@ -35,6 +39,16 @@ class StubLane implements LaneAdapter {
 
   enqueue(peer: string, bytes: Uint8Array): void {
     this.inbox.push({ peer, bytes });
+  }
+}
+
+class MetricsLane extends StubLane {
+  constructor(private readonly snapshot: TransportHealthSnapshot) {
+    super();
+  }
+
+  healthSnapshot(): TransportHealthSnapshot {
+    return { ...this.snapshot };
   }
 }
 
@@ -181,5 +195,27 @@ describe("VeilClient lane scoring", () => {
     // Deferred coalesced emission runs once.
     expect(healthUpdates.length).toBe(2);
     vi.useRealTimers();
+  });
+
+  test("uses adapter health snapshots when available", async () => {
+    const fastLane = new MetricsLane({
+      outboundQueued: 2,
+      outboundSendOk: 11,
+      outboundSendErr: 3,
+      inboundReceived: 5,
+      inboundDropped: 1,
+      reconnectAttempts: 2,
+    });
+    const client = new VeilClient(fastLane);
+
+    fastLane.enqueue("origin", new Uint8Array([1, 2, 3]));
+    client.subscribe("11".repeat(32));
+    await client.tick();
+
+    const health = client.getLaneHealth();
+    expect(health.fast.sends).toBe(14);
+    expect(health.fast.sendFailures).toBe(3);
+    expect(health.fast.receives).toBe(5);
+    expect(health.fast.transport.reconnectAttempts).toBe(2);
   });
 });
