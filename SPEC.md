@@ -129,6 +129,12 @@ Defaults:
 - Nodes MUST forward only subscribed tags.
 - Nodes MAY briefly cache unsubscribed-tag shards without forwarding.
 
+### 9.3 Namespace signature policy (optional hardening)
+- Implementations MAY define namespaces that require signed objects.
+- For those namespaces, objects that are unsigned or fail signature
+  verification SHOULD be rejected and SHOULD NOT be promoted into long-lived
+  shard cache state.
+
 ## 10. Reconstruction and ACK
 
 - Receiver MUST group shards by `object_root`.

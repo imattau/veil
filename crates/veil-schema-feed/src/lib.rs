@@ -63,6 +63,14 @@ pub struct EndorsementBundle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NamespaceSignaturePolicyBundle {
+    pub meta: BundleMeta,
+    pub channel_id: String,
+    pub namespace: u16,
+    pub require_signed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum FeedBundle {
     #[serde(rename = "profile")]
@@ -75,11 +83,16 @@ pub enum FeedBundle {
     ChannelDirectory(ChannelDirectoryBundle),
     #[serde(rename = "endorsement")]
     Endorsement(EndorsementBundle),
+    #[serde(rename = "namespace_signature_policy")]
+    NamespaceSignaturePolicy(NamespaceSignaturePolicyBundle),
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BundleMeta, ChannelDirectoryBundle, EndorsementBundle, FeedBundle, PostBundle};
+    use super::{
+        BundleMeta, ChannelDirectoryBundle, EndorsementBundle, FeedBundle,
+        NamespaceSignaturePolicyBundle, PostBundle,
+    };
 
     #[test]
     fn directory_bundle_round_trips_through_json() {
@@ -132,6 +145,22 @@ mod tests {
             endorser_pubkey_hex: "aa".repeat(32),
             publisher_pubkey_hex: "bb".repeat(32),
             at_step: 1234,
+        });
+        let json = serde_json::to_string(&bundle).expect("serialize should work");
+        let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");
+        assert_eq!(decoded, bundle);
+    }
+
+    #[test]
+    fn namespace_signature_policy_bundle_round_trip() {
+        let bundle = FeedBundle::NamespaceSignaturePolicy(NamespaceSignaturePolicyBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_003,
+            },
+            channel_id: "general".to_string(),
+            namespace: 7,
+            require_signed: true,
         });
         let json = serde_json::to_string(&bundle).expect("serialize should work");
         let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");

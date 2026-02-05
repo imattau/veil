@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use thiserror::Error;
 use veil_codec::error::CodecError;
 use veil_codec::object::{
@@ -54,6 +55,8 @@ pub enum ReceiveError {
     MissingSignatureFields,
     #[error("signature verification failed")]
     SignatureInvalid,
+    #[error("namespace requires signed objects")]
+    MissingRequiredSignature,
 }
 
 #[derive(Clone, Copy)]
@@ -68,6 +71,8 @@ pub struct ReceiveCachePolicy<'a> {
     pub erasure_coding_mode: ErasureCodingMode,
     /// Optional upward bucket jitter levels to use for outbound ACK shards.
     pub bucket_jitter_extra_levels: usize,
+    /// Namespaces that require signed objects at ingest.
+    pub required_signed_namespaces: Option<&'a HashSet<u16>>,
 }
 
 /// Decodes a queue-batched app payload into its original item list.
@@ -110,6 +115,10 @@ pub fn receive_shard_with_policy(
     cache_policy: Option<ReceiveCachePolicy<'_>>,
 ) -> Result<ReceiveEvent, ReceiveError> {
     let sid = shard_id(shard)?;
+    let require_signed_namespace = cache_policy
+        .and_then(|p| p.required_signed_namespaces)
+        .map(|required| required.contains(&shard.header.namespace.0))
+        .unwrap_or(false);
     if !should_forward(node, sid, &shard.header.tag) {
         if node.cache.contains_key(&sid) {
             return Ok(ReceiveEvent::IgnoredDuplicate);
@@ -118,18 +127,20 @@ pub fn receive_shard_with_policy(
     }
 
     let encoded_shard = encode_shard_cbor(shard)?;
-    match cache_policy {
-        Some(p) => cache_put_with_policy(
-            node,
-            sid,
-            encoded_shard,
-            now_step,
-            ttl_steps,
-            p.tier,
-            p.max_cache_shards,
-            p.wot_policy,
-        ),
-        None => cache_put(node, sid, encoded_shard, now_step, ttl_steps),
+    if !require_signed_namespace {
+        match cache_policy {
+            Some(p) => cache_put_with_policy(
+                node,
+                sid,
+                encoded_shard.clone(),
+                now_step,
+                ttl_steps,
+                p.tier,
+                p.max_cache_shards,
+                p.wot_policy,
+            ),
+            None => cache_put(node, sid, encoded_shard.clone(), now_step, ttl_steps),
+        }
     }
 
     let root = shard.header.object_root;
@@ -154,6 +165,11 @@ pub fn receive_shard_with_policy(
     let reconstructed = reconstruct_object_padded_with_mode(&collected, root, erasure_mode)?;
     let (object, _) = decode_object_cbor_prefix(&reconstructed)?;
 
+    if require_signed_namespace && (object.flags & OBJECT_FLAG_SIGNED) == 0 {
+        node.inbox.remove(&root);
+        return Err(ReceiveError::MissingRequiredSignature);
+    }
+
     if (object.flags & OBJECT_FLAG_SIGNED) != 0 {
         let pubkey = object
             .sender_pubkey
@@ -172,6 +188,22 @@ pub fn receive_shard_with_policy(
 
     let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
     let payload = cipher.decrypt(decrypt_key, object.nonce, &aad, &object.ciphertext)?;
+
+    if require_signed_namespace {
+        match cache_policy {
+            Some(p) => cache_put_with_policy(
+                node,
+                sid,
+                encoded_shard,
+                now_step,
+                ttl_steps,
+                p.tier,
+                p.max_cache_shards,
+                p.wot_policy,
+            ),
+            None => cache_put(node, sid, encoded_shard, now_step, ttl_steps),
+        }
+    }
 
     node.inbox.remove(&root);
 
@@ -237,6 +269,37 @@ mod tests {
         object.signature = Some(Signature(
             signer.sign(&digest).expect("signature should compute"),
         ));
+        encode_object_cbor(&object).expect("object should encode")
+    }
+
+    fn make_unsigned_encrypted_object(
+        payload: &[u8],
+        tag: [u8; 32],
+        namespace: Namespace,
+        epoch: Epoch,
+        key: &[u8; 32],
+    ) -> Vec<u8> {
+        let cipher = XChaCha20Poly1305Cipher;
+        let nonce = [0x56_u8; 24];
+        let aad = build_veil_aad(tag, namespace, epoch);
+        let envelope = cipher
+            .encrypt(key, nonce, &aad, payload)
+            .expect("encrypt should work");
+
+        let payload_root = derive_object_root(payload);
+        let object = ObjectV1 {
+            version: OBJECT_V1_VERSION,
+            namespace,
+            epoch,
+            flags: 0,
+            tag,
+            object_root: payload_root,
+            sender_pubkey: None,
+            signature: None,
+            nonce: envelope.nonce,
+            ciphertext: envelope.ciphertext,
+            padding: vec![0_u8; 8],
+        };
         encode_object_cbor(&object).expect("object should encode")
     }
 
@@ -367,6 +430,7 @@ mod tests {
             wot_policy: &wot_policy,
             erasure_coding_mode: ErasureCodingMode::Systematic,
             bucket_jitter_extra_levels: 0,
+            required_signed_namespaces: None,
         };
 
         let first_obj =
@@ -397,6 +461,7 @@ mod tests {
                 wot_policy: cache_policy.wot_policy,
                 erasure_coding_mode: cache_policy.erasure_coding_mode,
                 bucket_jitter_extra_levels: cache_policy.bucket_jitter_extra_levels,
+                required_signed_namespaces: cache_policy.required_signed_namespaces,
             }),
         )
         .expect("receive should work");
@@ -421,5 +486,54 @@ mod tests {
         let encoded = serde_cbor::to_vec(&items).expect("items should encode");
         let decoded = decode_batched_payload(&encoded).expect("batched payload should decode");
         assert_eq!(decoded, items);
+    }
+
+    #[test]
+    fn signed_namespace_policy_rejects_unsigned_objects_and_avoids_cache_pollution() {
+        let mut node = NodeState::default();
+        let tag = [0x51_u8; 32];
+        node.subscriptions.insert(tag);
+        let namespace = Namespace(51);
+        let epoch = Epoch(6);
+        let decrypt_key = [0xEE_u8; 32];
+        let encoded_object =
+            make_unsigned_encrypted_object(b"payload", tag, namespace, epoch, &decrypt_key);
+        let wire_root = derive_object_root(&encoded_object);
+        let shards = object_to_shards(&encoded_object, namespace, epoch, tag, wire_root)
+            .expect("object should shard");
+        let sid = veil_fec::sharder::shard_id(&shards[0]).expect("sid should compute");
+
+        let mut required = std::collections::HashSet::new();
+        required.insert(namespace.0);
+        let wot_policy = LocalWotPolicy::default();
+        let policy = ReceiveCachePolicy {
+            tier: TrustTier::Unknown,
+            max_cache_shards: 100,
+            wot_policy: &wot_policy,
+            erasure_coding_mode: ErasureCodingMode::Systematic,
+            bucket_jitter_extra_levels: 0,
+            required_signed_namespaces: Some(&required),
+        };
+
+        let mut got_required_sig_err = false;
+        for shard in shards.iter().take(shards[0].header.k as usize) {
+            let result = receive_shard_with_policy(
+                &mut node,
+                shard,
+                1,
+                100,
+                &decrypt_key,
+                &XChaCha20Poly1305Cipher,
+                &Ed25519Verifier,
+                Some(policy),
+            );
+            if let Err(super::ReceiveError::MissingRequiredSignature) = result {
+                got_required_sig_err = true;
+                break;
+            }
+        }
+        assert!(got_required_sig_err, "unsigned object should be rejected");
+        assert!(!node.cache.contains_key(&sid));
+        assert!(!node.inbox.contains_key(&wire_root));
     }
 }

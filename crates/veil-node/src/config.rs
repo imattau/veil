@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::ack::AckRetryPolicy;
 use crate::policy::{
@@ -63,6 +64,8 @@ pub struct NodeRuntimeConfig {
     pub bucket_jitter_extra_levels: usize,
     /// Adaptive lane-scoring policy for fanout rebalancing.
     pub adaptive_lane_scoring: AdaptiveLaneScoringConfig,
+    /// Namespaces that require signed objects at ingest.
+    pub required_signed_namespaces: HashSet<u16>,
     /// Local WoT policy used for trust classification and quotas.
     pub wot_policy: LocalWotPolicy,
     peer_publishers: HashMap<String, [u8; 32]>,
@@ -83,6 +86,7 @@ impl Default for NodeRuntimeConfig {
             erasure_coding_mode: ErasureCodingMode::Systematic,
             bucket_jitter_extra_levels: 0,
             adaptive_lane_scoring: AdaptiveLaneScoringConfig::default(),
+            required_signed_namespaces: HashSet::new(),
             wot_policy: LocalWotPolicy::default(),
             peer_publishers: HashMap::new(),
         }
@@ -152,6 +156,11 @@ impl NodeRuntimeConfig {
     /// Binds a transport peer identifier to a publisher pubkey.
     pub fn bind_peer_publisher(&mut self, peer: impl Into<String>, publisher: [u8; 32]) {
         self.peer_publishers.insert(peer.into(), publisher);
+    }
+
+    /// Requires objects in `namespace` to be signed at ingest.
+    pub fn require_signed_namespace(&mut self, namespace: veil_core::Namespace) {
+        self.required_signed_namespaces.insert(namespace.0);
     }
 
     /// Looks up the configured publisher pubkey for a transport peer id.
@@ -271,6 +280,11 @@ impl NodeRuntimeConfigBuilder {
         self
     }
 
+    pub fn with_required_signed_namespace(mut self, namespace: veil_core::Namespace) -> Self {
+        self.cfg.required_signed_namespaces.insert(namespace.0);
+        self
+    }
+
     pub fn build(self) -> NodeRuntimeConfig {
         self.cfg
     }
@@ -335,6 +349,7 @@ mod tests {
                 enabled: true,
                 ..AdaptiveLaneScoringConfig::default()
             })
+            .with_required_signed_namespace(veil_core::Namespace(7))
             .with_peer_publisher("peer-a", [0x99; 32])
             .build();
 
@@ -348,6 +363,7 @@ mod tests {
         );
         assert_eq!(cfg.bucket_jitter_extra_levels, 1);
         assert!(cfg.adaptive_lane_scoring.enabled);
+        assert!(cfg.required_signed_namespaces.contains(&7));
         assert_eq!(cfg.classify_peer_tier("peer-a", 0), TrustTier::Unknown);
         let p = cfg.ack_retry_policy();
         assert_eq!(p.initial_timeout_steps, 3);

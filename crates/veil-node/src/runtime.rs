@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use veil_codec::object::OBJECT_FLAG_ACK_REQUESTED;
 use veil_codec::shard::decode_shard_cbor;
 use veil_crypto::aead::AeadCipher;
@@ -127,6 +128,7 @@ pub struct RuntimePolicyHooks<'a, P> {
     pub wot_policy: Option<&'a dyn WotPolicy>,
     pub erasure_coding_mode: ErasureCodingMode,
     pub bucket_jitter_extra_levels: usize,
+    pub required_signed_namespaces: Option<&'a HashSet<u16>>,
 }
 
 impl<'a, P> Default for RuntimePolicyHooks<'a, P> {
@@ -138,6 +140,7 @@ impl<'a, P> Default for RuntimePolicyHooks<'a, P> {
             wot_policy: None,
             erasure_coding_mode: ErasureCodingMode::Systematic,
             bucket_jitter_extra_levels: 0,
+            required_signed_namespaces: None,
         }
     }
 }
@@ -326,6 +329,7 @@ pub fn pump_once<A: TransportAdapter>(
             wot_policy,
             erasure_coding_mode: policy_hooks.erasure_coding_mode,
             bucket_jitter_extra_levels: policy_hooks.bucket_jitter_extra_levels,
+            required_signed_namespaces: policy_hooks.required_signed_namespaces,
         });
     let event = process_inbound(
         node,
@@ -424,6 +428,7 @@ pub fn pump_once_with_config_resolver<A: TransportAdapter>(
                 wot_policy: Some(&config.wot_policy),
                 erasure_coding_mode: config.erasure_coding_mode,
                 bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
+                required_signed_namespaces: Some(&config.required_signed_namespaces),
             },
             decrypt_key,
             stats,
@@ -489,6 +494,7 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 wot_policy,
                 erasure_coding_mode: fast_policy_hooks.erasure_coding_mode,
                 bucket_jitter_extra_levels: fast_policy_hooks.bucket_jitter_extra_levels,
+                required_signed_namespaces: fast_policy_hooks.required_signed_namespaces,
             }),
             _ => None,
         };
@@ -556,6 +562,7 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 wot_policy,
                 erasure_coding_mode: fallback_policy_hooks.erasure_coding_mode,
                 bucket_jitter_extra_levels: fallback_policy_hooks.bucket_jitter_extra_levels,
+                required_signed_namespaces: fallback_policy_hooks.required_signed_namespaces,
             }),
             _ => None,
         };
@@ -692,6 +699,7 @@ where
                 wot_policy: Some(&config.wot_policy),
                 erasure_coding_mode: config.erasure_coding_mode,
                 bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
+                required_signed_namespaces: Some(&config.required_signed_namespaces),
             },
             fallback_policy_hooks: RuntimePolicyHooks {
                 fanout_for_peer: Some(&fallback_fanout_fn),
@@ -700,6 +708,7 @@ where
                 wot_policy: Some(&config.wot_policy),
                 erasure_coding_mode: config.erasure_coding_mode,
                 bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
+                required_signed_namespaces: Some(&config.required_signed_namespaces),
             },
             decrypt_key,
             stats,
