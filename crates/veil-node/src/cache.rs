@@ -36,7 +36,19 @@ pub fn cache_put_with_policy(
     max_cache_shards: usize,
     policy: &(impl WotPolicy + ?Sized),
 ) {
-    cache_put(node, shard_id, shard_bytes, now_step, ttl_steps);
+    node.cache.insert(
+        shard_id,
+        CachedShard {
+            bytes: shard_bytes,
+            expiry_step: now_step + ttl_steps,
+            last_seen_step: now_step,
+        },
+    );
+    if matches!(tier, TrustTier::Trusted | TrustTier::Known) {
+        *node.replica_estimate.entry(shard_id).or_insert(0) += 1;
+    } else {
+        node.replica_estimate.entry(shard_id).or_insert(0);
+    }
     node.shard_tier.insert(shard_id, tier);
 
     evict_expired(node, now_step);
@@ -331,5 +343,50 @@ mod tests {
         );
 
         assert!(node.cache.contains_key(&a));
+    }
+
+    #[test]
+    fn policy_cache_replica_estimate_only_counts_known_and_trusted() {
+        let mut node = NodeState::default();
+        let policy = LocalWotPolicy::default();
+
+        let unknown = [0x01; 32];
+        let known = [0x02; 32];
+        let trusted = [0x03; 32];
+
+        cache_put_with_policy(
+            &mut node,
+            unknown,
+            vec![1],
+            10,
+            100,
+            TrustTier::Unknown,
+            10,
+            &policy,
+        );
+        cache_put_with_policy(
+            &mut node,
+            known,
+            vec![2],
+            10,
+            100,
+            TrustTier::Known,
+            10,
+            &policy,
+        );
+        cache_put_with_policy(
+            &mut node,
+            trusted,
+            vec![3],
+            10,
+            100,
+            TrustTier::Trusted,
+            10,
+            &policy,
+        );
+
+        assert_eq!(node.replica_estimate.get(&unknown), Some(&0));
+        assert_eq!(node.replica_estimate.get(&known), Some(&1));
+        assert_eq!(node.replica_estimate.get(&trusted), Some(&1));
     }
 }
