@@ -10,12 +10,12 @@ Goal: move WoT from local-v1 prioritization to a complete, explainable, and port
 ## Phase 2: Trust graph import/export
 - [x] Add JSON export/import for local WoT state.
 - [x] Add round-trip tests for trust graph persistence.
-- [ ] Add file-path helpers for trust graph snapshots.
+- [x] Add file-path helpers for trust graph snapshots.
 
 ## Phase 3: Runtime quota scheduling
-- [ ] Add tier-aware forwarding queue ordering.
-- [ ] Reserve explicit unknown-budget floor under load.
-- [ ] Add per-tier forwarding/drop metrics.
+- [x] Add tier-aware forwarding queue ordering.
+- [x] Reserve explicit unknown-budget floor under load.
+- [x] Add per-tier forwarding/drop metrics.
 
 ## Phase 4: Endorsement ingestion path
 - [ ] Define endorsement object schema (non-normative).

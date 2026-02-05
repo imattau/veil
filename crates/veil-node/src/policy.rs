@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
 
 /// Local trust tiers used for prioritization decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -243,6 +245,20 @@ impl LocalWotPolicy {
         })
     }
 
+    /// Saves local WoT policy snapshot as pretty JSON file.
+    pub fn save_json_to_path(&self, path: impl AsRef<Path>) -> Result<(), std::io::Error> {
+        let json = self
+            .export_json()
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        fs::write(path.as_ref(), json)
+    }
+
+    /// Loads local WoT policy snapshot from JSON file.
+    pub fn load_json_from_path(path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
+        let json = fs::read_to_string(path.as_ref())?;
+        Self::import_json(&json).map_err(|e| std::io::Error::other(e.to_string()))
+    }
+
     fn age_weight(&self, at_step: u64, now_step: u64) -> f64 {
         let age = now_step.saturating_sub(at_step) as f64;
         let window = self.config.age_decay_window_steps.max(1) as f64;
@@ -379,12 +395,29 @@ impl WotPolicy for LocalWotPolicy {
 
 pub fn fanout_for_tier(base_fanout: usize, tier: TrustTier, policy: &impl WotPolicy) -> usize {
     let quota = policy.forwarding_quota(tier).clamp(0.0, 1.0);
-    (base_fanout as f32 * quota).ceil() as usize
+    let scaled = (base_fanout as f32 * quota).ceil() as usize;
+    if tier == TrustTier::Unknown && base_fanout > 0 && quota > 0.0 {
+        scaled.max(1)
+    } else {
+        scaled
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{fanout_for_tier, LocalWotPolicy, ShardMeta, TrustTier, WotPolicy};
+    use std::path::PathBuf;
+
+    fn temp_path(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be monotonic enough for tests")
+            .as_nanos();
+        p.push(format!("veil-wot-{name}-{pid}-{nanos}.json"));
+        p
+    }
 
     #[test]
     fn explicit_overrides_dominate() {
@@ -418,6 +451,7 @@ mod tests {
         assert_eq!(fanout_for_tier(10, TrustTier::Trusted, &policy), 7);
         assert_eq!(fanout_for_tier(10, TrustTier::Known, &policy), 3);
         assert_eq!(fanout_for_tier(10, TrustTier::Unknown, &policy), 1);
+        assert_eq!(fanout_for_tier(1, TrustTier::Unknown, &policy), 1);
         assert_eq!(fanout_for_tier(10, TrustTier::Blocked, &policy), 0);
     }
 
@@ -473,5 +507,25 @@ mod tests {
 
         assert_eq!(imported.classify_publisher(trusted, 20), TrustTier::Trusted);
         assert!(imported.score_publisher(target, 20) >= 0.0);
+    }
+
+    #[test]
+    fn file_snapshot_round_trip() {
+        let mut policy = LocalWotPolicy::default();
+        let trusted = [0x31; 32];
+        let target = [0x32; 32];
+        policy.trust(trusted);
+        policy.add_endorsement(trusted, target, 11);
+
+        let file = temp_path("snapshot");
+        policy
+            .save_json_to_path(&file)
+            .expect("save snapshot should succeed");
+        let loaded =
+            LocalWotPolicy::load_json_from_path(&file).expect("load snapshot should succeed");
+        assert_eq!(loaded.classify_publisher(trusted, 20), TrustTier::Trusted);
+        assert!(loaded.score_publisher(target, 20) >= 0.0);
+
+        let _ = std::fs::remove_file(file);
     }
 }

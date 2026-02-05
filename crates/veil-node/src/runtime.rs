@@ -13,6 +13,27 @@ use crate::receive::{receive_shard_with_policy, ReceiveCachePolicy, ReceiveError
 use crate::state::NodeState;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TierCounters {
+    pub trusted: usize,
+    pub known: usize,
+    pub unknown: usize,
+    pub muted: usize,
+    pub blocked: usize,
+}
+
+impl TierCounters {
+    fn incr(&mut self, tier: TrustTier, value: usize) {
+        match tier {
+            TrustTier::Trusted => self.trusted = self.trusted.saturating_add(value),
+            TrustTier::Known => self.known = self.known.saturating_add(value),
+            TrustTier::Unknown => self.unknown = self.unknown.saturating_add(value),
+            TrustTier::Muted => self.muted = self.muted.saturating_add(value),
+            TrustTier::Blocked => self.blocked = self.blocked.saturating_add(value),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeStats {
     /// Total inbound byte payloads polled from transports.
     pub inbound_messages: usize,
@@ -32,6 +53,12 @@ pub struct RuntimeStats {
     pub malformed_messages: usize,
     /// Outbound send attempts that failed at transport level.
     pub send_failures: usize,
+    /// Inbound message counts grouped by source trust tier.
+    pub inbound_by_tier: TierCounters,
+    /// Successful forwards grouped by source trust tier.
+    pub forwarded_by_tier: TierCounters,
+    /// Forward opportunities not used due fanout/quota limits.
+    pub dropped_by_tier: TierCounters,
 }
 
 /// Parameters for a single-lane `pump_once` call.
@@ -115,6 +142,8 @@ struct InboundProcessParams<'a, P> {
     peers: &'a [P],
     fanout: usize,
     now_step: u64,
+    inbound_tier: TrustTier,
+    classify_peer_tier: Option<&'a PeerTierFn<'a, P>>,
     ttl_steps: u64,
     decrypt_key: &'a [u8; 32],
     cache_policy: Option<ReceiveCachePolicy<'a>>,
@@ -141,6 +170,8 @@ fn process_inbound<A: TransportAdapter>(
         peers,
         fanout,
         now_step,
+        inbound_tier,
+        classify_peer_tier,
         ttl_steps,
         decrypt_key,
         cache_policy,
@@ -148,6 +179,7 @@ fn process_inbound<A: TransportAdapter>(
     } = params;
 
     stats.inbound_messages += 1;
+    stats.inbound_by_tier.incr(inbound_tier, 1);
 
     let shard = match decode_shard_cbor(bytes) {
         Ok(shard) => shard,
@@ -171,13 +203,26 @@ fn process_inbound<A: TransportAdapter>(
     )?;
 
     if is_forwardable(&event) {
-        for peer in peers
+        let mut candidates = peers
             .iter()
             .filter(|peer| **peer != *from_peer)
-            .take(fanout)
-        {
+            .collect::<Vec<_>>();
+        if let Some(classify) = classify_peer_tier {
+            candidates.sort_by_key(|peer| match classify(peer, now_step) {
+                TrustTier::Trusted => 0_u8,
+                TrustTier::Known => 1_u8,
+                TrustTier::Unknown => 2_u8,
+                TrustTier::Muted => 3_u8,
+                TrustTier::Blocked => 4_u8,
+            });
+        }
+        stats
+            .dropped_by_tier
+            .incr(inbound_tier, candidates.len().saturating_sub(fanout));
+        for peer in candidates.into_iter().take(fanout) {
             if adapter.send(peer, bytes).is_ok() {
                 stats.forwarded_messages += 1;
+                stats.forwarded_by_tier.incr(inbound_tier, 1);
             } else {
                 stats.send_failures += 1;
             }
@@ -248,14 +293,17 @@ pub fn pump_once<A: TransportAdapter>(
         .fanout_for_peer
         .map(|f| f(&from_peer, now_step, fanout))
         .unwrap_or(fanout);
-    let cache_policy = match (policy_hooks.classify_peer_tier, policy_hooks.wot_policy) {
-        (Some(classify_peer_tier), Some(wot_policy)) => Some(ReceiveCachePolicy {
-            tier: classify_peer_tier(&from_peer, now_step),
+    let inbound_tier = policy_hooks
+        .classify_peer_tier
+        .map(|f| f(&from_peer, now_step))
+        .unwrap_or(TrustTier::Unknown);
+    let cache_policy = policy_hooks
+        .wot_policy
+        .map(|wot_policy| ReceiveCachePolicy {
+            tier: inbound_tier,
             max_cache_shards: policy_hooks.max_cache_shards,
             wot_policy,
-        }),
-        _ => None,
-    };
+        });
     let event = process_inbound(
         node,
         adapter,
@@ -265,6 +313,8 @@ pub fn pump_once<A: TransportAdapter>(
             peers,
             fanout: effective_fanout,
             now_step,
+            inbound_tier,
+            classify_peer_tier: policy_hooks.classify_peer_tier,
             ttl_steps,
             decrypt_key,
             cache_policy,
@@ -415,6 +465,10 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
             }),
             _ => None,
         };
+        let inbound_tier = fast_policy_hooks
+            .classify_peer_tier
+            .map(|f| f(&from_peer, now_step))
+            .unwrap_or(TrustTier::Unknown);
         let event = process_inbound(
             node,
             fast_adapter,
@@ -424,6 +478,8 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 peers: fast_lane.peers,
                 fanout: effective_fast_fanout,
                 now_step,
+                inbound_tier,
+                classify_peer_tier: fast_policy_hooks.classify_peer_tier,
                 ttl_steps,
                 decrypt_key,
                 cache_policy,
@@ -439,9 +495,17 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
             .unwrap_or(fallback_redundancy_fanout);
 
         if is_forwardable(&event) && effective_redundancy > 0 {
+            stats.dropped_by_tier.incr(
+                inbound_tier,
+                fallback_lane
+                    .peers
+                    .len()
+                    .saturating_sub(effective_redundancy),
+            );
             for peer in fallback_lane.peers.iter().take(effective_redundancy) {
                 if fallback_adapter.send(peer, &bytes).is_ok() {
                     stats.forwarded_messages += 1;
+                    stats.forwarded_by_tier.incr(inbound_tier, 1);
                 } else {
                     stats.send_failures += 1;
                 }
@@ -466,6 +530,10 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
             }),
             _ => None,
         };
+        let inbound_tier = fallback_policy_hooks
+            .classify_peer_tier
+            .map(|f| f(&from_peer, now_step))
+            .unwrap_or(TrustTier::Unknown);
         let event = process_inbound(
             node,
             fallback_adapter,
@@ -475,6 +543,8 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 peers: fallback_lane.peers,
                 fanout: effective_fallback_fanout,
                 now_step,
+                inbound_tier,
+                classify_peer_tier: fallback_policy_hooks.classify_peer_tier,
                 ttl_steps,
                 decrypt_key,
                 cache_policy,
@@ -1127,6 +1197,7 @@ mod tests {
         cfg.bind_peer_publisher("blocked-peer", blocked_pubkey);
         let fanout_fn =
             |peer: &String, now_step: u64, base: usize| cfg.fanout_for_peer(peer, now_step, base);
+        let tier_fn = |peer: &String, now_step: u64| cfg.classify_peer_tier(peer, now_step);
 
         let _ = pump_once(
             &mut node,
@@ -1138,6 +1209,7 @@ mod tests {
                 fanout: 3,
                 policy_hooks: RuntimePolicyHooks {
                     fanout_for_peer: Some(&fanout_fn),
+                    classify_peer_tier: Some(&tier_fn),
                     ..RuntimePolicyHooks::default()
                 },
                 decrypt_key: &key,
@@ -1153,6 +1225,9 @@ mod tests {
             outbound.is_empty(),
             "blocked sender should get zero forwarding fanout",
         );
+        assert_eq!(stats.inbound_by_tier.blocked, 1);
+        assert_eq!(stats.forwarded_by_tier.blocked, 0);
+        assert_eq!(stats.dropped_by_tier.blocked, 2);
     }
 
     #[test]
