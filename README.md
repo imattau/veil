@@ -46,6 +46,7 @@ High-level helper APIs in `veil-node` simplify integration:
 - `service::NodeRuntime` - ingest/forward/reconstruct tick wrapper
 - `service::NodeRuntime::run_steps/run_until` - built-in runtime loop orchestration
 - `service::NodeRuntimeCallbacks` - delivery/ACK/send-failure hooks per tick
+- `service::NodeRuntimeCallbacks::on_endorsement_ingested` - callback for accepted WoT endorsement payloads
 - `persistence` helpers - snapshot/load `NodeState` as CBOR for restart durability
 - `policy::LocalWotPolicy::score_publisher/explain_publisher` - deterministic trust scoring with explainability
 - transport adapters expose unified `health_snapshot()` and adapter-level `metrics_snapshot()` counters

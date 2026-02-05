@@ -18,9 +18,9 @@ Goal: move WoT from local-v1 prioritization to a complete, explainable, and port
 - [x] Add per-tier forwarding/drop metrics.
 
 ## Phase 4: Endorsement ingestion path
-- [ ] Define endorsement object schema (non-normative).
-- [ ] Verify and ingest endorsements from runtime objects.
-- [ ] Add duplicate suppression + staleness pruning.
+- [x] Define endorsement object schema (non-normative).
+- [x] Verify and ingest endorsements from runtime objects.
+- [x] Add duplicate suppression + staleness pruning.
 
 ## Phase 5: Cache policy hardening
 - [ ] Enforce per-tier caps with global coordination.

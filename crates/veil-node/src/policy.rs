@@ -28,6 +28,21 @@ pub struct TrustScoreExplanation {
     pub second_hop_score: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndorsementIngestResult {
+    Applied,
+    IgnoredDuplicate,
+    IgnoredRateLimited,
+    IgnoredStale,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParsedEndorsement {
+    pub endorser: [u8; 32],
+    pub publisher: [u8; 32],
+    pub at_step: u64,
+}
+
 /// Metadata used to score shard eviction priority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShardMeta {
@@ -68,6 +83,9 @@ pub struct WotConfig {
     pub unknown_storage_budget: usize,
     pub muted_storage_budget: usize,
     pub blocked_storage_budget: usize,
+    pub endorsement_window_steps: u64,
+    pub endorsement_max_per_endorser_per_window: usize,
+    pub endorsement_max_age_steps: u64,
 }
 
 impl Default for WotConfig {
@@ -89,6 +107,9 @@ impl Default for WotConfig {
             unknown_storage_budget: 5_000,
             muted_storage_budget: 500,
             blocked_storage_budget: 0,
+            endorsement_window_steps: 10_000,
+            endorsement_max_per_endorser_per_window: 256,
+            endorsement_max_age_steps: 100_000,
         }
     }
 }
@@ -126,6 +147,50 @@ struct LocalWotPolicyJson {
     endorsements: Vec<EndorsementEdge>,
 }
 
+#[derive(Debug, Deserialize)]
+struct EndorsementPayloadSerde {
+    kind: Option<String>,
+    endorser_pubkey_hex: String,
+    publisher_pubkey_hex: String,
+    at_step: u64,
+}
+
+fn decode_hex_pubkey_32(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 {
+        return None;
+    }
+    let mut out = [0_u8; 32];
+    for (idx, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let s = std::str::from_utf8(chunk).ok()?;
+        let byte = u8::from_str_radix(s, 16).ok()?;
+        out[idx] = byte;
+    }
+    Some(out)
+}
+
+/// Best-effort parse of endorsement payload bytes (JSON or CBOR).
+pub fn parse_endorsement_payload(payload: &[u8]) -> Option<ParsedEndorsement> {
+    let try_parse = |p: EndorsementPayloadSerde| -> Option<ParsedEndorsement> {
+        if let Some(kind) = p.kind.as_deref() {
+            if kind != "endorsement" {
+                return None;
+            }
+        }
+        Some(ParsedEndorsement {
+            endorser: decode_hex_pubkey_32(&p.endorser_pubkey_hex)?,
+            publisher: decode_hex_pubkey_32(&p.publisher_pubkey_hex)?,
+            at_step: p.at_step,
+        })
+    };
+    if let Ok(p) = serde_json::from_slice::<EndorsementPayloadSerde>(payload) {
+        return try_parse(p);
+    }
+    if let Ok(p) = serde_cbor::from_slice::<EndorsementPayloadSerde>(payload) {
+        return try_parse(p);
+    }
+    None
+}
+
 impl LocalWotPolicy {
     /// Creates a policy instance from explicit config.
     pub fn new(config: WotConfig) -> Self {
@@ -158,6 +223,43 @@ impl LocalWotPolicy {
             .entry(endorser)
             .or_default()
             .push(Endorsement { publisher, at_step });
+    }
+
+    fn prune_stale_endorsements(&mut self, now_step: u64) {
+        let max_age = self.config.endorsement_max_age_steps;
+        self.endorsements_by_endorser.retain(|_, edges| {
+            edges.retain(|e| now_step.saturating_sub(e.at_step) <= max_age);
+            !edges.is_empty()
+        });
+    }
+
+    /// Ingests one endorsement with duplicate/rate-limit/staleness checks.
+    pub fn ingest_endorsement(
+        &mut self,
+        endorser: [u8; 32],
+        publisher: [u8; 32],
+        at_step: u64,
+        now_step: u64,
+    ) -> EndorsementIngestResult {
+        self.prune_stale_endorsements(now_step);
+        if now_step.saturating_sub(at_step) > self.config.endorsement_max_age_steps {
+            return EndorsementIngestResult::IgnoredStale;
+        }
+
+        let window_start = now_step.saturating_sub(self.config.endorsement_window_steps);
+        let edges = self.endorsements_by_endorser.entry(endorser).or_default();
+        if edges
+            .iter()
+            .any(|e| e.publisher == publisher && e.at_step >= window_start)
+        {
+            return EndorsementIngestResult::IgnoredDuplicate;
+        }
+        let in_window = edges.iter().filter(|e| e.at_step >= window_start).count();
+        if in_window >= self.config.endorsement_max_per_endorser_per_window {
+            return EndorsementIngestResult::IgnoredRateLimited;
+        }
+        edges.push(Endorsement { publisher, at_step });
+        EndorsementIngestResult::Applied
     }
 
     /// Returns deterministic bounded WoT score in `[0.0, 1.0]`.
@@ -405,7 +507,10 @@ pub fn fanout_for_tier(base_fanout: usize, tier: TrustTier, policy: &impl WotPol
 
 #[cfg(test)]
 mod tests {
-    use super::{fanout_for_tier, LocalWotPolicy, ShardMeta, TrustTier, WotPolicy};
+    use super::{
+        fanout_for_tier, parse_endorsement_payload, EndorsementIngestResult, LocalWotPolicy,
+        ShardMeta, TrustTier, WotPolicy,
+    };
     use std::path::PathBuf;
 
     fn temp_path(name: &str) -> PathBuf {
@@ -527,5 +632,53 @@ mod tests {
         assert!(loaded.score_publisher(target, 20) >= 0.0);
 
         let _ = std::fs::remove_file(file);
+    }
+
+    #[test]
+    fn ingestion_dedupes_and_rate_limits_and_rejects_stale() {
+        let mut policy = LocalWotPolicy::default();
+        policy.config.endorsement_window_steps = 100;
+        policy.config.endorsement_max_per_endorser_per_window = 2;
+        policy.config.endorsement_max_age_steps = 200;
+        let endorser = [0x41; 32];
+        let a = [0xA1; 32];
+        let b = [0xB2; 32];
+        let c = [0xC3; 32];
+
+        assert_eq!(
+            policy.ingest_endorsement(endorser, a, 100, 120),
+            EndorsementIngestResult::Applied
+        );
+        assert_eq!(
+            policy.ingest_endorsement(endorser, a, 110, 120),
+            EndorsementIngestResult::IgnoredDuplicate
+        );
+        assert_eq!(
+            policy.ingest_endorsement(endorser, b, 111, 120),
+            EndorsementIngestResult::Applied
+        );
+        assert_eq!(
+            policy.ingest_endorsement(endorser, c, 112, 120),
+            EndorsementIngestResult::IgnoredRateLimited
+        );
+        assert_eq!(
+            policy.ingest_endorsement(endorser, c, 10, 300),
+            EndorsementIngestResult::IgnoredStale
+        );
+    }
+
+    #[test]
+    fn parses_endorsement_payload_json() {
+        let payload = serde_json::json!({
+            "kind": "endorsement",
+            "endorser_pubkey_hex": "11".repeat(32),
+            "publisher_pubkey_hex": "22".repeat(32),
+            "at_step": 123
+        });
+        let bytes = serde_json::to_vec(&payload).expect("json should serialize");
+        let parsed = parse_endorsement_payload(&bytes).expect("payload should parse");
+        assert_eq!(parsed.endorser, [0x11; 32]);
+        assert_eq!(parsed.publisher, [0x22; 32]);
+        assert_eq!(parsed.at_step, 123);
     }
 }

@@ -6,6 +6,7 @@ use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
 use crate::batch::FeedBatcher;
 use crate::config::NodeRuntimeConfig;
+use crate::policy::EndorsementIngestResult;
 use crate::publish::{
     publish_service_tick_multi_lane, PublishError, PublishOptions, PublishQueueTickParams,
     PublishServiceTickParams, PublishServiceTickResult,
@@ -51,6 +52,7 @@ pub struct NodeRuntimeCallbacks<'a> {
     pub on_delivered: Option<&'a mut DeliveredCallback<'a>>,
     pub on_ack_cleared: Option<&'a mut CountCallback<'a>>,
     pub on_send_failure: Option<&'a mut CountCallback<'a>>,
+    pub on_endorsement_ingested: Option<&'a mut CountCallback<'a>>,
 }
 
 /// Aggregated per-lane transport health snapshots for a node runtime.
@@ -207,6 +209,7 @@ where
     {
         let prev_ack = self.stats.ack_messages;
         let prev_fail = self.stats.send_failures;
+        let mut endorsement_delta = 0usize;
         let event = self.tick(now_step, fast_peers, fallback_peers)?;
 
         if let Some(ReceiveEvent::Delivered {
@@ -215,6 +218,17 @@ where
             ..
         }) = event.as_ref()
         {
+            if let Some(endorsement) = crate::policy::parse_endorsement_payload(payload) {
+                let outcome = self.config.wot_policy.ingest_endorsement(
+                    endorsement.endorser,
+                    endorsement.publisher,
+                    endorsement.at_step,
+                    now_step,
+                );
+                if outcome == EndorsementIngestResult::Applied {
+                    endorsement_delta += 1;
+                }
+            }
             if let Some(cb) = callbacks.on_delivered.as_mut() {
                 (*cb)(*object_root, payload);
             }
@@ -231,6 +245,11 @@ where
         if fail_delta > 0 {
             if let Some(cb) = callbacks.on_send_failure.as_mut() {
                 (*cb)(fail_delta);
+            }
+        }
+        if endorsement_delta > 0 {
+            if let Some(cb) = callbacks.on_endorsement_ingested.as_mut() {
+                (*cb)(endorsement_delta);
             }
         }
 

@@ -54,6 +54,15 @@ pub struct ChannelDirectoryBundle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndorsementBundle {
+    pub meta: BundleMeta,
+    pub channel_id: String,
+    pub endorser_pubkey_hex: String,
+    pub publisher_pubkey_hex: String,
+    pub at_step: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum FeedBundle {
     #[serde(rename = "profile")]
@@ -64,11 +73,13 @@ pub enum FeedBundle {
     Post(PostBundle),
     #[serde(rename = "channel_directory")]
     ChannelDirectory(ChannelDirectoryBundle),
+    #[serde(rename = "endorsement")]
+    Endorsement(EndorsementBundle),
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BundleMeta, ChannelDirectoryBundle, FeedBundle, PostBundle};
+    use super::{BundleMeta, ChannelDirectoryBundle, EndorsementBundle, FeedBundle, PostBundle};
 
     #[test]
     fn directory_bundle_round_trips_through_json() {
@@ -108,5 +119,22 @@ mod tests {
             FeedBundle::Post(post) => assert_eq!(post.media_roots.len(), 2),
             _ => panic!("expected post bundle"),
         }
+    }
+
+    #[test]
+    fn endorsement_bundle_round_trip_through_json() {
+        let bundle = FeedBundle::Endorsement(EndorsementBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_002,
+            },
+            channel_id: "general".to_string(),
+            endorser_pubkey_hex: "aa".repeat(32),
+            publisher_pubkey_hex: "bb".repeat(32),
+            at_step: 1234,
+        });
+        let json = serde_json::to_string(&bundle).expect("serialize should work");
+        let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");
+        assert_eq!(decoded, bundle);
     }
 }
