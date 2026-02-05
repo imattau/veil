@@ -11,6 +11,21 @@ pub enum TrustTier {
     Blocked,
 }
 
+/// Structured score details for explainable WoT classification.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrustScoreExplanation {
+    pub publisher: [u8; 32],
+    pub score: f64,
+    pub tier: TrustTier,
+    pub blocked_override: bool,
+    pub trusted_override: bool,
+    pub muted_override: bool,
+    pub direct_endorser_count: usize,
+    pub direct_score: f64,
+    pub second_hop_endorser_count: usize,
+    pub second_hop_score: f64,
+}
+
 /// Metadata used to score shard eviction priority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShardMeta {
@@ -33,7 +48,7 @@ pub trait WotPolicy {
 }
 
 /// Tunable parameters for `LocalWotPolicy`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct WotConfig {
     pub endorsement_threshold: usize,
     pub max_hops: u8,
@@ -76,14 +91,14 @@ impl Default for WotConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Endorsement {
     pub publisher: [u8; 32],
     pub at_step: u64,
 }
 
 /// Default local WoT policy implementation with bounded transitive scoring.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct LocalWotPolicy {
     pub config: WotConfig,
     trusted: HashSet<[u8; 32]>,
@@ -91,6 +106,22 @@ pub struct LocalWotPolicy {
     blocked: HashSet<[u8; 32]>,
     // endorser -> endorsements they issued
     endorsements_by_endorser: HashMap<[u8; 32], Vec<Endorsement>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EndorsementEdge {
+    endorser: [u8; 32],
+    publisher: [u8; 32],
+    at_step: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LocalWotPolicyJson {
+    config: WotConfig,
+    trusted: Vec<[u8; 32]>,
+    muted: Vec<[u8; 32]>,
+    blocked: Vec<[u8; 32]>,
+    endorsements: Vec<EndorsementEdge>,
 }
 
 impl LocalWotPolicy {
@@ -127,13 +158,102 @@ impl LocalWotPolicy {
             .push(Endorsement { publisher, at_step });
     }
 
+    /// Returns deterministic bounded WoT score in `[0.0, 1.0]`.
+    pub fn score_publisher(&self, publisher: [u8; 32], now_step: u64) -> f64 {
+        if self.blocked.contains(&publisher) {
+            return 0.0;
+        }
+        if self.trusted.contains(&publisher) {
+            return 1.0;
+        }
+        self.bounded_score(publisher, now_step)
+    }
+
+    /// Explains score/tier outcome for debugging and UI explainability.
+    pub fn explain_publisher(&self, publisher: [u8; 32], now_step: u64) -> TrustScoreExplanation {
+        let (direct_score, direct_endorser_count) =
+            self.direct_trusted_endorsers_score_with_count(publisher, now_step);
+        let (second_hop_score, second_hop_endorser_count) =
+            self.second_hop_score_with_count(publisher, now_step);
+        let score = if self.blocked.contains(&publisher) {
+            0.0
+        } else if self.trusted.contains(&publisher) {
+            1.0
+        } else {
+            ((direct_score + second_hop_score) / 3.0).clamp(0.0, 1.0)
+        };
+        let tier = self.classify_publisher(publisher, now_step);
+
+        TrustScoreExplanation {
+            publisher,
+            score,
+            tier,
+            blocked_override: self.blocked.contains(&publisher),
+            trusted_override: self.trusted.contains(&publisher),
+            muted_override: self.muted.contains(&publisher),
+            direct_endorser_count,
+            direct_score,
+            second_hop_endorser_count,
+            second_hop_score,
+        }
+    }
+
+    /// Exports complete local policy state as JSON.
+    pub fn export_json(&self) -> Result<String, serde_json::Error> {
+        let endorsements = self
+            .endorsements_by_endorser
+            .iter()
+            .flat_map(|(endorser, edges)| {
+                edges.iter().map(|e| EndorsementEdge {
+                    endorser: *endorser,
+                    publisher: e.publisher,
+                    at_step: e.at_step,
+                })
+            })
+            .collect::<Vec<_>>();
+        let snapshot = LocalWotPolicyJson {
+            config: self.config,
+            trusted: self.trusted.iter().copied().collect(),
+            muted: self.muted.iter().copied().collect(),
+            blocked: self.blocked.iter().copied().collect(),
+            endorsements,
+        };
+        serde_json::to_string_pretty(&snapshot)
+    }
+
+    /// Imports complete local policy state from JSON.
+    pub fn import_json(json: &str) -> Result<Self, serde_json::Error> {
+        let snapshot: LocalWotPolicyJson = serde_json::from_str(json)?;
+        let mut endorsements_by_endorser = HashMap::<[u8; 32], Vec<Endorsement>>::new();
+        for edge in snapshot.endorsements {
+            endorsements_by_endorser
+                .entry(edge.endorser)
+                .or_default()
+                .push(Endorsement {
+                    publisher: edge.publisher,
+                    at_step: edge.at_step,
+                });
+        }
+        Ok(Self {
+            config: snapshot.config,
+            trusted: snapshot.trusted.into_iter().collect(),
+            muted: snapshot.muted.into_iter().collect(),
+            blocked: snapshot.blocked.into_iter().collect(),
+            endorsements_by_endorser,
+        })
+    }
+
     fn age_weight(&self, at_step: u64, now_step: u64) -> f64 {
         let age = now_step.saturating_sub(at_step) as f64;
         let window = self.config.age_decay_window_steps.max(1) as f64;
         1.0 / (1.0 + (age / window))
     }
 
-    fn direct_trusted_endorsers_score(&self, publisher: [u8; 32], now_step: u64) -> f64 {
+    fn direct_trusted_endorsers_score_with_count(
+        &self,
+        publisher: [u8; 32],
+        now_step: u64,
+    ) -> (f64, usize) {
         let mut endorsers = HashSet::<[u8; 32]>::new();
         let mut score = 0.0_f64;
         for trusted in &self.trusted {
@@ -149,15 +269,15 @@ impl LocalWotPolicy {
             }
         }
         if endorsers.len() < self.config.endorsement_threshold {
-            0.0
+            (0.0, endorsers.len())
         } else {
-            score
+            (score, endorsers.len())
         }
     }
 
-    fn second_hop_score(&self, publisher: [u8; 32], now_step: u64) -> f64 {
+    fn second_hop_score_with_count(&self, publisher: [u8; 32], now_step: u64) -> (f64, usize) {
         if self.config.max_hops < 2 {
-            return 0.0;
+            return (0.0, 0);
         }
 
         let mut second_hop_entities = HashSet::<[u8; 32]>::new();
@@ -184,15 +304,16 @@ impl LocalWotPolicy {
             }
         }
         if endorsers.len() < self.config.endorsement_threshold {
-            0.0
+            (0.0, endorsers.len())
         } else {
-            score
+            (score, endorsers.len())
         }
     }
 
     fn bounded_score(&self, publisher: [u8; 32], now_step: u64) -> f64 {
-        let base = self.direct_trusted_endorsers_score(publisher, now_step)
-            + self.second_hop_score(publisher, now_step);
+        let (direct, _) = self.direct_trusted_endorsers_score_with_count(publisher, now_step);
+        let (second_hop, _) = self.second_hop_score_with_count(publisher, now_step);
+        let base = direct + second_hop;
         (base / 3.0).clamp(0.0, 1.0)
     }
 }
@@ -209,7 +330,7 @@ impl WotPolicy for LocalWotPolicy {
             return TrustTier::Muted;
         }
 
-        let score = self.bounded_score(pubkey, now_step);
+        let score = self.score_publisher(pubkey, now_step);
         if score >= self.config.trusted_threshold {
             TrustTier::Trusted
         } else if score >= self.config.known_threshold {
@@ -316,5 +437,41 @@ mod tests {
             requested_count: 0,
         };
         assert!(policy.eviction_priority(common_unknown) > policy.eviction_priority(rare_trusted));
+    }
+
+    #[test]
+    fn score_is_bounded_and_explainable() {
+        let mut policy = LocalWotPolicy::default();
+        let trusted_a = [0xA1; 32];
+        let trusted_b = [0xB2; 32];
+        let target = [0xCC; 32];
+        policy.trust(trusted_a);
+        policy.trust(trusted_b);
+        policy.add_endorsement(trusted_a, target, 95);
+        policy.add_endorsement(trusted_b, target, 96);
+
+        let score = policy.score_publisher(target, 100);
+        assert!((0.0..=1.0).contains(&score));
+
+        let explanation = policy.explain_publisher(target, 100);
+        assert_eq!(explanation.publisher, target);
+        assert_eq!(explanation.score, score);
+        assert!(explanation.direct_endorser_count >= 2);
+        assert!(!explanation.blocked_override);
+    }
+
+    #[test]
+    fn export_import_json_round_trip() {
+        let mut policy = LocalWotPolicy::default();
+        let trusted = [0x11; 32];
+        let target = [0x22; 32];
+        policy.trust(trusted);
+        policy.add_endorsement(trusted, target, 10);
+
+        let json = policy.export_json().expect("export should succeed");
+        let imported = LocalWotPolicy::import_json(&json).expect("import should succeed");
+
+        assert_eq!(imported.classify_publisher(trusted, 20), TrustTier::Trusted);
+        assert!(imported.score_publisher(target, 20) >= 0.0);
     }
 }

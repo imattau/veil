@@ -47,6 +47,7 @@ High-level helper APIs in `veil-node` simplify integration:
 - `service::NodeRuntime::run_steps/run_until` - built-in runtime loop orchestration
 - `service::NodeRuntimeCallbacks` - delivery/ACK/send-failure hooks per tick
 - `persistence` helpers - snapshot/load `NodeState` as CBOR for restart durability
+- `policy::LocalWotPolicy::score_publisher/explain_publisher` - deterministic trust scoring with explainability
 - transport adapters expose unified `health_snapshot()` and adapter-level `metrics_snapshot()` counters
 - `publish::PublishOptions` - typed publish flags (`signed`, `ack_requested`)
 - `config::NodeRuntimeConfig::builder()` - fluent runtime configuration
