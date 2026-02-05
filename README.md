@@ -70,6 +70,43 @@ This repo now includes a client-native foundation for JS frontends:
 - React Native scaffold notes: `apps/react-native-demo`
 - Implementation plan: `CLIENT_NATIVE_PLAN.md`
 
+SDK now includes:
+- backend-aware tag derivation (`wasm` or `pure-js`)
+- shard/object meta decode helpers (`decodeShardMeta`, `decodeObjectMeta`)
+- CBOR validation helpers (`validateShardCbor`, `validateObjectCbor`)
+- subscription-gated forwarding in `VeilClient` runtime scaffold
+- `WebSocketLaneAdapter` with reconnect/backoff + bounded send buffering
+- `WebRtcLaneAdapter` with reconnect/backoff + buffered sends
+- persistent cache adapters:
+  - `IndexedDbShardCacheStore` (browser)
+  - `AsyncKeyValueShardCacheStore` (React Native AsyncStorage/MMKV wrapper)
+
+WebSocket lane example (browser/React Native global WebSocket, or inject one in Node):
+
+```ts
+import { WebSocketLaneAdapter } from "@veil/sdk-js";
+
+const lane = new WebSocketLaneAdapter({
+  url: "wss://relay.example/ws",
+  peerId: "relay-a",
+  autoReconnect: true,
+  reconnectInitialMs: 250,
+  reconnectMaxMs: 10_000,
+  maxBufferedMessages: 256,
+});
+```
+
+React Native cache example:
+
+```ts
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { AsyncKeyValueShardCacheStore } from "@veil/sdk-js";
+
+const cache = new AsyncKeyValueShardCacheStore(AsyncStorage, {
+  keyPrefix: "veil:shard:",
+});
+```
+
 Build wasm + SDK:
 
 ```bash

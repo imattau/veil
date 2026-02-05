@@ -18,11 +18,12 @@ Deliver a browser/Node/React-Native capable VEIL client path that does not requi
 - [x] Document build/dev scripts for wasm + SDK + React demo.
 
 ## Phase 2: Client runtime MVP (next)
-- [ ] Expose shard/object encode/decode helpers in wasm.
-- [ ] Implement full transport adapters (WebSocket/WebRTC lanes with reconnect/backoff).
-- [ ] Expand SDK `VeilClient` runtime loop (`ingest`, `forward`, `subscribe`, callback hooks) beyond scaffold.
-- [ ] Persist cache metadata to IndexedDB.
-- [ ] Add React Native persistent cache adapter (AsyncStorage/MMKV/SQLite).
+- [x] Expose shard/object decode + validation helpers in wasm.
+- [x] Implement WebSocket lane with reconnect/backoff, buffered sends, and injectable socket factory for browser/Node/React Native environments.
+- [x] Implement WebRTC lane adapter with reconnect/backoff and buffered sends.
+- [x] Expand SDK `VeilClient` runtime loop (`ingest`, `forward`, `subscribe`, callback hooks) for subscription-gated forwarding and hot-cache writes.
+- [x] Persist cache metadata to IndexedDB via `IndexedDbShardCacheStore`.
+- [x] Add React Native persistent cache adapter interface via `AsyncKeyValueShardCacheStore` (for AsyncStorage/MMKV wrappers).
 
 ## Phase 3: Production hardening
 - [ ] Key management helpers (WebCrypto-based, safe defaults).
