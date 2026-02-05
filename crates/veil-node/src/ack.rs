@@ -7,7 +7,7 @@ use veil_core::ObjectRoot;
 use veil_core::{Epoch, Namespace, Tag};
 use veil_crypto::aead::{build_veil_aad, AeadCipher, AeadError};
 use veil_fec::profile::ErasureCodingMode;
-use veil_fec::sharder::{derive_object_root, object_to_shards_with_mode, FecError};
+use veil_fec::sharder::{derive_object_root, object_to_shards_with_mode_and_padding, FecError};
 
 use crate::state::{NodeState, PendingAck};
 
@@ -113,6 +113,29 @@ pub fn build_ack_shard_bytes_with_mode(
     cipher: &impl AeadCipher,
     mode: ErasureCodingMode,
 ) -> Result<Vec<Vec<u8>>, AckBuildError> {
+    build_ack_shard_bytes_with_mode_and_padding(
+        acked_object_root,
+        tag,
+        namespace,
+        epoch,
+        encrypt_key,
+        cipher,
+        mode,
+        0,
+    )
+}
+
+/// Builds ACK object shards with explicit coding mode and bucket jitter.
+pub fn build_ack_shard_bytes_with_mode_and_padding(
+    acked_object_root: ObjectRoot,
+    tag: Tag,
+    namespace: Namespace,
+    epoch: Epoch,
+    encrypt_key: &[u8; 32],
+    cipher: &impl AeadCipher,
+    mode: ErasureCodingMode,
+    bucket_jitter_extra_levels: usize,
+) -> Result<Vec<Vec<u8>>, AckBuildError> {
     let payload = encode_ack_payload(acked_object_root);
     let aad = build_veil_aad(tag, namespace, epoch);
 
@@ -139,8 +162,15 @@ pub fn build_ack_shard_bytes_with_mode(
     };
     let encoded_object = encode_object_cbor(&object)?;
     let wire_root = derive_object_root(&encoded_object);
-    let shards =
-        object_to_shards_with_mode(&encoded_object, namespace, epoch, tag, wire_root, mode)?;
+    let shards = object_to_shards_with_mode_and_padding(
+        &encoded_object,
+        namespace,
+        epoch,
+        tag,
+        wire_root,
+        mode,
+        bucket_jitter_extra_levels,
+    )?;
 
     let mut out = Vec::with_capacity(shards.len());
     for shard in &shards {

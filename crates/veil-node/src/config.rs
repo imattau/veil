@@ -59,6 +59,8 @@ pub struct NodeRuntimeConfig {
     pub max_cache_shards: usize,
     /// Erasure coding mode used when producing/reconstructing shards.
     pub erasure_coding_mode: ErasureCodingMode,
+    /// Optional upward bucket jitter levels (0 disables jitter).
+    pub bucket_jitter_extra_levels: usize,
     /// Adaptive lane-scoring policy for fanout rebalancing.
     pub adaptive_lane_scoring: AdaptiveLaneScoringConfig,
     /// Local WoT policy used for trust classification and quotas.
@@ -79,6 +81,7 @@ impl Default for NodeRuntimeConfig {
             ack_max_retries: 6,
             max_cache_shards: 100_000,
             erasure_coding_mode: ErasureCodingMode::Systematic,
+            bucket_jitter_extra_levels: 0,
             adaptive_lane_scoring: AdaptiveLaneScoringConfig::default(),
             wot_policy: LocalWotPolicy::default(),
             peer_publishers: HashMap::new(),
@@ -234,6 +237,11 @@ impl NodeRuntimeConfigBuilder {
         self
     }
 
+    pub fn bucket_jitter_extra_levels(mut self, value: usize) -> Self {
+        self.cfg.bucket_jitter_extra_levels = value;
+        self
+    }
+
     pub fn ack_retry(
         mut self,
         initial_timeout_steps: u64,
@@ -322,6 +330,7 @@ mod tests {
             .ack_retry(3, 4, 5, 6)
             .max_cache_shards(77)
             .erasure_coding_mode(ErasureCodingMode::HardenedNonSystematic)
+            .bucket_jitter_extra_levels(1)
             .adaptive_lane_scoring(AdaptiveLaneScoringConfig {
                 enabled: true,
                 ..AdaptiveLaneScoringConfig::default()
@@ -337,6 +346,7 @@ mod tests {
             cfg.erasure_coding_mode,
             ErasureCodingMode::HardenedNonSystematic
         );
+        assert_eq!(cfg.bucket_jitter_extra_levels, 1);
         assert!(cfg.adaptive_lane_scoring.enabled);
         assert_eq!(cfg.classify_peer_tier("peer-a", 0), TrustTier::Unknown);
         let p = cfg.ack_retry_policy();

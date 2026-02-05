@@ -71,6 +71,8 @@ ShardV1 MUST contain:
 - `payload: bytes[bucket - header_len]`
 
 Allowed bucket sizes are `16 KiB`, `32 KiB`, `64 KiB`.
+Implementations MAY add optional upward bucket jitter (choosing a larger
+fitting bucket) to reduce size-correlation leakage.
 
 `shard_id` MUST be `H(shard_bytes)`; nodes MUST dedupe by `shard_id`.
 
@@ -100,6 +102,8 @@ Defaults:
 
 ### 7.3 Padding
 - Implementations SHOULD pad object bytes to align with erasure/bucket grouping and reduce size leakage.
+- Implementations MAY apply bounded bucket jitter (e.g., choose one of the next
+  larger fitting buckets) as an obfuscation policy.
 
 ## 8. Erasure and Sharding
 

@@ -66,6 +66,8 @@ pub struct ReceiveCachePolicy<'a> {
     pub wot_policy: &'a dyn WotPolicy,
     /// Erasure coding mode used to reconstruct inbound shard sets.
     pub erasure_coding_mode: ErasureCodingMode,
+    /// Optional upward bucket jitter levels to use for outbound ACK shards.
+    pub bucket_jitter_extra_levels: usize,
 }
 
 /// Decodes a queue-batched app payload into its original item list.
@@ -364,6 +366,7 @@ mod tests {
             max_cache_shards: 1,
             wot_policy: &wot_policy,
             erasure_coding_mode: ErasureCodingMode::Systematic,
+            bucket_jitter_extra_levels: 0,
         };
 
         let first_obj =
@@ -393,6 +396,7 @@ mod tests {
                 max_cache_shards: cache_policy.max_cache_shards,
                 wot_policy: cache_policy.wot_policy,
                 erasure_coding_mode: cache_policy.erasure_coding_mode,
+                bucket_jitter_extra_levels: cache_policy.bucket_jitter_extra_levels,
             }),
         )
         .expect("receive should work");

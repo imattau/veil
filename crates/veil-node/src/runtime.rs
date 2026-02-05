@@ -6,7 +6,8 @@ use veil_fec::profile::ErasureCodingMode;
 use veil_transport::adapter::TransportAdapter;
 
 use crate::ack::{
-    ack_received, build_ack_shard_bytes_with_mode, decode_ack_payload, next_ack_escalation_batch,
+    ack_received, build_ack_shard_bytes_with_mode_and_padding, decode_ack_payload,
+    next_ack_escalation_batch,
 };
 use crate::config::NodeRuntimeConfig;
 use crate::policy::{TrustTier, WotPolicy};
@@ -125,6 +126,7 @@ pub struct RuntimePolicyHooks<'a, P> {
     pub max_cache_shards: usize,
     pub wot_policy: Option<&'a dyn WotPolicy>,
     pub erasure_coding_mode: ErasureCodingMode,
+    pub bucket_jitter_extra_levels: usize,
 }
 
 impl<'a, P> Default for RuntimePolicyHooks<'a, P> {
@@ -135,6 +137,7 @@ impl<'a, P> Default for RuntimePolicyHooks<'a, P> {
             max_cache_shards: usize::MAX,
             wot_policy: None,
             erasure_coding_mode: ErasureCodingMode::Systematic,
+            bucket_jitter_extra_levels: 0,
         }
     }
 }
@@ -252,7 +255,11 @@ fn process_inbound<A: TransportAdapter>(
                 .as_ref()
                 .map(|p| p.erasure_coding_mode)
                 .unwrap_or(ErasureCodingMode::Systematic);
-            if let Ok(ack_shards) = build_ack_shard_bytes_with_mode(
+            let ack_bucket_jitter = cache_policy
+                .as_ref()
+                .map(|p| p.bucket_jitter_extra_levels)
+                .unwrap_or(0);
+            if let Ok(ack_shards) = build_ack_shard_bytes_with_mode_and_padding(
                 *object_root,
                 *tag,
                 *namespace,
@@ -260,6 +267,7 @@ fn process_inbound<A: TransportAdapter>(
                 decrypt_key,
                 cipher,
                 ack_mode,
+                ack_bucket_jitter,
             ) {
                 for ack_shard in &ack_shards {
                     if adapter.send(from_peer, ack_shard).is_ok() {
@@ -317,6 +325,7 @@ pub fn pump_once<A: TransportAdapter>(
             max_cache_shards: policy_hooks.max_cache_shards,
             wot_policy,
             erasure_coding_mode: policy_hooks.erasure_coding_mode,
+            bucket_jitter_extra_levels: policy_hooks.bucket_jitter_extra_levels,
         });
     let event = process_inbound(
         node,
@@ -414,6 +423,7 @@ pub fn pump_once_with_config_resolver<A: TransportAdapter>(
                 max_cache_shards: config.max_cache_shards,
                 wot_policy: Some(&config.wot_policy),
                 erasure_coding_mode: config.erasure_coding_mode,
+                bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
             },
             decrypt_key,
             stats,
@@ -478,6 +488,7 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 max_cache_shards: fast_policy_hooks.max_cache_shards,
                 wot_policy,
                 erasure_coding_mode: fast_policy_hooks.erasure_coding_mode,
+                bucket_jitter_extra_levels: fast_policy_hooks.bucket_jitter_extra_levels,
             }),
             _ => None,
         };
@@ -544,6 +555,7 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 max_cache_shards: fallback_policy_hooks.max_cache_shards,
                 wot_policy,
                 erasure_coding_mode: fallback_policy_hooks.erasure_coding_mode,
+                bucket_jitter_extra_levels: fallback_policy_hooks.bucket_jitter_extra_levels,
             }),
             _ => None,
         };
@@ -679,6 +691,7 @@ where
                 max_cache_shards: config.max_cache_shards,
                 wot_policy: Some(&config.wot_policy),
                 erasure_coding_mode: config.erasure_coding_mode,
+                bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
             },
             fallback_policy_hooks: RuntimePolicyHooks {
                 fanout_for_peer: Some(&fallback_fanout_fn),
@@ -686,6 +699,7 @@ where
                 max_cache_shards: config.max_cache_shards,
                 wot_policy: Some(&config.wot_policy),
                 erasure_coding_mode: config.erasure_coding_mode,
+                bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
             },
             decrypt_key,
             stats,

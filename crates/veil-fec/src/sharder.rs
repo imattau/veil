@@ -28,6 +28,20 @@ pub enum FecError {
 
 /// Chooses `(profile, bucket)` for an object length.
 pub fn choose_profile_and_bucket(object_len_bytes: usize) -> Result<(Profile, usize), FecError> {
+    choose_profile_and_bucket_with_jitter(object_len_bytes, [0_u8; 32], 0)
+}
+
+/// Chooses `(profile, bucket)` for an object length with optional jitter over
+/// larger-fitting buckets.
+///
+/// `bucket_jitter_extra_levels` controls how many larger-fitting bucket levels
+/// may be selected beyond the minimum-fitting bucket. `0` keeps current
+/// behavior (always minimum-fitting bucket).
+pub fn choose_profile_and_bucket_with_jitter(
+    object_len_bytes: usize,
+    jitter_seed: [u8; 32],
+    bucket_jitter_extra_levels: usize,
+) -> Result<(Profile, usize), FecError> {
     if object_len_bytes == 0 {
         return Err(FecError::EmptyObject);
     }
@@ -36,8 +50,20 @@ pub fn choose_profile_and_bucket(object_len_bytes: usize) -> Result<(Profile, us
     let per_shard_target = object_len_bytes.div_ceil(profile.k as usize);
     let needed = per_shard_target + SHARD_HEADER_LEN;
 
-    if let Some(bucket) = profile.buckets.iter().copied().find(|b| *b >= needed) {
-        return Ok((profile, bucket));
+    let candidates = profile
+        .buckets
+        .iter()
+        .copied()
+        .filter(|b| *b >= needed)
+        .collect::<Vec<_>>();
+    if !candidates.is_empty() {
+        let max_extra = bucket_jitter_extra_levels.min(candidates.len().saturating_sub(1));
+        let idx = if max_extra == 0 {
+            0
+        } else {
+            jitter_seed[0] as usize % (max_extra + 1)
+        };
+        return Ok((profile, candidates[idx]));
     }
 
     let largest = profile
@@ -66,13 +92,14 @@ pub fn object_to_shards(
     tag: Tag,
     object_root: ObjectRoot,
 ) -> Result<Vec<ShardV1>, FecError> {
-    object_to_shards_with_mode(
+    object_to_shards_with_mode_and_padding(
         object_bytes,
         namespace,
         epoch,
         tag,
         object_root,
         ErasureCodingMode::Systematic,
+        0,
     )
 }
 
@@ -85,7 +112,33 @@ pub fn object_to_shards_with_mode(
     object_root: ObjectRoot,
     mode: ErasureCodingMode,
 ) -> Result<Vec<ShardV1>, FecError> {
-    let (profile, bucket) = choose_profile_and_bucket(object_bytes.len())?;
+    object_to_shards_with_mode_and_padding(
+        object_bytes,
+        namespace,
+        epoch,
+        tag,
+        object_root,
+        mode,
+        0,
+    )
+}
+
+/// Splits encoded object bytes into `n` shards using coding mode and optional
+/// bucket-jitter padding.
+pub fn object_to_shards_with_mode_and_padding(
+    object_bytes: &[u8],
+    namespace: Namespace,
+    epoch: Epoch,
+    tag: Tag,
+    object_root: ObjectRoot,
+    mode: ErasureCodingMode,
+    bucket_jitter_extra_levels: usize,
+) -> Result<Vec<ShardV1>, FecError> {
+    let (profile, bucket) = choose_profile_and_bucket_with_jitter(
+        object_bytes.len(),
+        object_root,
+        bucket_jitter_extra_levels,
+    )?;
     let k = profile.k as usize;
     let n = profile.n as usize;
     let chunk_len = bucket - SHARD_HEADER_LEN;
@@ -322,9 +375,9 @@ fn hardened_inverse_transform(mut transformed: Vec<Vec<u8>>, root: ObjectRoot) -
 #[cfg(test)]
 mod tests {
     use super::{
-        choose_profile_and_bucket, derive_object_root, is_valid_bucket_size, object_to_shards,
-        object_to_shards_with_mode, reconstruct_object, reconstruct_object_padded,
-        reconstruct_object_with_mode, shard_id, FecError,
+        choose_profile_and_bucket, choose_profile_and_bucket_with_jitter, derive_object_root,
+        is_valid_bucket_size, object_to_shards, object_to_shards_with_mode, reconstruct_object,
+        reconstruct_object_padded, reconstruct_object_with_mode, shard_id, FecError,
     };
     use crate::profile::ErasureCodingMode;
     use veil_core::types::{Epoch, Namespace};
@@ -336,6 +389,17 @@ mod tests {
         assert_eq!(profile.k, 6);
         assert_eq!(profile.n, 10);
         assert_eq!(bucket, 16 * 1024);
+    }
+
+    #[test]
+    fn choose_profile_and_bucket_can_jitter_upward_within_profile() {
+        let object_len = 1024;
+        let (_, min_bucket) =
+            choose_profile_and_bucket_with_jitter(object_len, [0x00; 32], 0).expect("fits");
+        let (_, jitter_bucket) =
+            choose_profile_and_bucket_with_jitter(object_len, [0x01; 32], 1).expect("fits");
+        assert_eq!(min_bucket, 16 * 1024);
+        assert!(jitter_bucket == 16 * 1024 || jitter_bucket == 32 * 1024);
     }
 
     #[test]

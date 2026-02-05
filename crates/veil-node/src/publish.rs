@@ -11,7 +11,7 @@ use veil_core::ObjectRoot;
 use veil_core::Tag;
 use veil_crypto::aead::{build_veil_aad, AeadCipher, AeadError};
 use veil_crypto::signing::{Signer, SigningError};
-use veil_fec::sharder::{derive_object_root, object_to_shards_with_mode, FecError};
+use veil_fec::sharder::{derive_object_root, object_to_shards_with_mode_and_padding, FecError};
 use veil_transport::adapter::TransportAdapter;
 
 use crate::ack::register_pending_ack;
@@ -193,13 +193,14 @@ pub fn publish_encoded_object_multi_lane<AFast: TransportAdapter, AFallback: Tra
 ) -> Result<PublishResult, PublishError> {
     let object = decode_object_cbor(encoded_object)?;
     let wire_root = derive_object_root(encoded_object);
-    let shards = object_to_shards_with_mode(
+    let shards = object_to_shards_with_mode_and_padding(
         encoded_object,
         object.namespace,
         object.epoch,
         object.tag,
         wire_root,
         config.erasure_coding_mode,
+        config.bucket_jitter_extra_levels,
     )?;
     let k = shards.first().map(|s| s.header.k as usize).unwrap_or(0);
 
