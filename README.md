@@ -69,6 +69,26 @@ cargo run -p veil-sim --example transport_multi_lane_runtime
 - `edge_forwarder_hot_cache`: edge forwarder + hot cache defaults for VPS-style hosts.
 - `bootstrap_peer`: minimal bootstrap/discovery profile with conservative forwarding.
 
+Benchmark runner (writes JSON + CSV):
+
+```bash
+cargo run -p veil-sim --bin benchmark_runner -- --quick
+```
+
+Outputs:
+- `target/benchmarks/veil-sim/bench_report.json`
+- `target/benchmarks/veil-sim/bench_report.csv`
+
+Local QUIC network benchmark (real UDP/QUIC sockets):
+
+```bash
+cargo run -p veil-sim --bin network_benchmark_quic -- --count 512 --payload-bytes 16384
+```
+
+Outputs:
+- `target/benchmarks/veil-sim/quic_network_report.json`
+- `target/benchmarks/veil-sim/quic_network_report.csv`
+
 ## Client-native Node.js / React / React Native
 
 This repo now includes a client-native foundation for JS frontends:

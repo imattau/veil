@@ -13,10 +13,13 @@ veil-crypto = { path = "../veil-crypto" }
 veil-transport = { path = "../veil-transport" }
 veil-transport-websocket = { path = "../veil-transport-websocket" }
 veil-transport-tor = { path = "../veil-transport-tor" }
+veil-transport-quic = { path = "../veil-transport-quic" }
 rand.workspace = true
+serde.workspace = true
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
 futures-util = "0.3"
 

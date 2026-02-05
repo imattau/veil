@@ -1421,6 +1421,8 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "rand 0.8.5",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-tungstenite",
  "veil-codec",
@@ -1429,6 +1431,7 @@ dependencies = [
  "veil-fec",
  "veil-node",
  "veil-transport",
+ "veil-transport-quic",
  "veil-transport-tor",
  "veil-transport-websocket",
 ]
