@@ -13,7 +13,7 @@ use thiserror::Error;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
-use veil_transport::adapter::TransportAdapter;
+use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
 #[derive(Debug, Clone)]
 pub struct WebSocketAdapterConfig {
@@ -176,6 +176,18 @@ impl TransportAdapter for WebSocketAdapter {
 
     fn can_send(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
+    }
+
+    fn health_snapshot(&self) -> TransportHealthSnapshot {
+        let m = self.metrics_snapshot();
+        TransportHealthSnapshot {
+            outbound_queued: m.outbound_queued,
+            outbound_send_ok: m.outbound_send_ok,
+            outbound_send_err: m.outbound_send_err,
+            inbound_received: m.inbound_received,
+            inbound_dropped: m.inbound_dropped,
+            reconnect_attempts: m.reconnect_attempts,
+        }
     }
 }
 

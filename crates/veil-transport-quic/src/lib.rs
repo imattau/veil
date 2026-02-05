@@ -15,7 +15,7 @@ use rustls::RootCertStore;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use thiserror::Error;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
-use veil_transport::adapter::TransportAdapter;
+use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
 #[derive(Debug, Clone)]
 pub struct QuicIdentity {
@@ -242,6 +242,18 @@ impl TransportAdapter for QuicAdapter {
 
     fn can_send(&self) -> bool {
         self.running.load(Ordering::Relaxed)
+    }
+
+    fn health_snapshot(&self) -> TransportHealthSnapshot {
+        let m = self.metrics_snapshot();
+        TransportHealthSnapshot {
+            outbound_queued: m.outbound_queued,
+            outbound_send_ok: m.send_success,
+            outbound_send_err: m.send_errors,
+            inbound_received: m.inbound_received,
+            inbound_dropped: m.inbound_dropped,
+            reconnect_attempts: 0,
+        }
     }
 }
 

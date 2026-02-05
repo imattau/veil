@@ -1,6 +1,17 @@
 use std::collections::VecDeque;
 use std::hash::Hash;
 
+/// Coarse per-adapter transport health counters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransportHealthSnapshot {
+    pub outbound_queued: u64,
+    pub outbound_send_ok: u64,
+    pub outbound_send_err: u64,
+    pub inbound_received: u64,
+    pub inbound_dropped: u64,
+    pub reconnect_attempts: u64,
+}
+
 /// Byte-oriented transport contract used by the VEIL node runtime.
 pub trait TransportAdapter {
     /// Opaque peer handle used for replies/routing.
@@ -27,6 +38,11 @@ pub trait TransportAdapter {
     fn can_recv(&self) -> bool {
         true
     }
+
+    /// Best-effort transport health counters for policy/ops decisions.
+    fn health_snapshot(&self) -> TransportHealthSnapshot {
+        TransportHealthSnapshot::default()
+    }
 }
 
 /// In-memory adapter for tests and simulations.
@@ -36,6 +52,9 @@ pub struct InMemoryAdapter {
     outbound: Vec<(String, Vec<u8>)>,
     payload_hint: Option<usize>,
     drop_outbound: bool,
+    send_ok: u64,
+    send_err: u64,
+    recv_ok: u64,
 }
 
 impl InMemoryAdapter {
@@ -88,6 +107,9 @@ pub struct CappedInMemoryAdapter {
     max_send_bytes: usize,
     allow_send: bool,
     allow_recv: bool,
+    send_ok: u64,
+    send_err: u64,
+    recv_ok: u64,
 }
 
 impl Default for CappedInMemoryAdapter {
@@ -99,6 +121,9 @@ impl Default for CappedInMemoryAdapter {
             max_send_bytes: usize::MAX,
             allow_send: true,
             allow_recv: true,
+            send_ok: 0,
+            send_err: 0,
+            recv_ok: 0,
         }
     }
 }
@@ -144,18 +169,35 @@ impl TransportAdapter for InMemoryAdapter {
 
     fn send(&mut self, peer: &Self::Peer, bytes: &[u8]) -> Result<(), Self::Error> {
         if self.drop_outbound {
+            self.send_err += 1;
             return Ok(());
         }
         self.outbound.push((peer.clone(), bytes.to_vec()));
+        self.send_ok += 1;
         Ok(())
     }
 
     fn recv(&mut self) -> Option<(Self::Peer, Vec<u8>)> {
-        self.inbound.pop_front()
+        let msg = self.inbound.pop_front();
+        if msg.is_some() {
+            self.recv_ok += 1;
+        }
+        msg
     }
 
     fn max_payload_hint(&self) -> Option<usize> {
         self.payload_hint
+    }
+
+    fn health_snapshot(&self) -> TransportHealthSnapshot {
+        TransportHealthSnapshot {
+            outbound_queued: self.outbound.len() as u64,
+            outbound_send_ok: self.send_ok,
+            outbound_send_err: self.send_err,
+            inbound_received: self.recv_ok,
+            inbound_dropped: 0,
+            reconnect_attempts: 0,
+        }
     }
 }
 
@@ -165,12 +207,15 @@ impl TransportAdapter for CappedInMemoryAdapter {
 
     fn send(&mut self, peer: &Self::Peer, bytes: &[u8]) -> Result<(), Self::Error> {
         if !self.allow_send {
+            self.send_err += 1;
             return Err("send disabled");
         }
         if bytes.len() > self.max_send_bytes {
+            self.send_err += 1;
             return Err("payload exceeds max_send_bytes");
         }
         self.outbound.push((peer.clone(), bytes.to_vec()));
+        self.send_ok += 1;
         Ok(())
     }
 
@@ -178,7 +223,11 @@ impl TransportAdapter for CappedInMemoryAdapter {
         if !self.allow_recv {
             return None;
         }
-        self.inbound.pop_front()
+        let msg = self.inbound.pop_front();
+        if msg.is_some() {
+            self.recv_ok += 1;
+        }
+        msg
     }
 
     fn max_payload_hint(&self) -> Option<usize> {
@@ -192,12 +241,24 @@ impl TransportAdapter for CappedInMemoryAdapter {
     fn can_recv(&self) -> bool {
         self.allow_recv
     }
+
+    fn health_snapshot(&self) -> TransportHealthSnapshot {
+        TransportHealthSnapshot {
+            outbound_queued: self.outbound.len() as u64,
+            outbound_send_ok: self.send_ok,
+            outbound_send_err: self.send_err,
+            inbound_received: self.recv_ok,
+            inbound_dropped: 0,
+            reconnect_attempts: 0,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        route_in_memory_outbound, CappedInMemoryAdapter, InMemoryAdapter, TransportAdapter,
+        route_in_memory_outbound, CappedInMemoryAdapter, InMemoryAdapter,
+        TransportAdapter, TransportHealthSnapshot,
     };
 
     #[test]
@@ -215,6 +276,18 @@ mod tests {
             .expect("send should succeed");
         let outbound = adapter.take_outbound();
         assert_eq!(outbound, vec![("bob".to_string(), vec![9, 8])]);
+        let health = adapter.health_snapshot();
+        assert_eq!(
+            health,
+            TransportHealthSnapshot {
+                outbound_queued: 0,
+                outbound_send_ok: 1,
+                outbound_send_err: 0,
+                inbound_received: 1,
+                inbound_dropped: 0,
+                reconnect_attempts: 0
+            }
+        );
     }
 
     #[test]

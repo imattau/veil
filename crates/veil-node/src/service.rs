@@ -1,7 +1,7 @@
 use veil_core::{Epoch, Namespace, Tag};
 use veil_crypto::aead::AeadCipher;
 use veil_crypto::signing::{Signer, Verifier};
-use veil_transport::adapter::TransportAdapter;
+use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 use std::time::Duration;
 
 use crate::batch::FeedBatcher;
@@ -51,6 +51,13 @@ pub struct NodeRuntimeCallbacks<'a> {
     pub on_delivered: Option<&'a mut DeliveredCallback<'a>>,
     pub on_ack_cleared: Option<&'a mut CountCallback<'a>>,
     pub on_send_failure: Option<&'a mut CountCallback<'a>>,
+}
+
+/// Aggregated per-lane transport health snapshots for a node runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NodeRuntimeTransportHealth {
+    pub fast_lane: TransportHealthSnapshot,
+    pub fallback_lane: TransportHealthSnapshot,
 }
 
 /// Runtime loop configuration for `NodeRuntime` orchestration.
@@ -137,6 +144,14 @@ where
             stats: RuntimeStats::default(),
             cipher,
             verifier,
+        }
+    }
+
+    /// Returns transport health counters for both lanes.
+    pub fn transport_health(&self) -> NodeRuntimeTransportHealth {
+        NodeRuntimeTransportHealth {
+            fast_lane: self.fast_adapter.health_snapshot(),
+            fallback_lane: self.fallback_adapter.health_snapshot(),
         }
     }
 
@@ -448,7 +463,7 @@ mod tests {
 
     use super::{
         NodeRuntime, NodeRuntimeCallbacks, NodeRuntimeRunnerConfig, NodeRuntimeRunnerExit,
-        PublisherRuntime, PublisherTickInput, PublisherTickOptionsInput,
+        NodeRuntimeTransportHealth, PublisherRuntime, PublisherTickInput, PublisherTickOptionsInput,
     };
 
     #[test]
@@ -497,6 +512,21 @@ mod tests {
 
         let out = rt.tick(1, &peers, &peers).expect("tick should succeed");
         assert!(out.is_none());
+    }
+
+    #[test]
+    fn node_runtime_exposes_transport_health_snapshots() {
+        let rt = NodeRuntime::new(
+            crate::state::NodeState::default(),
+            InMemoryAdapter::default(),
+            InMemoryAdapter::default(),
+            crate::config::NodeRuntimeConfig::default(),
+            [0xAA; 32],
+            XChaCha20Poly1305Cipher,
+            Ed25519Verifier,
+        );
+
+        assert_eq!(rt.transport_health(), NodeRuntimeTransportHealth::default());
     }
 
     #[test]

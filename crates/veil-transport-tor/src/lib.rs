@@ -15,7 +15,7 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tokio_socks::tcp::Socks5Stream;
-use veil_transport::adapter::TransportAdapter;
+use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
 #[derive(Debug, Clone)]
 pub struct TorSocksAdapterConfig {
@@ -184,6 +184,18 @@ impl TransportAdapter for TorSocksAdapter {
 
     fn can_recv(&self) -> bool {
         false
+    }
+
+    fn health_snapshot(&self) -> TransportHealthSnapshot {
+        let m = self.metrics_snapshot();
+        TransportHealthSnapshot {
+            outbound_queued: m.outbound_queued,
+            outbound_send_ok: m.send_success,
+            outbound_send_err: m.send_errors,
+            inbound_received: 0,
+            inbound_dropped: 0,
+            reconnect_attempts: 0,
+        }
     }
 }
 
