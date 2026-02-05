@@ -26,8 +26,8 @@ Deliver a browser/Node/React-Native capable VEIL client path that does not requi
 - [x] Add React Native persistent cache adapter interface via `AsyncKeyValueShardCacheStore` (for AsyncStorage/MMKV wrappers).
 
 ## Phase 3: Production hardening
-- [ ] Key management helpers (WebCrypto-based, safe defaults).
-- [ ] Reconnect/backoff and lane health scoring.
+- [x] Key management helpers (WebCrypto-based, safe defaults).
+- [x] Reconnect/backoff and lane health scoring.
 - [ ] Browser e2e tests for loss/duplicate/tamper behavior.
 - [ ] Package publishing flow for `@veil/sdk-js`.
 

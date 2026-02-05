@@ -75,11 +75,13 @@ SDK now includes:
 - shard/object meta decode helpers (`decodeShardMeta`, `decodeObjectMeta`)
 - CBOR validation helpers (`validateShardCbor`, `validateObjectCbor`)
 - subscription-gated forwarding in `VeilClient` runtime scaffold
+- adaptive lane health scoring (`VeilClient.getLaneHealth()` + automatic fanout rebalance)
 - `WebSocketLaneAdapter` with reconnect/backoff + bounded send buffering
 - `WebRtcLaneAdapter` with reconnect/backoff + buffered sends
 - persistent cache adapters:
   - `IndexedDbShardCacheStore` (browser)
   - `AsyncKeyValueShardCacheStore` (React Native AsyncStorage/MMKV wrapper)
+- WebCrypto key helpers (`randomBytes`, `hkdfSha256`, `generateEd25519KeyPair`, `signEd25519`, `verifyEd25519`)
 
 WebSocket lane example (browser/React Native global WebSocket, or inject one in Node):
 
@@ -105,6 +107,15 @@ import { AsyncKeyValueShardCacheStore } from "@veil/sdk-js";
 const cache = new AsyncKeyValueShardCacheStore(AsyncStorage, {
   keyPrefix: "veil:shard:",
 });
+```
+
+Key helper example:
+
+```ts
+import { generateEd25519KeyPair, hkdfSha256, randomBytes } from "@veil/sdk-js";
+
+const signingKeys = await generateEd25519KeyPair();
+const payloadKey = await hkdfSha256(randomBytes(32));
 ```
 
 Build wasm + SDK:

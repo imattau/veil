@@ -28,3 +28,12 @@ export {
   initVeilWasm,
   bytesToHex,
 } from "./tags";
+export {
+  exportPublicKeyRaw,
+  generateEd25519KeyPair,
+  hkdfSha256,
+  importEd25519PublicKeyRaw,
+  randomBytes,
+  signEd25519,
+  verifyEd25519,
+} from "./keys";
