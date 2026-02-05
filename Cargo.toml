@@ -8,6 +8,7 @@ members = [
   "crates/veil-transport",
   "crates/veil-transport-websocket",
   "crates/veil-transport-tor",
+  "crates/veil-transport-quic",
   "crates/veil-sim",
   "crates/veil-wasm",
 ]

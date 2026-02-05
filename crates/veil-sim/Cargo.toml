@@ -11,7 +11,14 @@ veil-core = { path = "../veil-core" }
 veil-codec = { path = "../veil-codec" }
 veil-crypto = { path = "../veil-crypto" }
 veil-transport = { path = "../veil-transport" }
+veil-transport-websocket = { path = "../veil-transport-websocket" }
+veil-transport-tor = { path = "../veil-transport-tor" }
 rand.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+futures-util = "0.3"
 
 [[example]]
 name = "end_to_end"
@@ -28,3 +35,7 @@ path = "../../examples/edge_forwarder_hot_cache.rs"
 [[example]]
 name = "bootstrap_peer"
 path = "../../examples/bootstrap_peer.rs"
+
+[[example]]
+name = "transport_multi_lane_runtime"
+path = "../../examples/transport_multi_lane_runtime.rs"

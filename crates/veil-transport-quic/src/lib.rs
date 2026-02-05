@@ -1,0 +1,354 @@
+//! QUIC transport adapter for VEIL fast-lane delivery.
+//!
+//! The adapter uses QUIC unidirectional streams for opaque byte payloads and
+//! supports both outbound sends and inbound receive callbacks.
+
+use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+use quinn::{ClientConfig, Endpoint, ServerConfig};
+use rustls::RootCertStore;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use thiserror::Error;
+use tokio::sync::{mpsc as tokio_mpsc, oneshot};
+use veil_transport::adapter::TransportAdapter;
+
+#[derive(Debug, Clone)]
+pub struct QuicIdentity {
+    pub cert_der: Vec<u8>,
+    pub key_der: Vec<u8>,
+}
+
+impl QuicIdentity {
+    pub fn generate_self_signed(server_name: &str) -> Result<Self, QuicAdapterError> {
+        let mut params = rcgen::CertificateParams::new(vec![server_name.to_string()])
+            .map_err(|_| QuicAdapterError::IdentityGenerationFailed)?;
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let key_pair =
+            rcgen::KeyPair::generate().map_err(|_| QuicAdapterError::IdentityGenerationFailed)?;
+        let cert = params
+            .self_signed(&key_pair)
+            .map_err(|_| QuicAdapterError::IdentityGenerationFailed)?;
+        let cert_der = cert.der().to_vec();
+        let key_der = key_pair.serialize_der();
+        Ok(Self { cert_der, key_der })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct QuicAdapterConfig {
+    pub bind_addr: SocketAddr,
+    pub server_name: String,
+    pub identity: QuicIdentity,
+    pub trusted_peer_certs_der: Vec<Vec<u8>>,
+    pub connect_timeout: Duration,
+    pub send_timeout: Duration,
+    pub outbound_queue_capacity: usize,
+    pub inbound_queue_capacity: usize,
+    pub max_recv_bytes: usize,
+    pub max_payload_hint: Option<usize>,
+}
+
+impl QuicAdapterConfig {
+    pub fn new(bind_addr: SocketAddr, server_name: impl Into<String>, identity: QuicIdentity) -> Self {
+        Self {
+            bind_addr,
+            server_name: server_name.into(),
+            trusted_peer_certs_der: vec![identity.cert_der.clone()],
+            identity,
+            connect_timeout: Duration::from_secs(3),
+            send_timeout: Duration::from_secs(3),
+            outbound_queue_capacity: 2048,
+            inbound_queue_capacity: 4096,
+            max_recv_bytes: 128 * 1024,
+            max_payload_hint: Some(64 * 1024),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum QuicAdapterError {
+    #[error("adapter is closed")]
+    Closed,
+    #[error("outbound queue is full")]
+    QueueFull,
+    #[error("invalid peer address; expected socket address")]
+    InvalidPeer,
+    #[error("payload exceeds max payload hint ({hint} bytes)")]
+    PayloadTooLarge { hint: usize },
+    #[error("invalid certificate/key material")]
+    InvalidIdentity,
+    #[error("failed to generate identity")]
+    IdentityGenerationFailed,
+}
+
+#[derive(Debug)]
+struct OutboundMessage {
+    peer: SocketAddr,
+    bytes: Vec<u8>,
+}
+
+pub struct QuicAdapter {
+    local_addr: SocketAddr,
+    max_payload_hint: Option<usize>,
+    outbound_tx: tokio_mpsc::Sender<OutboundMessage>,
+    inbound_rx: mpsc::Receiver<(String, Vec<u8>)>,
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    worker: Option<JoinHandle<()>>,
+    running: Arc<AtomicBool>,
+}
+
+impl QuicAdapter {
+    pub fn connect(config: QuicAdapterConfig) -> Result<Self, QuicAdapterError> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<(), QuicAdapterError>>(1);
+        let (outbound_tx, outbound_rx) =
+            tokio_mpsc::channel::<OutboundMessage>(config.outbound_queue_capacity);
+        let (inbound_tx, inbound_rx) =
+            mpsc::sync_channel::<(String, Vec<u8>)>(config.inbound_queue_capacity);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let running = Arc::new(AtomicBool::new(true));
+        let worker_running = Arc::clone(&running);
+        let bind_addr = config.bind_addr;
+        let worker_config = config.clone();
+
+        let worker = thread::spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(_) => {
+                    worker_running.store(false, Ordering::Relaxed);
+                    return;
+                }
+            };
+            runtime.block_on(run_quic_worker(
+                worker_config,
+                worker_running,
+                outbound_rx,
+                inbound_tx,
+                shutdown_rx,
+                startup_tx,
+            ));
+        });
+
+        match startup_rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => return Err(err),
+            Err(_) => return Err(QuicAdapterError::Closed),
+        }
+
+        Ok(Self {
+            local_addr: bind_addr,
+            max_payload_hint: config.max_payload_hint,
+            outbound_tx,
+            inbound_rx,
+            shutdown_tx: Some(shutdown_tx),
+            worker: Some(worker),
+            running,
+        })
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+}
+
+impl Drop for QuicAdapter {
+    fn drop(&mut self) {
+        if let Some(tx) = self.shutdown_tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl TransportAdapter for QuicAdapter {
+    type Peer = String;
+    type Error = QuicAdapterError;
+
+    fn send(&mut self, peer: &Self::Peer, bytes: &[u8]) -> Result<(), Self::Error> {
+        if let Some(hint) = self.max_payload_hint {
+            if bytes.len() > hint {
+                return Err(QuicAdapterError::PayloadTooLarge { hint });
+            }
+        }
+        let peer_addr = SocketAddr::from_str(peer).map_err(|_| QuicAdapterError::InvalidPeer)?;
+        self.outbound_tx
+            .try_send(OutboundMessage {
+                peer: peer_addr,
+                bytes: bytes.to_vec(),
+            })
+            .map_err(|err| match err {
+                tokio_mpsc::error::TrySendError::Full(_) => QuicAdapterError::QueueFull,
+                tokio_mpsc::error::TrySendError::Closed(_) => QuicAdapterError::Closed,
+            })
+    }
+
+    fn recv(&mut self) -> Option<(Self::Peer, Vec<u8>)> {
+        self.inbound_rx.try_recv().ok()
+    }
+
+    fn max_payload_hint(&self) -> Option<usize> {
+        self.max_payload_hint
+    }
+
+    fn can_send(&self) -> bool {
+        self.running.load(Ordering::Relaxed)
+    }
+}
+
+async fn run_quic_worker(
+    config: QuicAdapterConfig,
+    running: Arc<AtomicBool>,
+    mut outbound_rx: tokio_mpsc::Receiver<OutboundMessage>,
+    inbound_tx: mpsc::SyncSender<(String, Vec<u8>)>,
+    mut shutdown_rx: oneshot::Receiver<()>,
+    startup_tx: mpsc::SyncSender<Result<(), QuicAdapterError>>,
+) {
+    let server_cfg = match build_server_config(&config.identity) {
+        Ok(cfg) => cfg,
+        Err(_) => {
+            running.store(false, Ordering::Relaxed);
+            let _ = startup_tx.send(Err(QuicAdapterError::InvalidIdentity));
+            return;
+        }
+    };
+
+    let mut endpoint = match Endpoint::server(server_cfg, config.bind_addr) {
+        Ok(ep) => ep,
+        Err(_) => {
+            running.store(false, Ordering::Relaxed);
+            let _ = startup_tx.send(Err(QuicAdapterError::Closed));
+            return;
+        }
+    };
+
+    let client_cfg = match build_client_config(&config.trusted_peer_certs_der) {
+        Ok(cfg) => cfg,
+        Err(_) => {
+            running.store(false, Ordering::Relaxed);
+            let _ = startup_tx.send(Err(QuicAdapterError::InvalidIdentity));
+            return;
+        }
+    };
+    endpoint.set_default_client_config(client_cfg);
+    let _ = startup_tx.send(Ok(()));
+
+    loop {
+        tokio::select! {
+            _ = &mut shutdown_rx => break,
+            Some(msg) = outbound_rx.recv() => {
+                let connecting = endpoint.connect(msg.peer, &config.server_name);
+                if let Ok(connecting) = connecting {
+                    let connection = tokio::time::timeout(config.connect_timeout, connecting).await;
+                    if let Ok(Ok(conn)) = connection {
+                        let send_task = async {
+                            let mut stream = conn.open_uni().await?;
+                            stream.write_all(&msg.bytes).await?;
+                            stream.finish()?;
+                            let _ = stream.stopped().await;
+                            Result::<(), quinn::WriteError>::Ok(())
+                        };
+                        let _ = tokio::time::timeout(config.send_timeout, send_task).await;
+                    }
+                }
+            }
+            maybe_incoming = endpoint.accept() => {
+                if let Some(incoming) = maybe_incoming {
+                    let inbound_tx = inbound_tx.clone();
+                    let max_recv = config.max_recv_bytes;
+                    tokio::spawn(async move {
+                        if let Ok(conn) = incoming.await {
+                            let remote = conn.remote_address().to_string();
+                            while let Ok(mut recv) = conn.accept_uni().await {
+                                match recv.read_to_end(max_recv).await {
+                                    Ok(bytes) => {
+                                        let _ = inbound_tx.try_send((remote.clone(), bytes));
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    running.store(false, Ordering::Relaxed);
+}
+
+fn build_server_config(identity: &QuicIdentity) -> Result<ServerConfig, QuicAdapterError> {
+    let cert = CertificateDer::from(identity.cert_der.clone());
+    let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(identity.key_der.clone()));
+    ServerConfig::with_single_cert(vec![cert], key).map_err(|_| QuicAdapterError::InvalidIdentity)
+}
+
+fn build_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientConfig, QuicAdapterError> {
+    let mut roots = RootCertStore::empty();
+    for cert_der in trusted_certs_der {
+        let cert = CertificateDer::from(cert_der.clone());
+        roots
+            .add(cert)
+            .map_err(|_| QuicAdapterError::InvalidIdentity)?;
+    }
+    let tls = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let quic_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
+        .map_err(|_| QuicAdapterError::InvalidIdentity)?;
+    Ok(ClientConfig::new(Arc::new(quic_tls)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{QuicAdapter, QuicAdapterConfig, QuicIdentity};
+    use std::net::UdpSocket;
+    use std::time::Duration;
+    use veil_transport::adapter::TransportAdapter;
+
+    fn free_udp_addr() -> std::net::SocketAddr {
+        let sock = UdpSocket::bind("127.0.0.1:0").expect("bind should work");
+        sock.local_addr().expect("local addr should resolve")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn quic_adapter_initializes_and_queues_send() {
+        let identity = QuicIdentity::generate_self_signed("localhost")
+            .expect("identity generation should work");
+        let addr_a = free_udp_addr();
+        let _addr_b = free_udp_addr();
+
+        let mut a = QuicAdapter::connect(QuicAdapterConfig::new(addr_a, "localhost", identity.clone()))
+            .expect("adapter a should initialize");
+        let _b = QuicAdapter::connect(QuicAdapterConfig::new(free_udp_addr(), "localhost", identity))
+            .expect("adapter b should initialize");
+
+        a.send(&"127.0.0.1:9".to_string(), b"ping")
+            .expect("send should queue");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(a.can_send());
+    }
+
+    #[test]
+    fn rejects_invalid_peer() {
+        let identity = QuicIdentity::generate_self_signed("localhost")
+            .expect("identity generation should work");
+        let addr = free_udp_addr();
+        let mut adapter = QuicAdapter::connect(QuicAdapterConfig::new(addr, "localhost", identity))
+            .expect("adapter should initialize");
+        let err = adapter
+            .send(&"not-a-peer".to_string(), b"x")
+            .expect_err("invalid peer should fail");
+        assert!(err.to_string().contains("invalid peer"));
+    }
+}

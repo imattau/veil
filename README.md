@@ -25,9 +25,11 @@ VEIL is designed to be practical first:
 - `crates/veil-fec` - profile selection and erasure-coding sharder
 - `crates/veil-node` - runtime, forwarding, cache, ACK handling
 - `crates/veil-transport` - transport adapter abstractions
+- `crates/veil-transport-quic` - QUIC fast-lane `TransportAdapter`
 - `crates/veil-transport-websocket` - websocket `TransportAdapter` implementation
 - `crates/veil-transport-tor` - Tor SOCKS5 fallback `TransportAdapter`
 - `crates/veil-sim` - e2e, performance, stress, and memory tests
+- `docs/runbooks/transport_profiles.md` - deployment notes for fast/fallback lane profiles
 
 ## Quick start
 
@@ -59,6 +61,7 @@ Profile examples:
 ```bash
 cargo run -p veil-sim --example edge_forwarder_hot_cache
 cargo run -p veil-sim --example bootstrap_peer
+cargo run -p veil-sim --example transport_multi_lane_runtime
 ```
 
 - `edge_forwarder_hot_cache`: edge forwarder + hot cache defaults for VPS-style hosts.
