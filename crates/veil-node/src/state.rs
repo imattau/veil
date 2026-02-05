@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use serde::{Deserialize, Serialize};
 use veil_codec::shard::ShardV1;
 use veil_core::ObjectRoot;
 use veil_core::{ShardId, Tag};
@@ -6,7 +7,7 @@ use veil_core::{ShardId, Tag};
 use crate::policy::TrustTier;
 
 /// Cached shard bytes and eviction metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedShard {
     /// Encoded shard bytes.
     pub bytes: Vec<u8>,
@@ -17,7 +18,7 @@ pub struct CachedShard {
 }
 
 /// Pending ACK timeout/escalation state for an outbound object.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingAck {
     /// Retry queue of unsent shard bytes.
     pub unsent_shards: Vec<Vec<u8>>,
@@ -34,7 +35,7 @@ pub struct PendingAck {
 }
 
 /// Mutable node-local state used by receive/runtime/cache pipelines.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct NodeState {
     /// Locally subscribed tags.
     pub subscriptions: HashSet<Tag>,

@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use serde::{Deserialize, Serialize};
 
 /// Local trust tiers used for prioritization decisions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TrustTier {
     Trusted,
     Known,

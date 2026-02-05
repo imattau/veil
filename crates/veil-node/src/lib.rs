@@ -17,6 +17,7 @@ pub mod batch;
 pub mod cache;
 pub mod config;
 pub mod forwarding;
+pub mod persistence;
 pub mod policy;
 pub mod publish;
 pub mod receive;

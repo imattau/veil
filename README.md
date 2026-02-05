@@ -40,6 +40,7 @@ High-level helper APIs in `veil-node` simplify integration:
 - `service::PublisherRuntime` - queue + publish tick wrapper
 - `service::NodeRuntime` - ingest/forward/reconstruct tick wrapper
 - `service::NodeRuntimeCallbacks` - delivery/ACK/send-failure hooks per tick
+- `persistence` helpers - snapshot/load `NodeState` as CBOR for restart durability
 - `publish::PublishOptions` - typed publish flags (`signed`, `ack_requested`)
 - `config::NodeRuntimeConfig::builder()` - fluent runtime configuration
 - `veil_transport::adapter::route_in_memory_outbound(...)` - move captured in-memory outbound traffic into another adapter's inbound queue for simulations/tests
