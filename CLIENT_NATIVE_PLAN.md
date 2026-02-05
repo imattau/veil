@@ -28,8 +28,8 @@ Deliver a browser/Node/React-Native capable VEIL client path that does not requi
 ## Phase 3: Production hardening
 - [x] Key management helpers (WebCrypto-based, safe defaults).
 - [x] Reconnect/backoff and lane health scoring.
-- [ ] Browser e2e tests for loss/duplicate/tamper behavior.
-- [ ] Package publishing flow for `@veil/sdk-js`.
+- [x] Browser e2e tests for loss/duplicate/tamper behavior.
+- [x] Package publishing flow for `@veil/sdk-js`.
 
 ## Acceptance checks
 - React demo derives feed + rendezvous tags entirely client-side.

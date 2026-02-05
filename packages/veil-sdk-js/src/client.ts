@@ -16,6 +16,7 @@ export interface VeilClientHooks {
   onForward?: (peer: string, bytes: Uint8Array) => void;
   onForwardError?: (lane: "fast" | "fallback", peer: string, error: unknown) => void;
   onIgnoredDuplicate?: (shardIdHex: string) => void;
+  onIgnoredMalformed?: (peer: string, error: unknown) => void;
   onIgnoredUnsubscribed?: (tagHex: string) => void;
   onLaneHealth?: (snapshot: LaneHealthSnapshot) => void;
   onError?: (error: unknown) => void;
@@ -209,7 +210,13 @@ export class VeilClient {
       return;
     }
 
-    const meta = await decodeShardMeta(bytes);
+    let meta: Awaited<ReturnType<typeof decodeShardMeta>>;
+    try {
+      meta = await decodeShardMeta(bytes);
+    } catch (error) {
+      this.hooks.onIgnoredMalformed?.(peer, error);
+      return;
+    }
     const tagHex = meta.tagHex.toLowerCase();
     if (!this.subscriptions.has(tagHex)) {
       this.hooks.onIgnoredUnsubscribed?.(tagHex);

@@ -82,6 +82,7 @@ SDK now includes:
   - `IndexedDbShardCacheStore` (browser)
   - `AsyncKeyValueShardCacheStore` (React Native AsyncStorage/MMKV wrapper)
 - WebCrypto key helpers (`randomBytes`, `hkdfSha256`, `generateEd25519KeyPair`, `signEd25519`, `verifyEd25519`)
+- SDK e2e behavior tests for loss/duplicate/tamper ingest paths
 
 WebSocket lane example (browser/React Native global WebSocket, or inject one in Node):
 
@@ -126,6 +127,14 @@ npm run wasm:build
 npm run sdk:build
 ```
 
+Verify SDK package readiness:
+
+```bash
+npm run sdk:verify
+```
+
+CI publish flow uses `npm run sdk:verify:ci` (includes `wasm-pack` build).
+
 Run React demo:
 
 ```bash
@@ -141,6 +150,15 @@ React Native note:
 import { configureTagBackend } from "@veil/sdk-js";
 configureTagBackend("pure-js");
 ```
+
+## SDK publishing
+
+`@veil/sdk-js` publish flow is automated via `.github/workflows/publish-sdk-js.yml`.
+
+- Push tag `sdk-js-vX.Y.Z` (must match `packages/veil-sdk-js/package.json` version) to publish.
+- Or run the workflow manually with `dry_run` first.
+- Workflow verifies with `npm run sdk:verify:ci` before publishing.
+- Configure repository secret `NPM_TOKEN` for npm publish access.
 
 ## Optional fuzzing
 

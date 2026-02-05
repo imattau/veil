@@ -8,6 +8,9 @@
   "scripts": {
     "wasm:build": "wasm-pack build crates/veil-wasm --target web --out-dir ../../packages/veil-sdk-js/wasm",
     "sdk:build": "npm run build -w @veil/sdk-js",
+    "sdk:test": "npm run test -w @veil/sdk-js",
+    "sdk:verify": "npm run lint && npm run sdk:test && npm run sdk:build",
+    "sdk:verify:ci": "npm run sdk:verify && npm run wasm:build",
     "react:dev": "npm run dev -w @veil/react-demo",
     "lint": "npm run lint -w @veil/sdk-js && npm run lint -w @veil/react-demo"
   },

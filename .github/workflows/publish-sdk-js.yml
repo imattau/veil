@@ -1,0 +1,67 @@
+name: Publish SDK JS
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run npm publish --dry-run"
+        required: false
+        default: true
+        type: boolean
+  push:
+    tags:
+      - "sdk-js-v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify SDK package
+        run: npm run sdk:verify:ci
+
+      - name: Ensure tag version matches package version
+        if: startsWith(github.ref, 'refs/tags/sdk-js-v')
+        shell: bash
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#sdk-js-v}"
+          PKG_VERSION="$(node -p "require('./packages/veil-sdk-js/package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match package version ($PKG_VERSION)."
+            exit 1
+          fi
+
+      - name: Publish (dry-run)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true'
+        working-directory: packages/veil-sdk-js
+        run: npm publish --access public --dry-run
+
+      - name: Publish to npm
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run != 'true')
+        working-directory: packages/veil-sdk-js
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
