@@ -78,11 +78,54 @@ pub fn derive_channel_rv_tag(
     )
 }
 
+/// Returns the current epoch index for `now_seconds / epoch_seconds`.
+///
+/// `epoch_seconds=0` is treated as `1` to avoid division-by-zero.
+pub fn current_epoch(now_seconds: u64, epoch_seconds: u64) -> Epoch {
+    let window = epoch_seconds.max(1);
+    Epoch((now_seconds / window).min(u32::MAX as u64) as u32)
+}
+
+/// Returns true when `now_seconds` is in the overlap tail where the next
+/// epoch's rendezvous tag should also be accepted.
+pub fn in_next_epoch_overlap(now_seconds: u64, epoch_seconds: u64, overlap_seconds: u64) -> bool {
+    if overlap_seconds == 0 {
+        return false;
+    }
+    let window = epoch_seconds.max(1);
+    let overlap = overlap_seconds.min(window);
+    let offset = now_seconds % window;
+    offset >= window.saturating_sub(overlap)
+}
+
+/// Derives the current rendezvous tag and, during the overlap tail, also
+/// derives the next-epoch rendezvous tag.
+pub fn derive_rv_tag_window(
+    recipient_pubkey: &[u8; 32],
+    now_seconds: u64,
+    epoch_seconds: u64,
+    overlap_seconds: u64,
+    namespace: Namespace,
+) -> (Tag, Option<Tag>) {
+    let cur_epoch = current_epoch(now_seconds, epoch_seconds);
+    let current = derive_rv_tag(recipient_pubkey, cur_epoch, namespace);
+    if in_next_epoch_overlap(now_seconds, epoch_seconds, overlap_seconds) {
+        let next_epoch = Epoch(cur_epoch.0.saturating_add(1));
+        (
+            current,
+            Some(derive_rv_tag(recipient_pubkey, next_epoch, namespace)),
+        )
+    } else {
+        (current, None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_channel_feed_tag, derive_channel_namespace, derive_channel_rv_tag, derive_feed_tag,
-        derive_rv_tag, normalize_channel_id,
+        current_epoch, derive_channel_feed_tag, derive_channel_namespace, derive_channel_rv_tag,
+        derive_feed_tag, derive_rv_tag, derive_rv_tag_window, in_next_epoch_overlap,
+        normalize_channel_id,
     };
     use crate::hash::blake3_32;
     use crate::types::{Epoch, Namespace};
@@ -178,5 +221,36 @@ mod tests {
         let general_rv = derive_channel_rv_tag(&key, epoch, base, "general");
         let dev_rv = derive_channel_rv_tag(&key, epoch, base, "dev");
         assert_ne!(general_rv, dev_rv);
+    }
+
+    #[test]
+    fn overlap_window_derives_next_rv_tag_near_boundary() {
+        let key = [0xAB; 32];
+        let ns = Namespace(7);
+        let epoch_seconds = 86_400;
+        let overlap_seconds = 3_600;
+        let now = epoch_seconds - 30;
+        let (current, next) = derive_rv_tag_window(&key, now, epoch_seconds, overlap_seconds, ns);
+        let expected_current = derive_rv_tag(&key, Epoch(0), ns);
+        let expected_next = derive_rv_tag(&key, Epoch(1), ns);
+        assert_eq!(current, expected_current);
+        assert_eq!(next, Some(expected_next));
+    }
+
+    #[test]
+    fn overlap_window_outside_tail_has_no_next_tag() {
+        let key = [0xCD; 32];
+        let ns = Namespace(9);
+        let (current, next) = derive_rv_tag_window(&key, 10, 86_400, 3_600, ns);
+        assert_eq!(current, derive_rv_tag(&key, Epoch(0), ns));
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn current_epoch_and_overlap_helpers_are_stable() {
+        assert_eq!(current_epoch(172_800, 86_400), Epoch(2));
+        assert!(!in_next_epoch_overlap(10, 100, 20));
+        assert!(in_next_epoch_overlap(95, 100, 20));
+        assert!(in_next_epoch_overlap(95, 100, 200));
     }
 }

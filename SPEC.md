@@ -31,6 +31,9 @@ Implementations MUST produce 32-byte tags using a cryptographic hash function (`
 - `rv_tag = H("rv" || recipient_pubkey || u32(epoch) || u16(namespace))`
 
 `epoch` MUST be an integer window. Practical mode default: `EPOCH_SECONDS = 86400`.
+Implementations MAY support an overlap transition window where both current and
+next epoch rendezvous tags are accepted/forwarded near epoch boundaries to
+reduce synchronized rotation fingerprints and tolerate clock skew.
 
 ## 4. ObjectV1 Schema
 

@@ -52,6 +52,7 @@ High-level helper APIs in `veil-node` simplify integration:
 - transport adapters expose unified `health_snapshot()` and adapter-level `metrics_snapshot()` counters
 - `publish::PublishOptions` - typed publish flags (`signed`, `ack_requested`)
 - `config::NodeRuntimeConfig::builder()` - fluent runtime configuration
+- `subscriptions::subscribe_rv_tag_window(...)` - optional overlapping epoch subscriptions for rendezvous-tag rotation
 - `veil_fec::sharder::object_to_shards_with_mode(...)` - optional hardened non-systematic FEC mode for high-privacy deployments
 - `config::NodeRuntimeConfig::builder().bucket_jitter_extra_levels(...)` - optional upward bucket jitter to blur packet-size fingerprints
 - `veil_transport::adapter::route_in_memory_outbound(...)` - move captured in-memory outbound traffic into another adapter's inbound queue for simulations/tests
