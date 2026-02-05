@@ -1,0 +1,14 @@
+[package]
+name = "veil-transport-tor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+veil-transport = { path = "../veil-transport" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "net", "io-util"] }
+tokio-socks = "0.5"
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
