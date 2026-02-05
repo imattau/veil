@@ -28,6 +28,10 @@ export interface VeilClientOptions {
   fallbackFanout?: number;
   adaptiveLaneScoring?: boolean;
   minimumHealthyLaneScore?: number;
+  pollIntervalMs?: number;
+  maxSeenShardIds?: number;
+  seenShardTtlMs?: number;
+  laneHealthEmitMs?: number;
 }
 
 export interface LaneHealth {
@@ -46,12 +50,22 @@ export interface LaneHealthSnapshot {
 export class VeilClient {
   private readonly subscriptions = new Set<TagHex>();
   private readonly cacheStore: ShardCacheStore;
-  private readonly seenShardIds = new Set<string>();
+  private readonly seenShardIds = new Map<string, number>();
   private forwardPeers: string[] = [];
   private readonly fastFanout: number;
   private readonly fallbackFanout: number;
   private readonly adaptiveLaneScoring: boolean;
   private readonly minimumHealthyLaneScore: number;
+  private readonly pollIntervalMs: number;
+  private readonly maxSeenShardIds: number;
+  private readonly seenShardTtlMs: number;
+  private readonly laneHealthEmitMs: number;
+  private seenSincePrune = 0;
+  private running = false;
+  private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private tickInFlight: Promise<void> | null = null;
+  private laneHealthEmitTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastLaneHealthEmitAt = 0;
   private laneHealth: LaneHealthSnapshot = {
     fast: {
       score: 1,
@@ -73,6 +87,10 @@ export class VeilClient {
     this.fallbackFanout = Math.max(0, options.fallbackFanout ?? 1);
     this.adaptiveLaneScoring = options.adaptiveLaneScoring ?? true;
     this.minimumHealthyLaneScore = options.minimumHealthyLaneScore ?? 0.15;
+    this.pollIntervalMs = Math.max(1, options.pollIntervalMs ?? 50);
+    this.maxSeenShardIds = Math.max(1, options.maxSeenShardIds ?? 50_000);
+    this.seenShardTtlMs = Math.max(1_000, options.seenShardTtlMs ?? 30 * 60 * 1_000);
+    this.laneHealthEmitMs = Math.max(0, options.laneHealthEmitMs ?? 250);
     if (fallbackLane) {
       this.laneHealth.fallback = {
         score: 1,
@@ -104,6 +122,30 @@ export class VeilClient {
     return this.cacheStore.get(shardId);
   }
 
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  start(): void {
+    if (this.running) {
+      return;
+    }
+    this.running = true;
+    this.scheduleNextTick(0);
+  }
+
+  stop(): void {
+    this.running = false;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
+    if (this.laneHealthEmitTimer) {
+      clearTimeout(this.laneHealthEmitTimer);
+      this.laneHealthEmitTimer = null;
+    }
+  }
+
   getLaneHealth(): LaneHealthSnapshot {
     return {
       fast: { ...this.laneHealth.fast },
@@ -113,6 +155,82 @@ export class VeilClient {
 
   private shardIdHex(bytes: Uint8Array): string {
     return bytesToHex(blake3(bytes, { dkLen: 32 }));
+  }
+
+  private scheduleNextTick(delayMs: number): void {
+    if (!this.running || this.pollTimer) {
+      return;
+    }
+    this.pollTimer = setTimeout(() => {
+      this.pollTimer = null;
+      void this.runTickLoop();
+    }, delayMs);
+  }
+
+  private async runTickLoop(): Promise<void> {
+    if (!this.running || this.tickInFlight) {
+      this.scheduleNextTick(this.pollIntervalMs);
+      return;
+    }
+
+    this.tickInFlight = this.tick().catch(() => {
+      // tick() already emits onError hooks; runtime loop continues.
+    });
+    await this.tickInFlight;
+    this.tickInFlight = null;
+    this.scheduleNextTick(this.pollIntervalMs);
+  }
+
+  private maybeEmitLaneHealth(): void {
+    if (!this.hooks.onLaneHealth) {
+      return;
+    }
+    const now = Date.now();
+    if (
+      this.laneHealthEmitMs === 0 ||
+      now - this.lastLaneHealthEmitAt >= this.laneHealthEmitMs
+    ) {
+      this.lastLaneHealthEmitAt = now;
+      this.hooks.onLaneHealth(this.getLaneHealth());
+      return;
+    }
+
+    if (this.laneHealthEmitTimer) {
+      return;
+    }
+    const delay = this.laneHealthEmitMs - (now - this.lastLaneHealthEmitAt);
+    this.laneHealthEmitTimer = setTimeout(() => {
+      this.laneHealthEmitTimer = null;
+      this.lastLaneHealthEmitAt = Date.now();
+      this.hooks.onLaneHealth?.(this.getLaneHealth());
+    }, delay);
+  }
+
+  private pruneSeenShardIds(nowMs: number): void {
+    const expiryBefore = nowMs - this.seenShardTtlMs;
+    for (const [shardId, seenAt] of this.seenShardIds) {
+      if (seenAt >= expiryBefore) {
+        break;
+      }
+      this.seenShardIds.delete(shardId);
+    }
+
+    while (this.seenShardIds.size > this.maxSeenShardIds) {
+      const oldest = this.seenShardIds.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      this.seenShardIds.delete(oldest.value);
+    }
+  }
+
+  private maybePruneSeenShardIds(nowMs: number): void {
+    this.seenSincePrune += 1;
+    if (this.seenShardIds.size <= this.maxSeenShardIds && this.seenSincePrune < 64) {
+      return;
+    }
+    this.seenSincePrune = 0;
+    this.pruneSeenShardIds(nowMs);
   }
 
   private updateLaneHealth(
@@ -141,7 +259,7 @@ export class VeilClient {
       state.score = Math.max(0, state.score * 0.55);
     }
 
-    this.hooks.onLaneHealth?.(this.getLaneHealth());
+    this.maybeEmitLaneHealth();
   }
 
   private computeLaneFanout(): { fast: number; fallback: number } {
@@ -204,6 +322,8 @@ export class VeilClient {
   }
 
   private async processInbound(peer: string, bytes: Uint8Array): Promise<void> {
+    const nowMs = Date.now();
+    this.maybePruneSeenShardIds(nowMs);
     const shardIdHex = this.shardIdHex(bytes);
     if (this.seenShardIds.has(shardIdHex)) {
       this.hooks.onIgnoredDuplicate?.(shardIdHex);
@@ -223,7 +343,7 @@ export class VeilClient {
       return;
     }
 
-    this.seenShardIds.add(shardIdHex);
+    this.seenShardIds.set(shardIdHex, nowMs);
     await this.cacheStore.set(shardIdHex, bytes);
     this.hooks.onShard?.(peer, bytes);
 

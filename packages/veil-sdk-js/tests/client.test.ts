@@ -82,4 +82,104 @@ describe("VeilClient lane scoring", () => {
     expect(fallbackLane.sent.length).toBeGreaterThan(fastLane.sent.length);
     expect(healthSnapshots.length).toBeGreaterThan(0);
   });
+
+  test("start/stop drives polling without manual ticks", async () => {
+    vi.useFakeTimers();
+    const fastLane = new StubLane();
+    const fallbackLane = new StubLane();
+    let received = 0;
+    const client = new VeilClient(
+      fastLane,
+      fallbackLane,
+      {
+        onShard: () => {
+          received += 1;
+        },
+      },
+      {
+        pollIntervalMs: 10,
+      },
+    );
+    client.subscribe("11".repeat(32));
+    fastLane.enqueue("origin", new Uint8Array([1, 3, 5, 7]));
+
+    client.start();
+    await vi.advanceTimersByTimeAsync(15);
+    expect(received).toBe(1);
+
+    client.stop();
+    fastLane.enqueue("origin", new Uint8Array([2, 4, 6, 8]));
+    await vi.advanceTimersByTimeAsync(20);
+    expect(received).toBe(1);
+    vi.useRealTimers();
+  });
+
+  test("prunes seen shard ids with bounded dedupe set", async () => {
+    const fastLane = new StubLane();
+    let duplicates = 0;
+    let received = 0;
+    const countingClient = new VeilClient(
+      fastLane,
+      undefined,
+      {
+        onIgnoredDuplicate: () => {
+          duplicates += 1;
+        },
+        onShard: () => {
+          received += 1;
+        },
+      },
+      {
+        maxSeenShardIds: 2,
+        seenShardTtlMs: 60_000,
+      },
+    );
+    countingClient.subscribe("11".repeat(32));
+
+    const a = new Uint8Array([1, 1, 1]);
+    const b = new Uint8Array([2, 2, 2]);
+    const c = new Uint8Array([3, 3, 3]);
+
+    fastLane.enqueue("origin", a);
+    await countingClient.tick();
+    fastLane.enqueue("origin", b);
+    await countingClient.tick();
+    fastLane.enqueue("origin", c);
+    await countingClient.tick();
+    fastLane.enqueue("origin", a);
+    await countingClient.tick();
+
+    expect(received).toBe(4);
+    expect(duplicates).toBe(0);
+  });
+
+  test("throttles lane health callbacks", async () => {
+    vi.useFakeTimers();
+    const fastLane = new StubLane();
+    const healthUpdates: number[] = [];
+    const client = new VeilClient(
+      fastLane,
+      undefined,
+      {
+        onLaneHealth: (snapshot) => {
+          healthUpdates.push(snapshot.fast.sends + snapshot.fast.receives);
+        },
+      },
+      {
+        fastFanout: 3,
+        laneHealthEmitMs: 100,
+      },
+    );
+    client.subscribe("11".repeat(32));
+    client.setForwardPeers(["p1", "p2", "p3"]);
+    fastLane.enqueue("origin", new Uint8Array([9, 9, 9]));
+
+    await client.tick();
+    // Immediate first emission only.
+    expect(healthUpdates.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(120);
+    // Deferred coalesced emission runs once.
+    expect(healthUpdates.length).toBe(2);
+    vi.useRealTimers();
+  });
 });

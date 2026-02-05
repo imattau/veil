@@ -1,5 +1,11 @@
 export { VeilClient } from "./client";
-export type { LaneAdapter, VeilClientHooks, VeilClientOptions } from "./client";
+export type {
+  LaneAdapter,
+  LaneHealth,
+  LaneHealthSnapshot,
+  VeilClientHooks,
+  VeilClientOptions,
+} from "./client";
 export { MemoryShardCacheStore } from "./storage";
 export { AsyncKeyValueShardCacheStore, IndexedDbShardCacheStore } from "./storage";
 export type {
