@@ -1,0 +1,26 @@
+{
+  "name": "veil-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VEIL desktop example app (Electron + React)",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && ELECTRON_START_URL=http://localhost:5173 electron .\"",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@veil/sdk-js": "file:../../packages/veil-sdk-js",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "electron": "^30.5.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.6",
+    "wait-on": "^7.2.0"
+  }
+}

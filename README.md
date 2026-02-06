@@ -31,6 +31,7 @@ VEIL is designed to be practical first:
 - `crates/veil-transport-tor` - Tor SOCKS5 fallback `TransportAdapter`
 - `crates/veil-sim` - e2e, performance, stress, and memory tests
 - `crates/veil-schema-feed` - optional, non-normative app/feed bundle schema
+- `apps/veil-desktop` - Electron + React desktop example using SDK-js
 - `docs/runbooks/transport_profiles.md` - deployment notes for fast/fallback lane profiles
 
 ## Quick start
