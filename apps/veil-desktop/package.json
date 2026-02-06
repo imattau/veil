@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && ELECTRON_START_URL=http://localhost:5173 electron .\"",
     "build": "vite build",
-    "package": "vite build && electron-builder --linux",
+    "package": "vite build && node scripts/postpack.js && electron-builder --linux",
     "preview": "vite preview",
     "start": "electron ."
   },
@@ -30,6 +30,7 @@
     "productName": "VEIL Desktop",
     "files": [
       "dist/**",
+      "dist/relay/**",
       "electron/**",
       "package.json"
     ],

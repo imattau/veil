@@ -4,8 +4,12 @@ const { spawn } = require("child_process");
 
 let relayProcess = null;
 
+const resolveBundledRelay = () => {
+  return path.join(process.resourcesPath, "app.asar", "dist", "relay", "veil-desktop-relay");
+};
+
 const startRelay = () => {
-  const relayPath = process.env.VEIL_DESKTOP_RELAY_PATH;
+  const relayPath = process.env.VEIL_DESKTOP_RELAY_PATH || resolveBundledRelay();
   if (!relayPath) {
     return;
   }
