@@ -64,6 +64,10 @@ server {
         proxy_pass http://127.0.0.1:${PROXY_HEALTH_PORT};
         proxy_set_header Host $host;
     }
+    location /metrics {
+        proxy_pass http://127.0.0.1:${PROXY_HEALTH_PORT};
+        proxy_set_header Host $host;
+    }
 }
 NGINXCONF
   if [[ ! -e "$NGINX_SITE_LINK" ]]; then
@@ -85,6 +89,7 @@ configure_caddy() {
 ${PROXY_DOMAIN} {
   reverse_proxy /ws/* 127.0.0.1:${PROXY_WS_PORT}
   reverse_proxy /health 127.0.0.1:${PROXY_HEALTH_PORT}
+  reverse_proxy /metrics 127.0.0.1:${PROXY_HEALTH_PORT}
 }
 CADDYCONF
   if [[ -f "$CADDYFILE" ]] && ! grep -q "veil-vps-node.caddy" "$CADDYFILE"; then

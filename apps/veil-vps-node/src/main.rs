@@ -256,7 +256,21 @@ fn load_or_create_node_key(path: &Path) -> Result<[u8; 32], String> {
     Ok(key)
 }
 
-fn start_health_server(port: u16) {
+#[derive(Debug, Default)]
+struct MetricsState {
+    ticks: AtomicU64,
+    delivered: AtomicU64,
+    send_failures: AtomicU64,
+    ack_clears: AtomicU64,
+    last_fast_outbound_ok: AtomicU64,
+    last_fast_outbound_err: AtomicU64,
+    last_fallback_outbound_ok: AtomicU64,
+    last_fallback_outbound_err: AtomicU64,
+    last_fast_inbound: AtomicU64,
+    last_fallback_inbound: AtomicU64,
+}
+
+fn start_health_server(port: u16, metrics: Arc<MetricsState>) {
     if port == 0 {
         return;
     }
@@ -274,10 +288,26 @@ fn start_health_server(port: u16) {
                 let _ = stream.read(&mut buf);
                 let req = String::from_utf8_lossy(&buf);
                 let ok = req.starts_with("GET /health") || req.starts_with("GET /healthz");
+                let is_metrics = req.starts_with("GET /metrics");
                 let (status, body) = if ok {
-                    ("200 OK", "ok")
+                    ("200 OK", "ok".to_string())
+                } else if is_metrics {
+                    let body = format!(
+                        "veil_ticks_total {}\nveil_delivered_total {}\nveil_send_failures_total {}\nveil_ack_clears_total {}\nveil_fast_outbound_ok {}\nveil_fast_outbound_err {}\nveil_fallback_outbound_ok {}\nveil_fallback_outbound_err {}\nveil_fast_inbound {}\nveil_fallback_inbound {}\n",
+                        metrics.ticks.load(Ordering::Relaxed),
+                        metrics.delivered.load(Ordering::Relaxed),
+                        metrics.send_failures.load(Ordering::Relaxed),
+                        metrics.ack_clears.load(Ordering::Relaxed),
+                        metrics.last_fast_outbound_ok.load(Ordering::Relaxed),
+                        metrics.last_fast_outbound_err.load(Ordering::Relaxed),
+                        metrics.last_fallback_outbound_ok.load(Ordering::Relaxed),
+                        metrics.last_fallback_outbound_err.load(Ordering::Relaxed),
+                        metrics.last_fast_inbound.load(Ordering::Relaxed),
+                        metrics.last_fallback_inbound.load(Ordering::Relaxed),
+                    );
+                    ("200 OK", body)
                 } else {
-                    ("404 Not Found", "not found")
+                    ("404 Not Found", "not found".to_string())
                 };
                 let resp = format!(
                     "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{body}",
@@ -420,17 +450,35 @@ fn main() {
     let mut last_health_log = Instant::now();
     let health_log_interval = Duration::from_secs(30);
 
-    start_health_server(health_port);
+    let metrics = Arc::new(MetricsState::default());
+    start_health_server(health_port, Arc::clone(&metrics));
 
     let mut now_step = 0_u64;
     loop {
+        let metrics_ref = Arc::clone(&metrics);
         let _ = runtime.tick_with_callbacks(
             now_step,
             &fast_peers,
             &fallback_peers,
-            NodeRuntimeCallbacks::default(),
+            NodeRuntimeCallbacks {
+                on_delivered: Some(&mut |_root, _payload| {
+                    metrics_ref.delivered.fetch_add(1, Ordering::Relaxed);
+                }),
+                on_send_failure: Some(&mut |count| {
+                    metrics_ref
+                        .send_failures
+                        .fetch_add(count as u64, Ordering::Relaxed);
+                }),
+                on_ack_cleared: Some(&mut |count| {
+                    metrics_ref
+                        .ack_clears
+                        .fetch_add(count as u64, Ordering::Relaxed);
+                }),
+                ..NodeRuntimeCallbacks::default()
+            },
         );
         now_step = now_step.saturating_add(1);
+        metrics.ticks.fetch_add(1, Ordering::Relaxed);
 
         if last_snapshot.elapsed() >= snapshot_interval {
             if let Err(err) = save_state_to_path(&state_path, &runtime.state) {
@@ -441,6 +489,24 @@ fn main() {
 
         if last_health_log.elapsed() >= health_log_interval {
             let health = runtime.transport_health();
+            metrics
+                .last_fast_outbound_ok
+                .store(health.fast_lane.outbound_send_ok, Ordering::Relaxed);
+            metrics
+                .last_fast_outbound_err
+                .store(health.fast_lane.outbound_send_err, Ordering::Relaxed);
+            metrics
+                .last_fallback_outbound_ok
+                .store(health.fallback_lane.outbound_send_ok, Ordering::Relaxed);
+            metrics
+                .last_fallback_outbound_err
+                .store(health.fallback_lane.outbound_send_err, Ordering::Relaxed);
+            metrics
+                .last_fast_inbound
+                .store(health.fast_lane.inbound_received, Ordering::Relaxed);
+            metrics
+                .last_fallback_inbound
+                .store(health.fallback_lane.inbound_received, Ordering::Relaxed);
             eprintln!(
                 "fast_lane: {:?}, fallback_lane: {:?}",
                 health.fast_lane, health.fallback_lane
@@ -451,3 +517,5 @@ fn main() {
         thread::sleep(tick_interval);
     }
 }
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
