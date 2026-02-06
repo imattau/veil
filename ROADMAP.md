@@ -113,6 +113,13 @@ Deliver a practical-mode VEIL implementation in this Rust workspace that can:
 - Transport-agnostic: same shard/object pipeline passes over at least two adapter implementations (e.g., in-memory mock + second lane mock)
 - Policy-locality: WoT settings only affect prioritization (forward/cache order), never object validity decisions
 
+## Release Gates Checklist
+- [x] Functional: tag derivation, schema compliance, and ACK behavior (codec + node tests)
+- [x] Resilience: packet loss tolerance and cache churn behavior in `veil-sim`
+- [ ] Performance: record baseline report (p95 latency/throughput/cache hit rate) from `benchmark_runner`
+- [ ] Transport-agnostic: enable CI job with `VEIL_E2E_NETWORK=1` for transport smoke test
+- [x] Policy-locality: WoT settings only affect prioritization, not validity
+
 ## Risks and Mitigations
 - **FEC implementation variance** -> lock vectors plus deterministic test corpus
 - **Traffic analysis leakage** -> default padding profiles plus bucket normalization
