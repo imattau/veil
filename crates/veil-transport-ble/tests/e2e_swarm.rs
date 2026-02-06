@@ -21,7 +21,13 @@ impl NodeHarness {
         let mut state = veil_node::state::NodeState::default();
         state.subscriptions.insert(tag);
 
-        let adapter = BleAdapter::new(MockBleLink::with_mtu(64), BleAdapterConfig::default());
+        let adapter = BleAdapter::new(
+            MockBleLink::with_mtu(64),
+            BleAdapterConfig {
+                max_payload_hint: None,
+                ..BleAdapterConfig::default()
+            },
+        );
         let fallback = InMemoryAdapter::default();
         let config = NodeRuntimeConfig::edge_forwarder_hot_cache_defaults();
 
