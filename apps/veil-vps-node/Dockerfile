@@ -11,6 +11,7 @@ RUN cargo build -p veil-vps-node --release
 FROM debian:bookworm-slim
 WORKDIR /opt/veil-vps-node
 COPY --from=builder /app/target/release/veil-vps-node /opt/veil-vps-node/veil-vps-node
+COPY apps/veil-vps-node/entrypoint.sh /opt/veil-vps-node/entrypoint.sh
 
 # Runtime defaults
 ENV VEIL_VPS_STATE_PATH=/opt/veil-vps-node/data/node_state.cbor
@@ -23,4 +24,4 @@ EXPOSE 5000/udp
 
 VOLUME ["/opt/veil-vps-node/data"]
 
-ENTRYPOINT ["/opt/veil-vps-node/veil-vps-node"]
+ENTRYPOINT ["/opt/veil-vps-node/entrypoint.sh"]

@@ -10,6 +10,16 @@ WebSocket + Tor SOCKS5 as fallback lanes.
 cargo run -p veil-vps-node
 ```
 
+## Docker Compose
+
+```bash
+docker compose -f apps/veil-vps-node/docker-compose.yml up -d --build
+```
+
+Notes:
+- Exposes UDP `5000` (QUIC) and TCP `9090` (health/metrics).
+- Use `PROXY_DOMAIN` (or proxy-specific env vars) to hint reverse proxy presence.
+
 ## Environment
 
 Required:

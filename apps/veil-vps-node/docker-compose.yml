@@ -1,0 +1,57 @@
+version: "3.9"
+
+services:
+  veil-vps-node:
+    build:
+      context: ../..
+      dockerfile: apps/veil-vps-node/Dockerfile
+    image: veil/veil-vps-node:latest
+    environment:
+      # Core paths
+      VEIL_VPS_STATE_PATH: /opt/veil-vps-node/data/node_state.cbor
+      VEIL_VPS_NODE_KEY_PATH: /opt/veil-vps-node/data/node_identity.key
+      VEIL_VPS_QUIC_CERT_PATH: /opt/veil-vps-node/data/quic_cert.der
+      VEIL_VPS_QUIC_KEY_PATH: /opt/veil-vps-node/data/quic_key.der
+      VEIL_VPS_QUIC_BIND: 0.0.0.0:5000
+
+      # Optional lanes and policy
+      VEIL_VPS_WS_URL: ${VEIL_VPS_WS_URL:-}
+      VEIL_VPS_WS_PEER: ${VEIL_VPS_WS_PEER:-}
+      VEIL_VPS_TOR_SOCKS_ADDR: ${VEIL_VPS_TOR_SOCKS_ADDR:-}
+      VEIL_VPS_TOR_PEERS: ${VEIL_VPS_TOR_PEERS:-}
+      VEIL_VPS_FAST_PEERS: ${VEIL_VPS_FAST_PEERS:-}
+      VEIL_VPS_MAX_CACHE_SHARDS: ${VEIL_VPS_MAX_CACHE_SHARDS:-200000}
+      VEIL_VPS_BUCKET_JITTER: ${VEIL_VPS_BUCKET_JITTER:-0}
+      VEIL_VPS_REQUIRED_SIGNED_NAMESPACES: ${VEIL_VPS_REQUIRED_SIGNED_NAMESPACES:-}
+      VEIL_VPS_ADAPTIVE_LANE_SCORING: ${VEIL_VPS_ADAPTIVE_LANE_SCORING:-1}
+      VEIL_VPS_SNAPSHOT_SECS: ${VEIL_VPS_SNAPSHOT_SECS:-60}
+      VEIL_VPS_TICK_MS: ${VEIL_VPS_TICK_MS:-50}
+      VEIL_VPS_HEALTH_PORT: ${VEIL_VPS_HEALTH_PORT:-9090}
+
+      # Reverse proxy hint (best-effort)
+      PROXY_DOMAIN: ${PROXY_DOMAIN:-}
+
+    ports:
+      - "5000:5000/udp"
+      - "9090:9090"
+    volumes:
+      - veil-vps-node-data:/opt/veil-vps-node/data
+    restart: unless-stopped
+
+# Optional proxy example (uncomment if you want a local Caddy reverse proxy)
+#  caddy:
+#    image: caddy:2
+#    ports:
+#      - "80:80"
+#      - "443:443"
+#    volumes:
+#      - ./Caddyfile:/etc/caddy/Caddyfile
+#      - caddy-data:/data
+#      - caddy-config:/config
+#    depends_on:
+#      - veil-vps-node
+
+volumes:
+  veil-vps-node-data:
+#  caddy-data:
+#  caddy-config:
