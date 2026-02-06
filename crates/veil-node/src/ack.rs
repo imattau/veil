@@ -99,7 +99,7 @@ pub fn build_ack_shard_bytes(
         epoch,
         encrypt_key,
         cipher,
-        ErasureCodingMode::Systematic,
+        ErasureCodingMode::HardenedNonSystematic,
     )
 }
 

@@ -98,7 +98,7 @@ pub fn object_to_shards(
         epoch,
         tag,
         object_root,
-        ErasureCodingMode::Systematic,
+        ErasureCodingMode::HardenedNonSystematic,
         0,
     )
 }
@@ -197,8 +197,11 @@ pub fn reconstruct_object(
     object_len: usize,
     expected_root: ObjectRoot,
 ) -> Result<Vec<u8>, FecError> {
-    let mut out =
-        reconstruct_object_padded_with_mode(shards, expected_root, ErasureCodingMode::Systematic)?;
+    let mut out = reconstruct_object_padded_with_mode(
+        shards,
+        expected_root,
+        ErasureCodingMode::HardenedNonSystematic,
+    )?;
     if object_len > out.len() {
         return Err(FecError::InvalidShardSet(
             "requested object length too large",
@@ -213,7 +216,11 @@ pub fn reconstruct_object_padded(
     shards: &[ShardV1],
     expected_root: ObjectRoot,
 ) -> Result<Vec<u8>, FecError> {
-    reconstruct_object_padded_with_mode(shards, expected_root, ErasureCodingMode::Systematic)
+    reconstruct_object_padded_with_mode(
+        shards,
+        expected_root,
+        ErasureCodingMode::HardenedNonSystematic,
+    )
 }
 
 /// Reconstructs object bytes (truncated to `object_len`) from a shard subset.

@@ -138,7 +138,7 @@ impl<'a, P> Default for RuntimePolicyHooks<'a, P> {
             classify_peer_tier: None,
             max_cache_shards: usize::MAX,
             wot_policy: None,
-            erasure_coding_mode: ErasureCodingMode::Systematic,
+            erasure_coding_mode: ErasureCodingMode::HardenedNonSystematic,
             bucket_jitter_extra_levels: 0,
             required_signed_namespaces: None,
         }
@@ -257,7 +257,7 @@ fn process_inbound<A: TransportAdapter>(
             let ack_mode = cache_policy
                 .as_ref()
                 .map(|p| p.erasure_coding_mode)
-                .unwrap_or(ErasureCodingMode::Systematic);
+                .unwrap_or(ErasureCodingMode::HardenedNonSystematic);
             let ack_bucket_jitter = cache_policy
                 .as_ref()
                 .map(|p| p.bucket_jitter_extra_levels)

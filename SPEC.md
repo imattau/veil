@@ -111,10 +111,11 @@ Defaults:
 ## 8. Erasure and Sharding
 
 - Implementations MUST select `(k, n, bucket)` using object size profile rules.
-- Reed-Solomon SHOULD be systematic so first `k` shards are data shards.
-- Implementations MAY offer a hardened non-systematic profile where source blocks
-  are deterministically transformed before RS encoding, so first `k` shards are
-  no longer direct plaintext-ciphertext chunks.
+- Reed-Solomon encoding MUST default to a hardened non-systematic profile where
+  source blocks are deterministically transformed before RS encoding, so first
+  `k` shards are no longer direct plaintext-ciphertext chunks.
+- Implementations MAY offer a systematic compatibility mode for constrained or
+  legacy environments.
 - Any set of `k` unique shard indices MUST be sufficient for decode.
 
 ## 9. Delivery and Forwarding

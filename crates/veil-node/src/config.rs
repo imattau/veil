@@ -83,7 +83,7 @@ impl Default for NodeRuntimeConfig {
             ack_backoff_steps: 2,
             ack_max_retries: 6,
             max_cache_shards: 100_000,
-            erasure_coding_mode: ErasureCodingMode::Systematic,
+            erasure_coding_mode: ErasureCodingMode::HardenedNonSystematic,
             bucket_jitter_extra_levels: 0,
             adaptive_lane_scoring: AdaptiveLaneScoringConfig::default(),
             required_signed_namespaces: HashSet::new(),

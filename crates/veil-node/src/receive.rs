@@ -161,7 +161,7 @@ pub fn receive_shard_with_policy(
     let erasure_mode = cache_policy
         .as_ref()
         .map(|p| p.erasure_coding_mode)
-        .unwrap_or(ErasureCodingMode::Systematic);
+        .unwrap_or(ErasureCodingMode::HardenedNonSystematic);
     let reconstructed = reconstruct_object_padded_with_mode(&collected, root, erasure_mode)?;
     let (object, _) = decode_object_cbor_prefix(&reconstructed)?;
 
@@ -428,7 +428,7 @@ mod tests {
             tier: TrustTier::Unknown,
             max_cache_shards: 1,
             wot_policy: &wot_policy,
-            erasure_coding_mode: ErasureCodingMode::Systematic,
+            erasure_coding_mode: ErasureCodingMode::HardenedNonSystematic,
             bucket_jitter_extra_levels: 0,
             required_signed_namespaces: None,
         };
@@ -510,7 +510,7 @@ mod tests {
             tier: TrustTier::Unknown,
             max_cache_shards: 100,
             wot_policy: &wot_policy,
-            erasure_coding_mode: ErasureCodingMode::Systematic,
+            erasure_coding_mode: ErasureCodingMode::HardenedNonSystematic,
             bucket_jitter_extra_levels: 0,
             required_signed_namespaces: Some(&required),
         };
