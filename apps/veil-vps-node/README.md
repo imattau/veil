@@ -20,6 +20,12 @@ Notes:
 - Exposes UDP `5000` (QUIC) and TCP `9090` (health/metrics).
 - Use `PROXY_DOMAIN` (or proxy-specific env vars) to hint reverse proxy presence.
 
+Enable built-in Caddy reverse proxy (only if you need it):
+
+```bash
+docker compose -f apps/veil-vps-node/docker-compose.yml --profile proxy up -d --build
+```
+
 ## Environment
 
 Required:

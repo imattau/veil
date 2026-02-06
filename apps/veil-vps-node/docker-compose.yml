@@ -38,20 +38,20 @@ services:
       - veil-vps-node-data:/opt/veil-vps-node/data
     restart: unless-stopped
 
-# Optional proxy example (uncomment if you want a local Caddy reverse proxy)
-#  caddy:
-#    image: caddy:2
-#    ports:
-#      - "80:80"
-#      - "443:443"
-#    volumes:
-#      - ./Caddyfile:/etc/caddy/Caddyfile
-#      - caddy-data:/data
-#      - caddy-config:/config
-#    depends_on:
-#      - veil-vps-node
+  caddy:
+    image: caddy:2
+    profiles: ["proxy"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - veil-vps-node
 
 volumes:
   veil-vps-node-data:
-#  caddy-data:
-#  caddy-config:
+  caddy-data:
+  caddy-config:
