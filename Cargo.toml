@@ -14,6 +14,7 @@ members = [
   "crates/veil-sim",
   "crates/veil-wasm",
   "crates/veil-schema-feed",
+  "packages/veil-sdk-dart/rust",
 ]
 resolver = "2"
 

@@ -27,3 +27,15 @@ interfaces; the Rust bridge functions are stubbed for now.
 2. Wire `VeilClient` to call the bridge for validation and reconstruction.
 3. Add persistence adapters (Sqflite / drift / IndexedDB).
 
+## Rust bridge (FRB) layout
+
+Rust crate lives at `packages/veil-sdk-dart/rust` and exposes functions
+annotated with `#[frb]`. Generate Dart bindings with flutter_rust_bridge:
+
+```bash
+# From repo root (example; adjust for your FRB tooling)
+cargo build -p veil_sdk_bridge
+```
+
+Then run `flutter_rust_bridge_codegen` with your project paths to produce
+`lib/src/bridge/veil_bridge.g.dart`.
