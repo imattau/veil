@@ -31,6 +31,14 @@ npm run dev
 This starts Vite and Electron. The app loads `ELECTRON_START_URL` pointing at the
 Vite dev server.
 
+## Package (Linux)
+
+```bash
+npm run package
+```
+
+Output will be in `apps/veil-desktop/dist/` (AppImage by default).
+
 ## Usage
 
 - Set the WebSocket URL of your VEIL relay/node.
