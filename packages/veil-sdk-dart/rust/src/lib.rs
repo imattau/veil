@@ -15,6 +15,7 @@ pub mod api {
     use veil_core::tags::{current_epoch, derive_feed_tag, derive_rv_tag};
     use veil_core::types::{Epoch, Namespace};
     use veil_core::{ObjectRoot, Tag};
+    use veil_fec::sharder::reconstruct_object_padded;
 
     #[derive(Clone, Debug)]
     #[frb]
@@ -137,5 +138,19 @@ pub mod api {
     pub fn derive_object_root_hex(object_bytes: Vec<u8>) -> String {
         let root: ObjectRoot = blake3_32(&object_bytes);
         hex_encode(&root)
+    }
+
+    #[frb]
+    pub fn reconstruct_object_padded_from_shards(
+        shard_bytes: Vec<Vec<u8>>,
+        expected_root_hex: String,
+    ) -> Result<Vec<u8>, String> {
+        let expected_root = hex_decode_32(&expected_root_hex)?;
+        let mut shards = Vec::with_capacity(shard_bytes.len());
+        for bytes in shard_bytes {
+            let shard = decode_shard_cbor(&bytes).map_err(|e| e.to_string())?;
+            shards.push(shard);
+        }
+        reconstruct_object_padded(&shards, expected_root).map_err(|e| e.to_string())
     }
 }

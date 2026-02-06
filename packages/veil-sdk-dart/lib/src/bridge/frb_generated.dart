@@ -70,7 +70,7 @@ class VeilBridgeApi
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 287533687;
+  int get rustContentHash => 1815267900;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -101,6 +101,11 @@ abstract class VeilBridgeApiApi extends BaseApi {
     required String recipientPubkeyHex,
     required int epoch,
     required int namespace,
+  });
+
+  Future<Uint8List> crateApiReconstructObjectPaddedFromShards({
+    required List<Uint8List> shardBytes,
+    required String expectedRootHex,
   });
 }
 
@@ -305,6 +310,41 @@ class VeilBridgeApiApiImpl extends VeilBridgeApiApiImplPlatform
     argNames: ["recipientPubkeyHex", "epoch", "namespace"],
   );
 
+  @override
+  Future<Uint8List> crateApiReconstructObjectPaddedFromShards({
+    required List<Uint8List> shardBytes,
+    required String expectedRootHex,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_list_prim_u_8_strict(shardBytes, serializer);
+          sse_encode_String(expectedRootHex, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 7,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiReconstructObjectPaddedFromShardsConstMeta,
+        argValues: [shardBytes, expectedRootHex],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiReconstructObjectPaddedFromShardsConstMeta =>
+      const TaskConstMeta(
+        debugName: "reconstruct_object_padded_from_shards",
+        argNames: ["shardBytes", "expectedRootHex"],
+      );
+
   @protected
   String dco_decode_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -315,6 +355,12 @@ class VeilBridgeApiApiImpl extends VeilBridgeApiApiImplPlatform
   bool dco_decode_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as bool;
+  }
+
+  @protected
+  List<Uint8List> dco_decode_list_list_prim_u_8_strict(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_list_prim_u_8_strict).toList();
   }
 
   @protected
@@ -425,6 +471,20 @@ class VeilBridgeApiApiImpl extends VeilBridgeApiApiImplPlatform
   bool sse_decode_bool(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getUint8() != 0;
+  }
+
+  @protected
+  List<Uint8List> sse_decode_list_list_prim_u_8_strict(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <Uint8List>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_list_prim_u_8_strict(deserializer));
+    }
+    return ans_;
   }
 
   @protected
@@ -563,6 +623,18 @@ class VeilBridgeApiApiImpl extends VeilBridgeApiApiImplPlatform
   void sse_encode_bool(bool self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putUint8(self ? 1 : 0);
+  }
+
+  @protected
+  void sse_encode_list_list_prim_u_8_strict(
+    List<Uint8List> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_list_prim_u_8_strict(item, serializer);
+    }
   }
 
   @protected

@@ -46,6 +46,14 @@ Future<String> deriveObjectRootHex({required List<int> objectBytes}) =>
       objectBytes: objectBytes,
     );
 
+Future<Uint8List> reconstructObjectPaddedFromShards({
+  required List<Uint8List> shardBytes,
+  required String expectedRootHex,
+}) => VeilBridgeApi.instance.api.crateApiReconstructObjectPaddedFromShards(
+  shardBytes: shardBytes,
+  expectedRootHex: expectedRootHex,
+);
+
 class ObjectMeta {
   final int version;
   final int namespace;

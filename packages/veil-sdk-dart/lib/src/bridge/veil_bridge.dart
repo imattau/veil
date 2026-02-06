@@ -13,7 +13,10 @@ class VeilBridge {
     VeilBridgeApi.dispose();
   }
 
-  Future<TagHex> deriveFeedTagHex(String publisherPubkeyHex, int namespace) async {
+  Future<TagHex> deriveFeedTagHex(
+    String publisherPubkeyHex,
+    int namespace,
+  ) async {
     return frb_api.deriveFeedTagHex(
       publisherPubkeyHex: publisherPubkeyHex,
       namespace: namespace,

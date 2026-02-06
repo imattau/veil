@@ -1,5 +1,7 @@
 import "dart:async";
+import "dart:typed_data";
 
+import "bridge/api.dart" as frb_api;
 import "bridge/veil_bridge.dart";
 import "cache/shard_cache_store.dart";
 import "lanes/lane.dart";
@@ -8,12 +10,14 @@ import "models/veil_types.dart";
 class VeilClientHooks {
   final void Function(String peer, ShardMeta meta)? onShardMeta;
   final void Function(String objectRootHex, int have, int need)? onReconstructable;
+  final void Function(String objectRootHex, Uint8List bytes)? onReconstructed;
   final void Function(String tagHex)? onIgnoredUnsubscribed;
   final void Function(String peer, Object error)? onDecodeError;
 
   const VeilClientHooks({
     this.onShardMeta,
     this.onReconstructable,
+    this.onReconstructed,
     this.onIgnoredUnsubscribed,
     this.onDecodeError,
   });
@@ -98,6 +102,11 @@ class VeilClient {
       bucket[meta.index] = msg.bytes;
       if (bucket.length >= meta.k) {
         hooks.onReconstructable?.call(meta.objectRootHex, bucket.length, meta.k);
+        final reconstructed = await frb_api.reconstructObjectPaddedFromShards(
+          shardBytes: bucket.values.map((b) => Uint8List.fromList(b)).toList(),
+          expectedRootHex: meta.objectRootHex,
+        );
+        hooks.onReconstructed?.call(meta.objectRootHex, reconstructed);
         _inbox.remove(meta.objectRootHex);
       }
 
