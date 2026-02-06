@@ -1,0 +1,20 @@
+[package]
+name = "veil-transport-ble"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+
+[dependencies]
+blake3 = { workspace = true }
+thiserror = { workspace = true }
+veil-transport = { path = "../veil-transport" }
+btleplug = { version = "0.11", optional = true }
+futures-util = { version = "0.3", optional = true }
+tokio = { version = "1", optional = true, features = ["rt", "sync", "time", "macros"] }
+uuid = { version = "1", optional = true }
+
+[features]
+btleplug = ["dep:btleplug", "dep:futures-util", "dep:tokio", "dep:uuid"]
+
+[dev-dependencies]
+rand = { workspace = true }

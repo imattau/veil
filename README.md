@@ -26,6 +26,7 @@ VEIL is designed to be practical first:
 - `crates/veil-node` - runtime, forwarding, cache, ACK handling
 - `crates/veil-transport` - transport adapter abstractions
 - `crates/veil-transport-quic` - QUIC fast-lane `TransportAdapter`
+- `crates/veil-transport-ble` - BLE mesh adapter skeleton (chunked frames + mock link)
 - `crates/veil-transport-websocket` - websocket `TransportAdapter` implementation
 - `crates/veil-transport-tor` - Tor SOCKS5 fallback `TransportAdapter`
 - `crates/veil-sim` - e2e, performance, stress, and memory tests
@@ -70,6 +71,13 @@ Profile examples:
 cargo run -p veil-sim --example edge_forwarder_hot_cache
 cargo run -p veil-sim --example bootstrap_peer
 cargo run -p veil-sim --example transport_multi_lane_runtime
+cargo run --example transport_ble_mock
+cargo run --example transport_ble_runtime
+```
+
+- Real BLE (btleplug backend):
+```bash
+cargo run --example transport_ble_btleplug --features veil-transport-ble/btleplug
 ```
 
 - `edge_forwarder_hot_cache`: edge forwarder + hot cache defaults for VPS-style hosts.
