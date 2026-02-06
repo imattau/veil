@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
 void main() {
@@ -32,15 +33,24 @@ class _VeilHomePageState extends State<VeilHomePage> {
     peerId: 'flutter-client',
   );
 
-  late final VeilClient _client;
+  VeilClient? _client;
   final List<String> _events = [];
 
   @override
   void initState() {
     super.initState();
-    _client = VeilClient(
+    _initClient();
+  }
+
+  Future<void> _initClient() async {
+    final db = await openDatabase('veil_cache.db');
+    final store = SqfliteShardCacheStore(db: db);
+    await store.init();
+
+    final client = VeilClient(
       fastLane: _lane,
       bridge: _bridge,
+      cacheStore: store,
       hooks: VeilClientHooks(
         onShardMeta: (peer, meta) {
           setState(() => _events.insert(0, 'Shard from $peer tag=${meta.tagHex}'));
@@ -50,13 +60,14 @@ class _VeilHomePageState extends State<VeilHomePage> {
         },
       ),
     );
-    _client.subscribe('');
-    _client.start();
+    client.subscribe('');
+    client.start();
+    setState(() => _client = client);
   }
 
   @override
   void dispose() {
-    _client.stop();
+    _client?.stop();
     super.dispose();
   }
 

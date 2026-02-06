@@ -8,6 +8,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  sqflite: ^2.3.3
   veil_sdk:
     path: ../../packages/veil-sdk-dart
 
