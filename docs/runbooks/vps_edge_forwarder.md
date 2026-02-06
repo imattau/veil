@@ -73,6 +73,7 @@ Health check, metrics, peers:
 - Local HTTP health endpoint: `http://127.0.0.1:9090/health`
 - Metrics endpoint: `http://127.0.0.1:9090/metrics`
 - Peers endpoint: `http://127.0.0.1:9090/peers`
+  - Optional query params: `limit` (max 1000), `prefix` (e.g., `ws:` or `tor:`)
 
 ## 5) Recovery
 

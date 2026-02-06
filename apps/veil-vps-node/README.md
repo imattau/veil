@@ -17,7 +17,7 @@ docker compose -f apps/veil-vps-node/docker-compose.yml up -d --build
 ```
 
 Notes:
-- Exposes UDP `5000` (QUIC) and TCP `9090` (health/metrics).
+- Exposes UDP `5000` (QUIC) and TCP `9090` (health/metrics/peers).
 - Use `PROXY_DOMAIN` (or proxy-specific env vars) to hint reverse proxy presence.
 
 Enable built-in Caddy reverse proxy (only if you need it):
@@ -63,3 +63,4 @@ Optional:
 - QUIC requires trusted peer certificates. Provide peer certs via
   `VEIL_VPS_QUIC_TRUSTED_CERTS` if you expect to connect to other nodes.
 - WebSocket is best-effort outbound; Tor SOCKS5 is outbound-only in this profile.
+- `/peers` supports optional query params: `limit` (max 1000), `prefix` (e.g., `ws:` or `tor:`).

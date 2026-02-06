@@ -487,8 +487,33 @@ fn start_health_server(
                     );
                     ("200 OK", body)
                 } else if is_peers {
+                    let mut limit = 200usize;
+                    let mut prefix: Option<String> = None;
+                    if let Some(line) = req.lines().next() {
+                        if let Some(path) = line.split_whitespace().nth(1) {
+                            if let Some(query) = path.split('?').nth(1) {
+                                for pair in query.split('&') {
+                                    let mut parts = pair.splitn(2, '=');
+                                    let key = parts.next().unwrap_or("");
+                                    let value = parts.next().unwrap_or("");
+                                    if key == "limit" {
+                                        if let Ok(parsed) = value.parse::<usize>() {
+                                            limit = parsed.min(1000);
+                                        }
+                                    } else if key == "prefix" {
+                                        if !value.is_empty() {
+                                            prefix = Some(value.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let peers = peer_snapshot.lock().unwrap_or_else(|e| e.into_inner());
-                    let body = peers.join("\n");
+                    let iter = peers.iter().filter(|peer| {
+                        prefix.as_ref().map(|p| peer.starts_with(p)).unwrap_or(true)
+                    });
+                    let body = iter.take(limit).cloned().collect::<Vec<_>>().join("\n");
                     ("200 OK", body)
                 } else {
                     ("404 Not Found", "not found".to_string())
