@@ -69,9 +69,10 @@ You can tail systemd logs or stdout for:
 - snapshot write failures
 - adapter startup errors
 
-Health check & metrics:
+Health check, metrics, peers:
 - Local HTTP health endpoint: `http://127.0.0.1:9090/health`
 - Metrics endpoint: `http://127.0.0.1:9090/metrics`
+- Peers endpoint: `http://127.0.0.1:9090/peers`
 
 ## 5) Recovery
 

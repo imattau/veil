@@ -53,7 +53,7 @@ Optional:
 - `VEIL_VPS_TOR_PEERS` (comma-separated `host:port` destination peers)
 - `VEIL_VPS_SNAPSHOT_SECS` (default `60`)
 - `VEIL_VPS_TICK_MS` (default `50`)
-- `VEIL_VPS_HEALTH_PORT` (default `9090`, set `0` to disable `/health` and `/metrics`)
+- `VEIL_VPS_HEALTH_PORT` (default `9090`, set `0` to disable `/health`, `/metrics`, and `/peers`)
 - `VEIL_VPS_MAX_CACHE_SHARDS` (default `200000`)
 - `VEIL_VPS_BUCKET_JITTER` (default `0`)
 - `VEIL_VPS_REQUIRED_SIGNED_NAMESPACES` (comma-separated namespace ids)

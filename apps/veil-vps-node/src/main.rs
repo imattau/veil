@@ -445,7 +445,11 @@ struct MetricsState {
     last_fallback_inbound: AtomicU64,
 }
 
-fn start_health_server(port: u16, metrics: Arc<MetricsState>) {
+fn start_health_server(
+    port: u16,
+    metrics: Arc<MetricsState>,
+    peer_snapshot: Arc<Mutex<Vec<String>>>,
+) {
     if port == 0 {
         return;
     }
@@ -464,6 +468,7 @@ fn start_health_server(port: u16, metrics: Arc<MetricsState>) {
                 let req = String::from_utf8_lossy(&buf);
                 let ok = req.starts_with("GET /health") || req.starts_with("GET /healthz");
                 let is_metrics = req.starts_with("GET /metrics");
+                let is_peers = req.starts_with("GET /peers");
                 let (status, body) = if ok {
                     ("200 OK", "ok".to_string())
                 } else if is_metrics {
@@ -480,6 +485,10 @@ fn start_health_server(port: u16, metrics: Arc<MetricsState>) {
                         metrics.last_fast_inbound.load(Ordering::Relaxed),
                         metrics.last_fallback_inbound.load(Ordering::Relaxed),
                     );
+                    ("200 OK", body)
+                } else if is_peers {
+                    let peers = peer_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+                    let body = peers.join("\n");
                     ("200 OK", body)
                 } else {
                     ("404 Not Found", "not found".to_string())
@@ -669,7 +678,12 @@ fn main() {
     let health_log_interval = Duration::from_secs(30);
 
     let metrics = Arc::new(MetricsState::default());
-    start_health_server(health_port, Arc::clone(&metrics));
+    let peer_snapshot: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    start_health_server(
+        health_port,
+        Arc::clone(&metrics),
+        Arc::clone(&peer_snapshot),
+    );
 
     let mut now_step = 0_u64;
     loop {
@@ -721,6 +735,10 @@ fn main() {
             merged.dedup();
             if let Some(conn) = peer_db.as_ref() {
                 save_peer_list(conn, &merged);
+            }
+            {
+                let mut guard = peer_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+                *guard = merged;
             }
             last_snapshot = Instant::now();
         }
