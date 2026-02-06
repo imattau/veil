@@ -18,6 +18,7 @@ interfaces; the Rust bridge functions are stubbed for now.
 - BLE lane: FlutterReactiveBle-backed lane with MTU chunking helpers.
 - Client runtime: loop with shard decoding + reconstruction + payload decrypt.
 - Persistence adapters: sqflite + IndexedDB (web).
+- Cache eviction: rarity-biased (evict most common first, then oldest).
 
 ## Next steps
 
@@ -27,6 +28,11 @@ interfaces; the Rust bridge functions are stubbed for now.
    - `object_to_shards`, `reconstruct_object` (veil-fec)
 2. Wire `VeilClient` to call the bridge for validation and reconstruction.
 3. Add persistence adapters (Sqflite / drift / IndexedDB).
+
+## Web support
+
+The FRB bridge generates web bindings, but you must build the Rust crate to Wasm
+for Flutter Web usage. Without that, `VeilBridge.init()` will fail in browsers.
 
 ## Rust bridge (FRB) layout
 

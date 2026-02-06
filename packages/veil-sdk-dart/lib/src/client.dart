@@ -26,6 +26,16 @@ class VeilClientHooks {
   });
 }
 
+class VeilClientOptions {
+  final int maxCacheEntries;
+  final Set<int> requiredSignedNamespaces;
+
+  const VeilClientOptions({
+    this.maxCacheEntries = 50_000,
+    this.requiredSignedNamespaces = const {},
+  });
+}
+
 class VeilClient {
   final VeilLane fastLane;
   final VeilLane? fallbackLane;
@@ -34,10 +44,13 @@ class VeilClient {
   final int pollIntervalMs;
   final VeilClientHooks hooks;
   final List<int>? decryptKey;
+  final VeilClientOptions options;
 
   final Set<TagHex> _subscriptions = {};
   final List<String> _forwardPeers = [];
   final Map<String, Map<int, List<int>>> _inbox = {};
+  final Map<String, int> _cacheLastSeen = {};
+  final Map<String, int> _cacheSeenCount = {};
   bool _running = false;
   Timer? _timer;
 
@@ -49,6 +62,7 @@ class VeilClient {
     this.pollIntervalMs = 50,
     this.hooks = const VeilClientHooks(),
     this.decryptKey,
+    this.options = const VeilClientOptions(),
   })  : cacheStore = cacheStore ?? MemoryShardCacheStore(),
         bridge = bridge ?? const VeilBridge();
 
@@ -90,6 +104,34 @@ class VeilClient {
     }
   }
 
+  Future<void> _evictIfNeeded() async {
+    final maxEntries = options.maxCacheEntries;
+    if (maxEntries <= 0) {
+      return;
+    }
+    if (_cacheLastSeen.length <= maxEntries) {
+      return;
+    }
+
+    final entries = _cacheLastSeen.entries.toList();
+    entries.sort((a, b) {
+      final countA = _cacheSeenCount[a.key] ?? 0;
+      final countB = _cacheSeenCount[b.key] ?? 0;
+      if (countA != countB) {
+        return countB.compareTo(countA); // evict most common first
+      }
+      return a.value.compareTo(b.value); // then oldest
+    });
+
+    final overflow = entries.length - maxEntries;
+    for (var i = 0; i < overflow; i += 1) {
+      final key = entries[i].key;
+      await cacheStore.delete(key);
+      _cacheLastSeen.remove(key);
+      _cacheSeenCount.remove(key);
+    }
+  }
+
   Future<void> _processInbound(LaneMessage msg) async {
     try {
       final meta = await bridge.decodeShardMeta(msg.bytes);
@@ -102,6 +144,9 @@ class VeilClient {
 
       final key = "${meta.objectRootHex}:${meta.index}";
       await cacheStore.set(key, msg.bytes);
+      _cacheLastSeen[key] = DateTime.now().millisecondsSinceEpoch;
+      _cacheSeenCount[key] = (_cacheSeenCount[key] ?? 0) + 1;
+      await _evictIfNeeded();
 
       final bucket = _inbox.putIfAbsent(meta.objectRootHex, () => {});
       bucket[meta.index] = msg.bytes;
@@ -115,6 +160,12 @@ class VeilClient {
 
         final objMeta = await bridge.decodeObjectMeta(reconstructed);
         hooks.onObjectMeta?.call(meta.objectRootHex, objMeta);
+
+        if (options.requiredSignedNamespaces.contains(objMeta.namespace) && !objMeta.signed) {
+          _inbox.remove(meta.objectRootHex);
+          return;
+        }
+
         if (decryptKey != null) {
           final payload = await bridge.decryptObjectPayload(reconstructed, decryptKey!);
           hooks.onPayload?.call(meta.objectRootHex, payload);
