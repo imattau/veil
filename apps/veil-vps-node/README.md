@@ -26,6 +26,12 @@ Enable built-in Caddy reverse proxy (only if you need it):
 docker compose -f apps/veil-vps-node/docker-compose.yml --profile proxy up -d --build
 ```
 
+Copy the compose env template:
+
+```bash
+cp apps/veil-vps-node/.env.example apps/veil-vps-node/.env
+```
+
 ## Environment
 
 Required:
