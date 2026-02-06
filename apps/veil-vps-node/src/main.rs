@@ -18,15 +18,15 @@ use veil_node::config::{AdaptiveLaneScoringConfig, NodeRuntimeConfig};
 use veil_node::persistence::{load_state_or_default, save_state_to_path};
 use veil_node::service::{NodeRuntime, NodeRuntimeCallbacks};
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
+#[cfg(feature = "ble-btleplug")]
+use veil_transport_ble::btleplug_backend::{BtleplugLink, BtleplugLinkConfig};
+#[cfg(all(feature = "ble", not(feature = "ble-btleplug")))]
+use veil_transport_ble::MockBleLink;
+#[cfg(feature = "ble")]
+use veil_transport_ble::{BleAdapter, BleAdapterConfig, BlePeer};
 use veil_transport_quic::{QuicAdapter, QuicAdapterConfig, QuicIdentity};
 use veil_transport_tor::{TorSocksAdapter, TorSocksAdapterConfig};
 use veil_transport_websocket::{WebSocketAdapter, WebSocketAdapterConfig};
-#[cfg(feature = "ble")]
-use veil_transport_ble::{BleAdapter, BleAdapterConfig, BlePeer};
-#[cfg(all(feature = "ble", not(feature = "ble-btleplug")))]
-use veil_transport_ble::MockBleLink;
-#[cfg(feature = "ble-btleplug")]
-use veil_transport_ble::btleplug_backend::{BtleplugLink, BtleplugLinkConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum FallbackPeer {

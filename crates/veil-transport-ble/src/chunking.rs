@@ -69,23 +69,14 @@ impl BleAssembler {
     }
 }
 
-pub fn split_into_frames(
-    shard_id: [u8; 32],
-    payload: &[u8],
-    mtu: usize,
-) -> Vec<BleFrame> {
+pub fn split_into_frames(shard_id: [u8; 32], payload: &[u8], mtu: usize) -> Vec<BleFrame> {
     let header_len = crate::protocol::BLE_FRAME_HEADER_LEN;
     let max_payload = mtu.saturating_sub(header_len).max(1);
     let mut frames = Vec::new();
     let total = ((payload.len() + max_payload - 1) / max_payload).max(1) as u16;
 
     for (index, chunk) in payload.chunks(max_payload).enumerate() {
-        frames.push(BleFrame::new(
-            shard_id,
-            index as u16,
-            total,
-            chunk.to_vec(),
-        ));
+        frames.push(BleFrame::new(shard_id, index as u16, total, chunk.to_vec()));
     }
 
     if frames.is_empty() {

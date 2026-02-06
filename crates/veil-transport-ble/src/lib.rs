@@ -12,10 +12,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
-pub mod chunking;
-pub mod protocol;
 #[cfg(feature = "btleplug")]
 pub mod btleplug_backend;
+pub mod chunking;
+pub mod protocol;
 
 use chunking::{split_into_frames, BleAssembler};
 use protocol::BleFrame;
@@ -211,7 +211,11 @@ impl BleLink for MockBleLink {
     }
 
     fn mtu(&self) -> usize {
-        if self.mtu == 0 { 200 } else { self.mtu }
+        if self.mtu == 0 {
+            200
+        } else {
+            self.mtu
+        }
     }
 }
 

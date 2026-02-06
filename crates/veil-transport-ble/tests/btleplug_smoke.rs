@@ -10,7 +10,10 @@ fn btleplug_link_smoke() {
         veil_transport_ble::btleplug_backend::BtleplugLinkConfig::default(),
     );
 
-    assert!(link.is_ok(), "btleplug link should initialize when BLE is available");
+    assert!(
+        link.is_ok(),
+        "btleplug link should initialize when BLE is available"
+    );
 }
 
 #[cfg(not(feature = "btleplug"))]

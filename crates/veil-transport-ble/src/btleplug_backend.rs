@@ -66,7 +66,12 @@ impl BtleplugLink {
                 Ok(rt) => rt,
                 Err(_) => return,
             };
-            runtime.block_on(run_worker(config_clone, outbound_rx, inbound_tx, shutdown_rx));
+            runtime.block_on(run_worker(
+                config_clone,
+                outbound_rx,
+                inbound_tx,
+                shutdown_rx,
+            ));
         });
 
         Ok(Self {
@@ -128,7 +133,9 @@ async fn run_worker(
     };
 
     let peripherals = Arc::new(Mutex::new(HashMap::<String, Peripheral>::new()));
-    let notify_tasks = Arc::new(Mutex::new(HashMap::<String, tokio::task::JoinHandle<()>>::new()));
+    let notify_tasks = Arc::new(Mutex::new(
+        HashMap::<String, tokio::task::JoinHandle<()>>::new(),
+    ));
 
     if adapter
         .start_scan(btleplug::api::ScanFilter::default())
@@ -194,7 +201,10 @@ async fn handle_event(
     }
     let _ = peripheral.discover_services().await;
 
-    peripherals.lock().unwrap().insert(addr.clone(), peripheral.clone());
+    peripherals
+        .lock()
+        .unwrap()
+        .insert(addr.clone(), peripheral.clone());
 
     if notify_tasks.lock().unwrap().contains_key(&addr) {
         return;
@@ -243,14 +253,16 @@ async fn send_to_peer(
         Err(_) => return,
     };
 
-    let peripheral = {
-        peripherals.lock().unwrap().get(&peer.addr).cloned()
-    };
+    let peripheral = { peripherals.lock().unwrap().get(&peer.addr).cloned() };
 
-    let Some(peripheral) = peripheral else { return; };
+    let Some(peripheral) = peripheral else {
+        return;
+    };
     let chars = peripheral.characteristics();
     let Some(ch) = chars.iter().find(|c| c.uuid == char_uuid).cloned() else {
         return;
     };
-    let _ = peripheral.write(&ch, payload, WriteType::WithoutResponse).await;
+    let _ = peripheral
+        .write(&ch, payload, WriteType::WithoutResponse)
+        .await;
 }

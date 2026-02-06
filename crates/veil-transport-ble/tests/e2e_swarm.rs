@@ -13,7 +13,12 @@ use veil_transport_ble::{BleAdapter, BleAdapterConfig, BlePeer, MockBleLink};
 
 struct NodeHarness {
     name: String,
-    runtime: NodeRuntime<BleAdapter<MockBleLink>, InMemoryAdapter, XChaCha20Poly1305Cipher, Ed25519Verifier>,
+    runtime: NodeRuntime<
+        BleAdapter<MockBleLink>,
+        InMemoryAdapter,
+        XChaCha20Poly1305Cipher,
+        Ed25519Verifier,
+    >,
 }
 
 impl NodeHarness {
@@ -84,19 +89,17 @@ fn ble_swarm_propagates_shard() {
 
     let object_bytes = vec![0xAB; 2048];
     let object_root = derive_object_root(&object_bytes);
-    let shards = object_to_shards(
-        &object_bytes,
-        Namespace(1),
-        Epoch(1),
-        tag,
-        object_root,
-    )
-    .expect("shards");
+    let shards =
+        object_to_shards(&object_bytes, Namespace(1), Epoch(1), tag, object_root).expect("shards");
     let shard = shards.first().expect("shard");
     let shard_bytes = encode_shard_cbor(shard).expect("encode shard");
     let sid = shard_id(shard).expect("shard id");
 
-    let frames = split_into_frames(blake3::hash(&shard_bytes).as_bytes().to_owned(), &shard_bytes, 64);
+    let frames = split_into_frames(
+        blake3::hash(&shard_bytes).as_bytes().to_owned(),
+        &shard_bytes,
+        64,
+    );
     let origin = BlePeer::new("origin");
     for frame in frames {
         nodes[0]
