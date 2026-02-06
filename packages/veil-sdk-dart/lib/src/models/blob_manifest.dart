@@ -14,10 +14,10 @@ class BlobChunkRefV1 {
   });
 
   Map<String, dynamic> toCborMap() => {
-    "objectRootHex": objectRootHex,
-    "tagHex": tagHex,
-    "size": size,
-  };
+        "objectRootHex": objectRootHex,
+        "tagHex": tagHex,
+        "size": size,
+      };
 }
 
 class BlobManifestV1 {
@@ -38,13 +38,13 @@ class BlobManifestV1 {
   });
 
   Map<String, dynamic> toCborMap() => {
-    "version": version,
-    "mime": mime,
-    "size": size,
-    "hashHex": hashHex,
-    "chunks": chunks.map((c) => c.toCborMap()).toList(),
-    if (filename != null) "filename": filename,
-  };
+        "version": version,
+        "mime": mime,
+        "size": size,
+        "hashHex": hashHex,
+        "chunks": chunks.map((c) => c.toCborMap()).toList(),
+        if (filename != null) "filename": filename,
+      };
 }
 
 class DirectoryEntryV1 {
@@ -63,9 +63,9 @@ class DirectoryBundleV1 {
   const DirectoryBundleV1({this.version = 1, required this.entries});
 
   Map<String, dynamic> toCborMap() => {
-    "version": version,
-    "entries": entries.map((e) => e.toCborMap()).toList(),
-  };
+        "version": version,
+        "entries": entries.map((e) => e.toCborMap()).toList(),
+      };
 }
 
 Uint8List encodeBlobManifestV1(BlobManifestV1 manifest) {

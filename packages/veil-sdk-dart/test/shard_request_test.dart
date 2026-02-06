@@ -25,10 +25,20 @@ class _StubBridge extends VeilBridge {
 }
 
 void main() {
+  String repeatHex(String value, int times) {
+    final buffer = StringBuffer();
+    for (var i = 0; i < times; i += 1) {
+      buffer.write(value);
+    }
+    return buffer.toString();
+  }
+
   test("encodes and decodes shard requests", () {
+    final root = repeatHex("11", 32);
+    final tag = repeatHex("22", 32);
     final payload = ShardRequestPayload(
-      objectRootHex: "11" * 32,
-      tagHex: "22" * 32,
+      objectRootHex: root,
+      tagHex: tag,
       k: 6,
       n: 10,
       want: [1, 2, 3],
@@ -59,12 +69,15 @@ void main() {
   });
 
   test("encodes blob manifest", () {
+    final root = repeatHex("11", 32);
+    final tag = repeatHex("22", 32);
+    final hash = repeatHex("00", 32);
     final manifest = BlobManifestV1(
       mime: "image/png",
       size: 10,
-      hashHex: "00" * 32,
-      chunks: const [
-        BlobChunkRefV1(objectRootHex: "11" * 32, tagHex: "22" * 32, size: 10),
+      hashHex: hash,
+      chunks: [
+        BlobChunkRefV1(objectRootHex: root, tagHex: tag, size: 10),
       ],
     );
     final bytes = encodeBlobManifestV1(manifest);

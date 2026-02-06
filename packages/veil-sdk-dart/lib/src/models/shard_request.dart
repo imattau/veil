@@ -99,10 +99,8 @@ ShardRequestPayload? decodeShardRequest(Uint8List bytes) {
   if (wantRaw is! List) {
     return null;
   }
-  final want = wantRaw
-      .whereType<int>()
-      .where((idx) => idx >= 0 && idx < n)
-      .toList();
+  final want =
+      wantRaw.whereType<int>().where((idx) => idx >= 0 && idx < n).toList();
   if (want.isEmpty) {
     return null;
   }

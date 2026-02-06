@@ -4,8 +4,8 @@ Future<List<String>> deriveRvTagWindowHex(
   String recipientPubkeyHex,
   int nowSeconds,
   int namespace, {
-  int epochSeconds = 86_400,
-  int overlapSeconds = 3_600,
+  int epochSeconds = 86400,
+  int overlapSeconds = 3600,
   VeilBridge? bridge,
 }) async {
   final client = bridge ?? const VeilBridge();

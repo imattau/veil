@@ -2,6 +2,7 @@ import "dart:typed_data";
 
 import "api.dart" as frb_api;
 import "frb_generated.dart";
+import "package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart";
 import "../models/veil_types.dart";
 
 class VeilBridge {

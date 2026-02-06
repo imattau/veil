@@ -10,7 +10,7 @@ import "models/veil_types.dart";
 class VeilClientHooks {
   final void Function(String peer, ShardMeta meta)? onShardMeta;
   final void Function(String objectRootHex, int have, int need)?
-  onReconstructable;
+      onReconstructable;
   final void Function(String objectRootHex, Uint8List bytes)? onReconstructed;
   final void Function(String objectRootHex, ObjectMeta meta)? onObjectMeta;
   final void Function(String objectRootHex, Uint8List payload)? onPayload;
@@ -38,7 +38,7 @@ class VeilClientOptions {
   final int maxForwardHops;
 
   const VeilClientOptions({
-    this.maxCacheEntries = 50_000,
+    this.maxCacheEntries = 50000,
     this.requiredSignedNamespaces = const {},
     this.enableShardRequests = true,
     this.requestFanout = 2,
@@ -77,8 +77,8 @@ class VeilClient {
     this.hooks = const VeilClientHooks(),
     this.decryptKey,
     this.options = const VeilClientOptions(),
-  }) : cacheStore = cacheStore ?? MemoryShardCacheStore(),
-       bridge = bridge ?? const VeilBridge();
+  })  : cacheStore = cacheStore ?? MemoryShardCacheStore(),
+        bridge = bridge ?? const VeilBridge();
 
   void subscribe(TagHex tagHex) => _subscriptions.add(tagHex.toLowerCase());
   void unsubscribe(TagHex tagHex) =>
