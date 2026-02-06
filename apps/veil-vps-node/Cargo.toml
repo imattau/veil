@@ -6,6 +6,7 @@ license = "GPL-2.0-or-later"
 
 [dependencies]
 rand = { workspace = true }
+rusqlite = { version = "0.31", features = ["bundled"] }
 veil-core = { path = "../../crates/veil-core" }
 veil-crypto = { path = "../../crates/veil-crypto" }
 veil-node = { path = "../../crates/veil-node" }

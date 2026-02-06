@@ -11,6 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rand::RngCore;
+use rusqlite::{params, Connection};
 use veil_crypto::aead::XChaCha20Poly1305Cipher;
 use veil_crypto::signing::Ed25519Verifier;
 use veil_node::config::{AdaptiveLaneScoringConfig, NodeRuntimeConfig};
@@ -238,33 +239,57 @@ fn env_list(key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn load_peer_list(path: &Path) -> Vec<String> {
-    if !path.exists() {
-        return Vec::new();
+fn open_peer_db(path: &Path) -> Option<Connection> {
+    if let Err(err) = ensure_parent(path) {
+        eprintln!("failed to create peer db dir: {err}");
+        return None;
     }
-    let Ok(contents) = fs::read_to_string(path) else {
-        return Vec::new();
+    let conn = match Connection::open(path) {
+        Ok(conn) => conn,
+        Err(err) => {
+            eprintln!("failed to open peer db: {err}");
+            return None;
+        }
     };
-    contents
-        .lines()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .map(|line| line.to_string())
-        .collect()
+    if let Err(err) = conn.execute(
+        "CREATE TABLE IF NOT EXISTS peers (peer TEXT PRIMARY KEY, last_seen_ms INTEGER NOT NULL)",
+        [],
+    ) {
+        eprintln!("failed to init peer db: {err}");
+        return None;
+    }
+    Some(conn)
 }
 
-fn save_peer_list(path: &Path, peers: &[String]) {
-    if let Err(err) = ensure_parent(path) {
-        eprintln!("failed to create peer list dir: {err}");
-        return;
+fn load_peer_list(conn: &Connection, limit: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stmt = match conn.prepare("SELECT peer FROM peers ORDER BY last_seen_ms DESC LIMIT ?1")
+    {
+        Ok(stmt) => stmt,
+        Err(_) => return out,
+    };
+    let rows = stmt.query_map([limit as i64], |row| row.get::<_, String>(0));
+    if let Ok(rows) = rows {
+        for row in rows.flatten() {
+            out.push(row);
+        }
     }
-    let mut contents = String::new();
-    for peer in peers {
-        contents.push_str(peer);
-        contents.push('\n');
-    }
-    if let Err(err) = fs::write(path, contents) {
-        eprintln!("failed to write peer list: {err}");
+    out
+}
+
+fn save_peer_list(conn: &Connection, peers: &[String]) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    if let Ok(tx) = conn.transaction() {
+        for peer in peers {
+            let _ = tx.execute(
+                "INSERT INTO peers (peer, last_seen_ms) VALUES (?1, ?2)\n                 ON CONFLICT(peer) DO UPDATE SET last_seen_ms=excluded.last_seen_ms",
+                params![peer, now_ms],
+            );
+        }
+        let _ = tx.commit();
     }
 }
 
@@ -483,10 +508,7 @@ fn main() {
     let fast_peers = env_list("VEIL_VPS_FAST_PEERS");
     let core_tags = env_list("VEIL_VPS_CORE_TAGS");
     let tor_peers = env_list("VEIL_VPS_TOR_PEERS");
-    let peer_list_path = PathBuf::from(env_var(
-        "VEIL_VPS_PEER_LIST_PATH",
-        "data/discovered_peers.txt",
-    ));
+    let peer_db_path = PathBuf::from(env_var("VEIL_VPS_PEER_DB_PATH", "data/peers.db"));
     let max_dynamic_peers = env_usize("VEIL_VPS_MAX_DYNAMIC_PEERS", 512);
 
     let quic_bind = env_var("VEIL_VPS_QUIC_BIND", "0.0.0.0:5000");
@@ -602,9 +624,14 @@ fn main() {
     let discovered_fallback = Arc::new(Mutex::new(HashSet::new()));
 
     let fast_adapter = RecordingAdapter::new(fast_adapter_raw, Arc::clone(&discovered_fast));
-    let fallback_adapter = RecordingAdapter::new(fallback_adapter, Arc::clone(&discovered_fallback));
+    let fallback_adapter =
+        RecordingAdapter::new(fallback_adapter, Arc::clone(&discovered_fallback));
 
-    let discovered_seed = load_peer_list(&peer_list_path);
+    let peer_db = open_peer_db(&peer_db_path);
+    let discovered_seed = peer_db
+        .as_ref()
+        .map(|conn| load_peer_list(conn, max_dynamic_peers))
+        .unwrap_or_default();
     {
         let mut guard = discovered_fast.lock().unwrap_or_else(|e| e.into_inner());
         for peer in discovered_seed
@@ -692,7 +719,9 @@ fn main() {
             merged.extend(fallback_snapshot);
             merged.sort();
             merged.dedup();
-            save_peer_list(&peer_list_path, &merged);
+            if let Some(conn) = peer_db.as_ref() {
+                save_peer_list(conn, &merged);
+            }
             last_snapshot = Instant::now();
         }
 

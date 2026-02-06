@@ -30,7 +30,7 @@ export VEIL_VPS_QUIC_KEY_PATH=/opt/veil-vps-node/data/quic_key.der
 export VEIL_VPS_QUIC_BIND=0.0.0.0:5000
 export VEIL_VPS_FAST_PEERS=10.0.0.2:5000,10.0.0.3:5000
 export VEIL_VPS_CORE_TAGS=
-export VEIL_VPS_PEER_LIST_PATH=/opt/veil-vps-node/data/discovered_peers.txt
+export VEIL_VPS_PEER_DB_PATH=/opt/veil-vps-node/data/peers.db
 export VEIL_VPS_MAX_DYNAMIC_PEERS=512
 
 # Optional fallback lanes
