@@ -1,0 +1,24 @@
+[Unit]
+Description=VEIL VPS Node (Edge Forwarder + Hot Cache)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/veil-vps-node
+ExecStart=/opt/veil-vps-node/veil-vps-node
+Restart=always
+RestartSec=2
+
+# Environment file with VEIL_VPS_* settings
+EnvironmentFile=/opt/veil-vps-node/veil-vps-node.env
+
+# Hardening (adjust to your environment)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/veil-vps-node
+
+[Install]
+WantedBy=multi-user.target
