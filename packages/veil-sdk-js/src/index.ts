@@ -54,6 +54,7 @@ export { defaultWotConfig, LocalWotPolicy, rankFeedItemsByTrust } from "./wot";
 export type {
   Endorsement,
   EndorsementRecord,
+  PubkeyHex,
   RankableFeedItem,
   TrustScoreExplanation,
   TrustTier,

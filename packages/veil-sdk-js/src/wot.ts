@@ -1,5 +1,7 @@
 export type TrustTier = "trusted" | "known" | "unknown" | "muted" | "blocked";
 
+export type PubkeyHex = string & { readonly __brand: "PubkeyHex" };
+
 export interface WotConfig {
   endorsementThreshold: number;
   maxHops: number;
@@ -7,6 +9,7 @@ export interface WotConfig {
   hopDecay: number;
   knownThreshold: number;
   trustedThreshold: number;
+  tierWeights: Record<TrustTier, number>;
 }
 
 export interface TrustScoreExplanation {
@@ -34,6 +37,7 @@ export interface EndorsementRecord {
 }
 
 interface WotSnapshot {
+  version: number;
   config: WotConfig;
   trusted: string[];
   muted: string[];
@@ -43,12 +47,12 @@ interface WotSnapshot {
 
 const PUBKEY_HEX_LEN = 64;
 
-function normalizePubkeyHex(pubkeyHex: string): string {
+function normalizePubkeyHex(pubkeyHex: string): PubkeyHex {
   const value = pubkeyHex.trim().toLowerCase();
   if (!/^[0-9a-f]+$/.test(value) || value.length !== PUBKEY_HEX_LEN) {
     throw new Error("publisher pubkey must be a 32-byte hex string");
   }
-  return value;
+  return value as PubkeyHex;
 }
 
 function clamp01(value: number): number {
@@ -63,18 +67,53 @@ export function defaultWotConfig(): WotConfig {
     hopDecay: 0.45,
     knownThreshold: 0.4,
     trustedThreshold: 0.8,
+    tierWeights: {
+      trusted: 4,
+      known: 3,
+      unknown: 2,
+      muted: 1,
+      blocked: 0,
+    },
   };
 }
 
 export class LocalWotPolicy {
   readonly config: WotConfig;
-  private readonly trusted = new Set<string>();
-  private readonly muted = new Set<string>();
-  private readonly blocked = new Set<string>();
-  private readonly endorsementsByEndorser = new Map<string, Endorsement[]>();
+  private readonly trusted = new Set<PubkeyHex>();
+  private readonly muted = new Set<PubkeyHex>();
+  private readonly blocked = new Set<PubkeyHex>();
+  private readonly endorsementsByEndorser = new Map<
+    PubkeyHex,
+    Map<PubkeyHex, Endorsement>
+  >();
 
   constructor(config: Partial<WotConfig> = {}) {
-    this.config = { ...defaultWotConfig(), ...config };
+    this.config = LocalWotPolicy.validateConfig({
+      ...defaultWotConfig(),
+      ...config,
+    });
+  }
+
+  private static validateConfig(config: WotConfig): WotConfig {
+    if (!Number.isFinite(config.endorsementThreshold) || config.endorsementThreshold < 1) {
+      throw new Error("endorsementThreshold must be >= 1");
+    }
+    if (!Number.isInteger(config.maxHops) || config.maxHops < 0) {
+      throw new Error("maxHops must be a non-negative integer");
+    }
+    if (!Number.isFinite(config.ageDecayWindowSteps) || config.ageDecayWindowSteps <= 0) {
+      throw new Error("ageDecayWindowSteps must be > 0");
+    }
+    if (!Number.isFinite(config.hopDecay) || config.hopDecay < 0 || config.hopDecay > 1) {
+      throw new Error("hopDecay must be between 0 and 1");
+    }
+    if (!Number.isFinite(config.knownThreshold) || config.knownThreshold < 0) {
+      throw new Error("knownThreshold must be >= 0");
+    }
+    if (!Number.isFinite(config.trustedThreshold) || config.trustedThreshold < 0) {
+      throw new Error("trustedThreshold must be >= 0");
+    }
+    return config;
   }
 
   trust(pubkeyHex: string): void {
@@ -95,16 +134,12 @@ export class LocalWotPolicy {
   addEndorsement(endorserHex: string, publisherHex: string, atStep: number): void {
     const endorser = normalizePubkeyHex(endorserHex);
     const publisher = normalizePubkeyHex(publisherHex);
-    const edges = this.endorsementsByEndorser.get(endorser) ?? [];
-    const existingIndex = edges.findIndex((edge) => edge.publisher === publisher);
-    if (existingIndex >= 0) {
-      if (edges[existingIndex].atStep < atStep) {
-        edges[existingIndex] = { publisher, atStep };
-      }
-    } else {
-      edges.push({ publisher, atStep });
+    const edges = this.endorsementsByEndorser.get(endorser) ?? new Map();
+    const existing = edges.get(publisher);
+    if (!existing || existing.atStep < atStep) {
+      edges.set(publisher, { publisher, atStep });
+      this.endorsementsByEndorser.set(endorser, edges);
     }
-    this.endorsementsByEndorser.set(endorser, edges);
   }
 
   ingestEndorsement(record: EndorsementRecord): void {
@@ -121,11 +156,13 @@ export class LocalWotPolicy {
     const maxAge =
       maxAgeSteps ?? Math.max(1, this.config.ageDecayWindowSteps) * 4;
     for (const [endorser, edges] of this.endorsementsByEndorser.entries()) {
-      const filtered = edges.filter((edge) => nowStep - edge.atStep <= maxAge);
-      if (filtered.length === 0) {
+      for (const [publisher, edge] of edges.entries()) {
+        if (nowStep - edge.atStep > maxAge) {
+          edges.delete(publisher);
+        }
+      }
+      if (edges.size === 0) {
         this.endorsementsByEndorser.delete(endorser);
-      } else if (filtered.length !== edges.length) {
-        this.endorsementsByEndorser.set(endorser, filtered);
       }
     }
   }
@@ -138,8 +175,7 @@ export class LocalWotPolicy {
     if (this.trusted.has(publisher)) {
       return 1;
     }
-    const { score } = this.computeScoreComponents(publisher, nowStep);
-    return score;
+    return this.computeScoreComponents(publisher, nowStep).score;
   }
 
   classifyPublisher(pubkeyHex: string, nowStep: number): TrustTier {
@@ -153,15 +189,8 @@ export class LocalWotPolicy {
     if (this.muted.has(publisher)) {
       return "muted";
     }
-
-    const score = this.scorePublisher(publisher, nowStep);
-    if (score >= this.config.trustedThreshold) {
-      return "trusted";
-    }
-    if (score >= this.config.knownThreshold) {
-      return "known";
-    }
-    return "unknown";
+    const score = this.computeScoreComponents(publisher, nowStep).score;
+    return this.classifyWithScore(score);
   }
 
   explainPublisher(pubkeyHex: string, nowStep: number): TrustScoreExplanation {
@@ -172,11 +201,18 @@ export class LocalWotPolicy {
       : this.trusted.has(publisher)
         ? 1
         : components.score;
+    const tier = this.blocked.has(publisher)
+      ? "blocked"
+      : this.trusted.has(publisher)
+        ? "trusted"
+        : this.muted.has(publisher)
+          ? "muted"
+          : this.classifyWithScore(score);
 
     return {
       publisher,
       score,
-      tier: this.classifyPublisher(publisher, nowStep),
+      tier,
       blockedOverride: this.blocked.has(publisher),
       trustedOverride: this.trusted.has(publisher),
       mutedOverride: this.muted.has(publisher),
@@ -190,7 +226,7 @@ export class LocalWotPolicy {
   exportJson(): string {
     const endorsements: WotSnapshot["endorsements"] = [];
     for (const [endorser, edges] of this.endorsementsByEndorser.entries()) {
-      for (const edge of edges) {
+      for (const edge of edges.values()) {
         endorsements.push({
           endorser,
           publisher: edge.publisher,
@@ -200,6 +236,7 @@ export class LocalWotPolicy {
     }
     return JSON.stringify(
       {
+        version: 1,
         config: this.config,
         trusted: Array.from(this.trusted),
         muted: Array.from(this.muted),
@@ -246,15 +283,11 @@ export class LocalWotPolicy {
     const directEndorsers = new Set<string>();
     let directScore = 0;
     for (const trusted of this.trusted) {
-      const edges = this.endorsementsByEndorser.get(trusted) ?? [];
-      if (edges.some((edge) => edge.publisher === publisher)) {
-        const newestEdge = edges
-          .filter((edge) => edge.publisher === publisher)
-          .sort((a, b) => b.atStep - a.atStep)[0];
-        if (newestEdge) {
-          directEndorsers.add(trusted);
-          directScore += this.ageWeight(newestEdge.atStep, nowStep);
-        }
+      const edges = this.endorsementsByEndorser.get(trusted);
+      const newestEdge = edges?.get(publisher as PubkeyHex);
+      if (newestEdge) {
+        directEndorsers.add(trusted);
+        directScore += this.ageWeight(newestEdge.atStep, nowStep);
       }
     }
     if (directEndorsers.size < this.config.endorsementThreshold) {
@@ -266,19 +299,21 @@ export class LocalWotPolicy {
     if (this.config.maxHops >= 2) {
       const secondHopEntities = new Set<string>();
       for (const trusted of this.trusted) {
-        const edges = this.endorsementsByEndorser.get(trusted) ?? [];
-        for (const edge of edges) {
-          secondHopEntities.add(edge.publisher);
+        const edges = this.endorsementsByEndorser.get(trusted);
+        if (!edges) {
+          continue;
+        }
+        for (const publisher of edges.keys()) {
+          secondHopEntities.add(publisher);
         }
       }
       for (const endorser of secondHopEntities) {
-        const edges = this.endorsementsByEndorser.get(endorser) ?? [];
-        const newestEdge = edges
-          .filter((edge) => edge.publisher === publisher)
-          .sort((a, b) => b.atStep - a.atStep)[0];
+        const edges = this.endorsementsByEndorser.get(endorser as PubkeyHex);
+        const newestEdge = edges?.get(publisher as PubkeyHex);
         if (newestEdge) {
           secondHopEndorsers.add(endorser);
-          secondHopScore += this.ageWeight(newestEdge.atStep, nowStep) * this.config.hopDecay;
+          secondHopScore +=
+            this.ageWeight(newestEdge.atStep, nowStep) * this.config.hopDecay;
         }
       }
       if (secondHopEndorsers.size < this.config.endorsementThreshold) {
@@ -294,6 +329,16 @@ export class LocalWotPolicy {
       secondHopEndorserCount: secondHopEndorsers.size,
     };
   }
+
+  private classifyWithScore(score: number): TrustTier {
+    if (score >= this.config.trustedThreshold) {
+      return "trusted";
+    }
+    if (score >= this.config.knownThreshold) {
+      return "known";
+    }
+    return "unknown";
+  }
 }
 
 export interface RankableFeedItem {
@@ -307,22 +352,7 @@ export function rankFeedItemsByTrust<T extends RankableFeedItem>(
   policy: LocalWotPolicy,
   nowStep: number,
 ): T[] {
-  const tierWeight = (tier: TrustTier): number => {
-    switch (tier) {
-      case "trusted":
-        return 4;
-      case "known":
-        return 3;
-      case "unknown":
-        return 2;
-      case "muted":
-        return 1;
-      case "blocked":
-        return 0;
-      default:
-        return 0;
-    }
-  };
+  const tierWeight = (tier: TrustTier): number => policy.config.tierWeights[tier] ?? 0;
 
   return [...items]
     .filter((item) => policy.classifyPublisher(item.publisher, nowStep) !== "blocked")
