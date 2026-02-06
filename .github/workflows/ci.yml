@@ -31,3 +31,20 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  transport-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Transport smoke test
+        env:
+          VEIL_E2E_NETWORK: "1"
+        run: cargo test -p veil-sim --test e2e_transport_runtime_smoke
