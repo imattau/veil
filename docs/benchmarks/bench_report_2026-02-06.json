@@ -1,0 +1,39 @@
+{
+  "generated_at_unix_seconds": 1770348702,
+  "results": [
+    {
+      "case": "smoke",
+      "seed": 3203386110,
+      "objects": 16,
+      "delivered_objects": 16,
+      "delivered_bytes": 792850,
+      "elapsed_ms": 1695,
+      "throughput_mib_s": 0.4459067197767137,
+      "latency_p50_steps": 6,
+      "latency_p95_steps": 10,
+      "inbound_messages": 116,
+      "parsed_shards": 116,
+      "malformed_messages": 0,
+      "duplicate_messages": 0,
+      "ignored_messages": 0,
+      "send_failures": 0
+    },
+    {
+      "case": "load_noise",
+      "seed": 3202734896,
+      "objects": 36,
+      "delivered_objects": 36,
+      "delivered_bytes": 4178993,
+      "elapsed_ms": 8194,
+      "throughput_mib_s": 0.48633978937670547,
+      "latency_p50_steps": 10,
+      "latency_p95_steps": 12,
+      "inbound_messages": 463,
+      "parsed_shards": 457,
+      "malformed_messages": 6,
+      "duplicate_messages": 44,
+      "ignored_messages": 50,
+      "send_failures": 0
+    }
+  ]
+}

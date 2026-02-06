@@ -116,7 +116,7 @@ Deliver a practical-mode VEIL implementation in this Rust workspace that can:
 ## Release Gates Checklist
 - [x] Functional: tag derivation, schema compliance, and ACK behavior (codec + node tests)
 - [x] Resilience: packet loss tolerance and cache churn behavior in `veil-sim`
-- [ ] Performance: record baseline report (p95 latency/throughput/cache hit rate) from `benchmark_runner`
+- [x] Performance: record baseline report (p95 latency/throughput/cache hit rate) from `benchmark_runner` (`docs/benchmarks/bench_report_2026-02-06.*`)
 - [ ] Transport-agnostic: enable CI job with `VEIL_E2E_NETWORK=1` for transport smoke test
 - [x] Policy-locality: WoT settings only affect prioritization, not validity
 
