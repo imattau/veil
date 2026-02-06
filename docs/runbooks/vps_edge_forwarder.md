@@ -43,6 +43,7 @@ export VEIL_VPS_REQUIRED_SIGNED_NAMESPACES=1,2
 export VEIL_VPS_ADAPTIVE_LANE_SCORING=1
 export VEIL_VPS_SNAPSHOT_SECS=60
 export VEIL_VPS_TICK_MS=50
+export VEIL_VPS_HEALTH_PORT=9090
 ```
 
 Notes:
@@ -64,6 +65,9 @@ You can tail systemd logs or stdout for:
 - transport health counters
 - snapshot write failures
 - adapter startup errors
+
+Health check:
+- Local HTTP health endpoint: `http://127.0.0.1:9090/health`
 
 ## 5) Recovery
 

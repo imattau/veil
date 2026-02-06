@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::env;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -254,6 +256,39 @@ fn load_or_create_node_key(path: &Path) -> Result<[u8; 32], String> {
     Ok(key)
 }
 
+fn start_health_server(port: u16) {
+    if port == 0 {
+        return;
+    }
+    thread::spawn(move || {
+        let listener = match TcpListener::bind(("127.0.0.1", port)) {
+            Ok(listener) => listener,
+            Err(err) => {
+                eprintln!("health server bind failed on {port}: {err}");
+                return;
+            }
+        };
+        for stream in listener.incoming() {
+            if let Ok(mut stream) = stream {
+                let mut buf = [0_u8; 1024];
+                let _ = stream.read(&mut buf);
+                let req = String::from_utf8_lossy(&buf);
+                let ok = req.starts_with("GET /health") || req.starts_with("GET /healthz");
+                let (status, body) = if ok {
+                    ("200 OK", "ok")
+                } else {
+                    ("404 Not Found", "not found")
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        }
+    });
+}
+
 fn main() {
     let state_path = PathBuf::from(env_var(
         "VEIL_VPS_STATE_PATH",
@@ -264,6 +299,7 @@ fn main() {
     let quic_key_path = PathBuf::from(env_var("VEIL_VPS_QUIC_KEY_PATH", "data/quic_key.der"));
     let snapshot_secs = env_u64("VEIL_VPS_SNAPSHOT_SECS", 60);
     let tick_ms = env_u64("VEIL_VPS_TICK_MS", 50);
+    let health_port = env_u64("VEIL_VPS_HEALTH_PORT", 9090) as u16;
     let fast_peers = env_list("VEIL_VPS_FAST_PEERS");
     let tor_peers = env_list("VEIL_VPS_TOR_PEERS");
 
@@ -383,6 +419,8 @@ fn main() {
 
     let mut last_health_log = Instant::now();
     let health_log_interval = Duration::from_secs(30);
+
+    start_health_server(health_port);
 
     let mut now_step = 0_u64;
     loop {

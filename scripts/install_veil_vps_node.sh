@@ -10,6 +10,7 @@ REVERSE_PROXY=${REVERSE_PROXY:-auto}  # auto|nginx|caddy|none
 PROXY_DOMAIN=${PROXY_DOMAIN:-}
 PROXY_HTTP_PORT=${PROXY_HTTP_PORT:-80}
 PROXY_WS_PORT=${PROXY_WS_PORT:-8080}
+PROXY_HEALTH_PORT=${PROXY_HEALTH_PORT:-9090}
 
 NGINX_SITE_PATH=${NGINX_SITE_PATH:-/etc/nginx/sites-available/veil-vps-node.conf}
 NGINX_SITE_LINK=${NGINX_SITE_LINK:-/etc/nginx/sites-enabled/veil-vps-node.conf}
@@ -58,6 +59,11 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
     }
+
+    location /health {
+        proxy_pass http://127.0.0.1:${PROXY_HEALTH_PORT};
+        proxy_set_header Host $host;
+    }
 }
 NGINXCONF
   if [[ ! -e "$NGINX_SITE_LINK" ]]; then
@@ -78,6 +84,7 @@ configure_caddy() {
   cat <<CADDYCONF > "$CADDY_SITE_PATH"
 ${PROXY_DOMAIN} {
   reverse_proxy /ws/* 127.0.0.1:${PROXY_WS_PORT}
+  reverse_proxy /health 127.0.0.1:${PROXY_HEALTH_PORT}
 }
 CADDYCONF
   if [[ -f "$CADDYFILE" ]] && ! grep -q "veil-vps-node.caddy" "$CADDYFILE"; then
