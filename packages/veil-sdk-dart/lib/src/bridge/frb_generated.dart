@@ -70,7 +70,7 @@ class VeilBridgeApi
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 1815267900;
+  int get rustContentHash => 1445608043;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -89,6 +89,11 @@ abstract class VeilBridgeApiApi extends BaseApi {
   Future<ObjectMeta> crateApiDecodeObjectMeta({required List<int> bytes});
 
   Future<ShardMeta> crateApiDecodeShardMeta({required List<int> bytes});
+
+  Future<Uint8List> crateApiDecryptObjectPayload({
+    required List<int> objectBytes,
+    required List<int> keyBytes,
+  });
 
   Future<String> crateApiDeriveFeedTagHex({
     required String publisherPubkeyHex,
@@ -210,6 +215,41 @@ class VeilBridgeApiApiImpl extends VeilBridgeApiApiImplPlatform
       const TaskConstMeta(debugName: "decode_shard_meta", argNames: ["bytes"]);
 
   @override
+  Future<Uint8List> crateApiDecryptObjectPayload({
+    required List<int> objectBytes,
+    required List<int> keyBytes,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_list_prim_u_8_loose(objectBytes, serializer);
+          sse_encode_list_prim_u_8_loose(keyBytes, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 4,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiDecryptObjectPayloadConstMeta,
+        argValues: [objectBytes, keyBytes],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiDecryptObjectPayloadConstMeta =>
+      const TaskConstMeta(
+        debugName: "decrypt_object_payload",
+        argNames: ["objectBytes", "keyBytes"],
+      );
+
+  @override
   Future<String> crateApiDeriveFeedTagHex({
     required String publisherPubkeyHex,
     required int namespace,
@@ -223,7 +263,7 @@ class VeilBridgeApiApiImpl extends VeilBridgeApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 5,
             port: port_,
           );
         },
@@ -253,7 +293,7 @@ class VeilBridgeApiApiImpl extends VeilBridgeApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 6,
             port: port_,
           );
         },
@@ -290,7 +330,7 @@ class VeilBridgeApiApiImpl extends VeilBridgeApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 7,
             port: port_,
           );
         },
@@ -324,7 +364,7 @@ class VeilBridgeApiApiImpl extends VeilBridgeApiApiImplPlatform
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 8,
             port: port_,
           );
         },

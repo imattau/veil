@@ -1,3 +1,5 @@
+import "dart:typed_data";
+
 import "api.dart" as frb_api;
 import "frb_generated.dart";
 import "../models/veil_types.dart";
@@ -13,10 +15,7 @@ class VeilBridge {
     VeilBridgeApi.dispose();
   }
 
-  Future<TagHex> deriveFeedTagHex(
-    String publisherPubkeyHex,
-    int namespace,
-  ) async {
+  Future<TagHex> deriveFeedTagHex(String publisherPubkeyHex, int namespace) async {
     return frb_api.deriveFeedTagHex(
       publisherPubkeyHex: publisherPubkeyHex,
       namespace: namespace,
@@ -80,5 +79,25 @@ class VeilBridge {
 
   Future<String> deriveObjectRootHex(List<int> objectBytes) async {
     return frb_api.deriveObjectRootHex(objectBytes: objectBytes);
+  }
+
+  Future<Uint8List> reconstructObjectPadded(
+    List<List<int>> shardBytes,
+    String expectedRootHex,
+  ) async {
+    return frb_api.reconstructObjectPaddedFromShards(
+      shardBytes: shardBytes.map(Uint8List.fromList).toList(),
+      expectedRootHex: expectedRootHex,
+    );
+  }
+
+  Future<Uint8List> decryptObjectPayload(
+    List<int> objectBytes,
+    List<int> keyBytes,
+  ) async {
+    return frb_api.decryptObjectPayload(
+      objectBytes: Uint8List.fromList(objectBytes),
+      keyBytes: Uint8List.fromList(keyBytes),
+    );
   }
 }

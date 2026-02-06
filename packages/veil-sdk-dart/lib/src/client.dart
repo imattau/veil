@@ -1,7 +1,6 @@
 import "dart:async";
 import "dart:typed_data";
 
-import "bridge/api.dart" as frb_api;
 import "bridge/veil_bridge.dart";
 import "cache/shard_cache_store.dart";
 import "lanes/lane.dart";
@@ -11,6 +10,8 @@ class VeilClientHooks {
   final void Function(String peer, ShardMeta meta)? onShardMeta;
   final void Function(String objectRootHex, int have, int need)? onReconstructable;
   final void Function(String objectRootHex, Uint8List bytes)? onReconstructed;
+  final void Function(String objectRootHex, ObjectMeta meta)? onObjectMeta;
+  final void Function(String objectRootHex, Uint8List payload)? onPayload;
   final void Function(String tagHex)? onIgnoredUnsubscribed;
   final void Function(String peer, Object error)? onDecodeError;
 
@@ -18,6 +19,8 @@ class VeilClientHooks {
     this.onShardMeta,
     this.onReconstructable,
     this.onReconstructed,
+    this.onObjectMeta,
+    this.onPayload,
     this.onIgnoredUnsubscribed,
     this.onDecodeError,
   });
@@ -30,6 +33,7 @@ class VeilClient {
   final VeilBridge bridge;
   final int pollIntervalMs;
   final VeilClientHooks hooks;
+  final List<int>? decryptKey;
 
   final Set<TagHex> _subscriptions = {};
   final List<String> _forwardPeers = [];
@@ -44,6 +48,7 @@ class VeilClient {
     VeilBridge? bridge,
     this.pollIntervalMs = 50,
     this.hooks = const VeilClientHooks(),
+    this.decryptKey,
   })  : cacheStore = cacheStore ?? MemoryShardCacheStore(),
         bridge = bridge ?? const VeilBridge();
 
@@ -102,11 +107,18 @@ class VeilClient {
       bucket[meta.index] = msg.bytes;
       if (bucket.length >= meta.k) {
         hooks.onReconstructable?.call(meta.objectRootHex, bucket.length, meta.k);
-        final reconstructed = await frb_api.reconstructObjectPaddedFromShards(
-          shardBytes: bucket.values.map((b) => Uint8List.fromList(b)).toList(),
-          expectedRootHex: meta.objectRootHex,
+        final reconstructed = await bridge.reconstructObjectPadded(
+          bucket.values.map(Uint8List.fromList).toList(),
+          meta.objectRootHex,
         );
         hooks.onReconstructed?.call(meta.objectRootHex, reconstructed);
+
+        final objMeta = await bridge.decodeObjectMeta(reconstructed);
+        hooks.onObjectMeta?.call(meta.objectRootHex, objMeta);
+        if (decryptKey != null) {
+          final payload = await bridge.decryptObjectPayload(reconstructed, decryptKey!);
+          hooks.onPayload?.call(meta.objectRootHex, payload);
+        }
         _inbox.remove(meta.objectRootHex);
       }
 

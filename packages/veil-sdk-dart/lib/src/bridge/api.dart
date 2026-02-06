@@ -54,6 +54,14 @@ Future<Uint8List> reconstructObjectPaddedFromShards({
   expectedRootHex: expectedRootHex,
 );
 
+Future<Uint8List> decryptObjectPayload({
+  required List<int> objectBytes,
+  required List<int> keyBytes,
+}) => VeilBridgeApi.instance.api.crateApiDecryptObjectPayload(
+  objectBytes: objectBytes,
+  keyBytes: keyBytes,
+);
+
 class ObjectMeta {
   final int version;
   final int namespace;

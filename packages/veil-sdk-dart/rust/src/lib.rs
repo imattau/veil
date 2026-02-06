@@ -11,6 +11,7 @@ pub mod api {
         OBJECT_FLAG_SIGNED,
     };
     use veil_codec::shard::decode_shard_cbor;
+    use veil_crypto::aead::{build_veil_aad, AeadCipher, XChaCha20Poly1305Cipher};
     use veil_core::hash::blake3_32;
     use veil_core::tags::{current_epoch, derive_feed_tag, derive_rv_tag};
     use veil_core::types::{Epoch, Namespace};
@@ -152,5 +153,21 @@ pub mod api {
             shards.push(shard);
         }
         reconstruct_object_padded(&shards, expected_root).map_err(|e| e.to_string())
+    }
+
+    #[frb]
+    pub fn decrypt_object_payload(
+        object_bytes: Vec<u8>,
+        key_bytes: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        if key_bytes.len() != 32 {
+            return Err("decrypt key must be 32 bytes".to_string());
+        }
+        let obj = decode_object_cbor(&object_bytes).map_err(|e| e.to_string())?;
+        let aad = build_veil_aad(obj.tag, obj.namespace, obj.epoch);
+        let cipher = XChaCha20Poly1305Cipher;
+        cipher
+            .decrypt(&key_bytes, obj.nonce, &aad, &obj.ciphertext)
+            .map_err(|e| e.to_string())
     }
 }
