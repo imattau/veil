@@ -1,18 +1,52 @@
 import "dart:async";
 
+import "package:flutter_reactive_ble/flutter_reactive_ble.dart";
+
 import "lane.dart";
 
 class BleLane implements VeilLane {
+  final FlutterReactiveBle ble;
+  final Uuid serviceUuid;
+  final Uuid characteristicUuid;
+  final String deviceId;
   final int mtu;
+
   final List<LaneMessage> _inbox = [];
   final List<List<int>> _sendBuffer = [];
+  StreamSubscription<List<int>>? _subscription;
 
-  BleLane({this.mtu = 180});
+  BleLane({
+    required this.ble,
+    required this.serviceUuid,
+    required this.characteristicUuid,
+    required this.deviceId,
+    this.mtu = 180,
+  }) {
+    _subscription = ble
+        .subscribeToCharacteristic(QualifiedCharacteristic(
+          serviceId: serviceUuid,
+          characteristicId: characteristicUuid,
+          deviceId: deviceId,
+        ))
+        .listen((data) {
+          _inbox.add(LaneMessage(peer: deviceId, bytes: data));
+        });
+  }
 
   @override
   Future<void> send(String peer, List<int> bytes) async {
-    _sendBuffer.add(bytes);
-    // Hook: integrate flutter_reactive_ble writeWithoutResponse.
+    final frames = splitIntoFrames(bytes);
+    for (final frame in frames) {
+      _sendBuffer.add(frame);
+      await ble.writeCharacteristicWithoutResponse(
+        QualifiedCharacteristic(
+          serviceId: serviceUuid,
+          characteristicId: characteristicUuid,
+          deviceId: peer,
+        ),
+        value: frame,
+      );
+    }
   }
 
   @override
@@ -33,6 +67,11 @@ class BleLane implements VeilLane {
       inboundDropped: 0,
       reconnectAttempts: 0,
     );
+  }
+
+  Future<void> close() async {
+    await _subscription?.cancel();
+    _subscription = null;
   }
 
   // BLE chunking helpers.

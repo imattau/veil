@@ -1,0 +1,15 @@
+name: veil_flutter_example
+version: 0.1.0
+description: Minimal Flutter example using veil_sdk.
+
+environment:
+  sdk: ">=3.2.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  veil_sdk:
+    path: ../../packages/veil-sdk-dart
+
+flutter:
+  uses-material-design: true

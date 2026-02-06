@@ -15,8 +15,9 @@ interfaces; the Rust bridge functions are stubbed for now.
 
 - FFI bridge: scaffolded API surface in `lib/src/bridge/veil_bridge.dart`.
 - WebSocket lane: reconnection + buffered send queue.
-- BLE lane: skeleton with MTU chunking hooks (requires flutter_reactive_ble in app).
-- Client runtime: minimal loop + subscription set.
+- BLE lane: FlutterReactiveBle-backed lane with MTU chunking helpers.
+- Client runtime: loop with shard decoding + reconstruction + payload decrypt.
+- Persistence adapters: sqflite + IndexedDB (web).
 
 ## Next steps
 
