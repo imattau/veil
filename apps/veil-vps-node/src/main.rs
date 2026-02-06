@@ -228,6 +228,26 @@ fn parse_required_signed_namespaces(values: &[String]) -> HashSet<u16> {
     out
 }
 
+fn decode_hex_tag_32(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 {
+        return None;
+    }
+    let mut out = [0_u8; 32];
+    for (idx, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let s = std::str::from_utf8(chunk).ok()?;
+        let byte = u8::from_str_radix(s, 16).ok()?;
+        out[idx] = byte;
+    }
+    Some(out)
+}
+
+fn parse_core_tags(values: &[String]) -> Vec<[u8; 32]> {
+    values
+        .iter()
+        .filter_map(|value| decode_hex_tag_32(value))
+        .collect()
+}
+
 fn parse_fallback_peers(ws_peer: Option<String>, tor_peers: Vec<String>) -> Vec<FallbackPeer> {
     let mut peers = Vec::new();
     if let Some(ws_peer) = ws_peer {
@@ -331,6 +351,7 @@ fn main() {
     let tick_ms = env_u64("VEIL_VPS_TICK_MS", 50);
     let health_port = env_u64("VEIL_VPS_HEALTH_PORT", 9090) as u16;
     let fast_peers = env_list("VEIL_VPS_FAST_PEERS");
+    let core_tags = env_list("VEIL_VPS_CORE_TAGS");
     let tor_peers = env_list("VEIL_VPS_TOR_PEERS");
 
     let quic_bind = env_var("VEIL_VPS_QUIC_BIND", "0.0.0.0:5000");
@@ -367,7 +388,16 @@ fn main() {
         trusted.push(identity.cert_der.clone());
     }
 
-    let state = load_state_or_default(&state_path).unwrap_or_default();
+    let mut state = load_state_or_default(&state_path).unwrap_or_default();
+    let core_tags = parse_core_tags(&core_tags);
+    if !core_tags.is_empty() {
+        let before = state.subscriptions.len();
+        for tag in core_tags {
+            state.subscriptions.insert(tag);
+        }
+        let added = state.subscriptions.len().saturating_sub(before);
+        eprintln!("auto-subscribed to {added} core tags");
+    }
 
     let mut cfg = NodeRuntimeConfig::edge_forwarder_hot_cache_defaults();
     cfg.max_cache_shards = max_cache_shards;

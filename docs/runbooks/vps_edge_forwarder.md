@@ -29,6 +29,7 @@ export VEIL_VPS_QUIC_CERT_PATH=/opt/veil-vps-node/data/quic_cert.der
 export VEIL_VPS_QUIC_KEY_PATH=/opt/veil-vps-node/data/quic_key.der
 export VEIL_VPS_QUIC_BIND=0.0.0.0:5000
 export VEIL_VPS_FAST_PEERS=10.0.0.2:5000,10.0.0.3:5000
+export VEIL_VPS_CORE_TAGS=
 
 # Optional fallback lanes
 export VEIL_VPS_WS_URL=ws://relay.example:8080

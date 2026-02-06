@@ -44,6 +44,7 @@ Optional:
 - `VEIL_VPS_QUIC_KEY_PATH` (default `data/quic_key.der`)
 - `VEIL_VPS_QUIC_TRUSTED_CERTS` (comma-separated cert DER paths)
 - `VEIL_VPS_FAST_PEERS` (comma-separated `host:port` for QUIC peers)
+- `VEIL_VPS_CORE_TAGS` (comma-separated 64-char hex tags to auto-subscribe)
 - `VEIL_VPS_WS_URL` (e.g. `ws://host:port`)
 - `VEIL_VPS_WS_PEER` (peer id label used by WebSocket adapter)
 - `VEIL_VPS_TOR_SOCKS_ADDR` (e.g. `127.0.0.1:9050`)
