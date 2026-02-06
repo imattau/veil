@@ -19,15 +19,15 @@ interfaces; the Rust bridge functions are stubbed for now.
 - Client runtime: loop with shard decoding + reconstruction + payload decrypt.
 - Persistence adapters: sqflite + IndexedDB (web).
 - Cache eviction: rarity-biased (evict most common first, then oldest).
+- Shard pull requests: request missing shards when `k-1` indices arrive.
+- Overlapping RV tags: helper for epoch transition windows.
+- Blob manifests: app-level CBOR helpers for attachment bundles.
 
 ## Next steps
 
-1. Generate FRB bindings from a Rust crate that exposes:
-   - `derive_feed_tag`, `derive_rv_tag`, `current_epoch` (veil-core)
-   - `encode_object`, `decode_object` (veil-codec)
-   - `object_to_shards`, `reconstruct_object` (veil-fec)
-2. Wire `VeilClient` to call the bridge for validation and reconstruction.
-3. Add persistence adapters (Sqflite / drift / IndexedDB).
+1. Add transport health scoring + adaptive lane fanout.
+2. Add hop-aware forward limits and shard request budgeting in the runtime loop.
+3. Provide optional Wasm builds for Flutter web.
 
 ## Web support
 

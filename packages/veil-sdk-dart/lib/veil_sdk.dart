@@ -8,4 +8,7 @@ export "src/client.dart";
 export "src/lanes/lane.dart";
 export "src/lanes/websocket_lane.dart";
 export "src/lanes/ble_lane.dart";
+export "src/models/blob_manifest.dart";
+export "src/models/shard_request.dart";
 export "src/models/veil_types.dart";
+export "src/tags.dart";

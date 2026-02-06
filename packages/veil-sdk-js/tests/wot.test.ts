@@ -50,7 +50,7 @@ describe("LocalWotPolicy", () => {
   });
 
   test("de-duplicates endorsements and keeps newest", () => {
-    const policy = new LocalWotPolicy();
+    const policy = new LocalWotPolicy({ endorsementThreshold: 1 });
     const endorser = hex("a");
     const publisher = hex("b");
     policy.trust(endorser);

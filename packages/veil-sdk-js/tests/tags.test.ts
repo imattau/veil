@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   deriveChannelFeedTagHex,
   deriveChannelNamespace,
+  deriveRvTagWindowHex,
   normalizeChannelId,
 } from "../src/tags";
 
@@ -27,5 +28,26 @@ describe("channel-scoped tag helpers", () => {
 
     expect(general).not.toBe(dev);
     expect(general).toBe(generalNormalized);
+  });
+
+  test("derives overlapping rendezvous tags around epoch boundaries", async () => {
+    const key = "22".repeat(32);
+    const namespace = 12;
+    const epochSeconds = 100;
+    const overlapSeconds = 10;
+    const nearEnd = 95;
+    const nearStart = 105;
+
+    const tagsNearEnd = await deriveRvTagWindowHex(key, nearEnd, namespace, {
+      epochSeconds,
+      overlapSeconds,
+    });
+    const tagsNearStart = await deriveRvTagWindowHex(key, nearStart, namespace, {
+      epochSeconds,
+      overlapSeconds,
+    });
+
+    expect(tagsNearEnd.length).toBeGreaterThan(1);
+    expect(tagsNearStart.length).toBeGreaterThan(1);
   });
 });

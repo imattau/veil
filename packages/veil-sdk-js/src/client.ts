@@ -1,6 +1,7 @@
+import { decode as cborDecode, encode as cborEncode } from "cbor-x";
 import { blake3 } from "@noble/hashes/blake3";
 
-import { bytesToHex } from "./bytes";
+import { bytesToHex, concatBytes, hexToBytes, textBytes } from "./bytes";
 import { decodeShardMeta } from "./codec";
 import { MemoryShardCacheStore, type ShardCacheStore } from "./storage";
 import type { LocalWotPolicy, TrustTier } from "./wot";
@@ -24,6 +25,104 @@ const EMPTY_TRANSPORT_HEALTH: TransportHealthSnapshot = {
   inboundDropped: 0,
   reconnectAttempts: 0,
 };
+
+const SHARD_REQUEST_PREFIX = textBytes("VEILREQ1");
+const SHARD_REQUEST_VERSION = 1;
+
+type ShardRequestPayload = {
+  version: number;
+  objectRootHex: string;
+  tagHex: string;
+  k: number;
+  n: number;
+  want: number[];
+  hop: number;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected object value");
+  }
+  return value as Record<string, unknown>;
+}
+
+function toBytes(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return Uint8Array.from(value as number[]);
+  }
+  throw new Error("expected byte array value");
+}
+
+function startsWith(bytes: Uint8Array, prefix: Uint8Array): boolean {
+  if (bytes.length < prefix.length) {
+    return false;
+  }
+  for (let i = 0; i < prefix.length; i += 1) {
+    if (bytes[i] !== prefix[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function encodeShardRequest(payload: ShardRequestPayload): Uint8Array {
+  const body = cborEncode({
+    v: payload.version,
+    object_root: hexToBytes(payload.objectRootHex),
+    tag: hexToBytes(payload.tagHex),
+    k: payload.k,
+    n: payload.n,
+    want: payload.want,
+    hop: payload.hop,
+  });
+  return concatBytes(SHARD_REQUEST_PREFIX, body);
+}
+
+function decodeShardRequest(bytes: Uint8Array): ShardRequestPayload | null {
+  if (!startsWith(bytes, SHARD_REQUEST_PREFIX)) {
+    return null;
+  }
+  try {
+    const decoded = asRecord(
+      cborDecode(bytes.slice(SHARD_REQUEST_PREFIX.length)),
+    );
+    const version = Number(decoded.v ?? decoded.version ?? SHARD_REQUEST_VERSION);
+    if (version !== SHARD_REQUEST_VERSION) {
+      return null;
+    }
+    const objectRoot = decoded.object_root ?? decoded.objectRoot;
+    const tag = decoded.tag;
+    const wantRaw = decoded.want;
+    if (!objectRoot || !tag || !Array.isArray(wantRaw)) {
+      return null;
+    }
+    const k = Number(decoded.k ?? 0);
+    const n = Number(decoded.n ?? 0);
+    if (!Number.isFinite(k) || !Number.isFinite(n) || k <= 0 || n <= 0) {
+      return null;
+    }
+    const want = wantRaw
+      .map((idx) => Number(idx))
+      .filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < n);
+    if (want.length === 0) {
+      return null;
+    }
+    return {
+      version,
+      objectRootHex: bytesToHex(toBytes(objectRoot)).toLowerCase(),
+      tagHex: bytesToHex(toBytes(tag)).toLowerCase(),
+      k,
+      n,
+      want,
+      hop: Number(decoded.hop ?? 0),
+    };
+  } catch {
+    return null;
+  }
+}
 
 export interface LaneAdapter {
   send(peer: string, bytes: Uint8Array): Promise<void>;
@@ -71,6 +170,11 @@ export interface VeilClientOptions {
     | null;
   maxCacheShards?: number;
   tierCacheBudgets?: Partial<TierCacheBudgets>;
+  enableShardRequests?: boolean;
+  requestFanout?: number;
+  requestHopLimit?: number;
+  requestCooldownMs?: number;
+  maxForwardHops?: number;
 }
 
 export interface LaneHealth {
@@ -147,6 +251,19 @@ export class VeilClient {
   private readonly maxCacheShards: number;
   private readonly tierCacheBudgets: TierCacheBudgets;
   private readonly cacheMeta = new Map<string, { tier: TrustTier; lastSeenMs: number }>();
+  private readonly cacheSeenCount = new Map<string, number>();
+  private readonly shardForwardHops = new Map<string, number>();
+  private readonly objectShardState = new Map<
+    string,
+    { k: number; n: number; tagHex: string; indices: Set<number>; lastRequestAt: number }
+  >();
+  private readonly indexToShardId = new Map<string, string>();
+  private readonly shardIdToIndex = new Map<string, { objectRootHex: string; index: number }>();
+  private readonly enableShardRequests: boolean;
+  private readonly requestFanout: number;
+  private readonly requestHopLimit: number;
+  private readonly requestCooldownMs: number;
+  private readonly maxForwardHops: number;
   private seenSincePrune = 0;
   private running = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -195,6 +312,11 @@ export class VeilClient {
       blocked: 0,
       ...options.tierCacheBudgets,
     };
+    this.enableShardRequests = options.enableShardRequests ?? true;
+    this.requestFanout = Math.max(0, options.requestFanout ?? 2);
+    this.requestHopLimit = Math.max(0, options.requestHopLimit ?? 2);
+    this.requestCooldownMs = Math.max(0, options.requestCooldownMs ?? 2_000);
+    this.maxForwardHops = Math.max(0, options.maxForwardHops ?? 6);
     if (fallbackLane) {
       this.laneHealth.fallback = {
         score: 1,
@@ -385,6 +507,49 @@ export class VeilClient {
     return selected;
   }
 
+  private async dropShard(shardId: string): Promise<void> {
+    await this.cacheStore.delete(shardId);
+    this.cacheMeta.delete(shardId);
+    this.cacheSeenCount.delete(shardId);
+    this.shardForwardHops.delete(shardId);
+    const indexMeta = this.shardIdToIndex.get(shardId);
+    if (indexMeta) {
+      const key = `${indexMeta.objectRootHex}:${indexMeta.index}`;
+      this.indexToShardId.delete(key);
+      this.shardIdToIndex.delete(shardId);
+      const state = this.objectShardState.get(indexMeta.objectRootHex);
+      if (state) {
+        state.indices.delete(indexMeta.index);
+        if (state.indices.size === 0) {
+          this.objectShardState.delete(indexMeta.objectRootHex);
+        }
+      }
+    }
+  }
+
+  private noteShardIndex(
+    meta: Awaited<ReturnType<typeof decodeShardMeta>>,
+    shardIdHex: string,
+  ): void {
+    const objectRootHex = meta.objectRootHex.toLowerCase();
+    const key = `${objectRootHex}:${meta.index}`;
+    this.indexToShardId.set(key, shardIdHex);
+    this.shardIdToIndex.set(shardIdHex, { objectRootHex, index: meta.index });
+
+    const state = this.objectShardState.get(objectRootHex) ?? {
+      k: meta.k,
+      n: meta.n,
+      tagHex: meta.tagHex.toLowerCase(),
+      indices: new Set<number>(),
+      lastRequestAt: 0,
+    };
+    state.k = meta.k;
+    state.n = meta.n;
+    state.tagHex = meta.tagHex.toLowerCase();
+    state.indices.add(meta.index);
+    this.objectShardState.set(objectRootHex, state);
+  }
+
   private async enforceCacheBudgets(): Promise<void> {
     const total = this.cacheMeta.size;
     if (total === 0) {
@@ -408,11 +573,17 @@ export class VeilClient {
       }
       const candidates = [...this.cacheMeta.entries()]
         .filter(([, meta]) => meta.tier === tier)
-        .sort((a, b) => a[1].lastSeenMs - b[1].lastSeenMs)
+        .sort((a, b) => {
+          const seenA = this.cacheSeenCount.get(a[0]) ?? 0;
+          const seenB = this.cacheSeenCount.get(b[0]) ?? 0;
+          if (seenA !== seenB) {
+            return seenB - seenA;
+          }
+          return a[1].lastSeenMs - b[1].lastSeenMs;
+        })
         .slice(0, limit);
       for (const [shardId] of candidates) {
-        await this.cacheStore.delete(shardId);
-        this.cacheMeta.delete(shardId);
+        await this.dropShard(shardId);
         tierCounts[tier] -= 1;
       }
     };
@@ -431,13 +602,19 @@ export class VeilClient {
         }
         const candidates = [...this.cacheMeta.entries()]
           .filter(([, meta]) => meta.tier === tier)
-          .sort((a, b) => a[1].lastSeenMs - b[1].lastSeenMs);
+          .sort((a, b) => {
+            const seenA = this.cacheSeenCount.get(a[0]) ?? 0;
+            const seenB = this.cacheSeenCount.get(b[0]) ?? 0;
+            if (seenA !== seenB) {
+              return seenB - seenA;
+            }
+            return a[1].lastSeenMs - b[1].lastSeenMs;
+          });
         if (candidates.length === 0) {
           continue;
         }
         const [shardId] = candidates[0];
-        await this.cacheStore.delete(shardId);
-        this.cacheMeta.delete(shardId);
+        await this.dropShard(shardId);
       }
       if (this.cacheMeta.size <= this.maxCacheShards) {
         break;
@@ -504,6 +681,7 @@ export class VeilClient {
         break;
       }
       this.seenShardIds.delete(shardId);
+      this.shardForwardHops.delete(shardId);
     }
 
     while (this.seenShardIds.size > this.maxSeenShardIds) {
@@ -512,6 +690,7 @@ export class VeilClient {
         break;
       }
       this.seenShardIds.delete(oldest.value);
+      this.shardForwardHops.delete(oldest.value);
     }
   }
 
@@ -598,6 +777,176 @@ export class VeilClient {
     return { fast, fallback: total - fast };
   }
 
+  private computeRequestFanout(): { fast: number; fallback: number } {
+    const total = this.requestFanout;
+    if (total <= 0) {
+      return { fast: 0, fallback: 0 };
+    }
+    if (!this.fallbackLane) {
+      return { fast: total, fallback: 0 };
+    }
+    if (!this.adaptiveLaneScoring) {
+      const fast = Math.min(total, this.fastFanout);
+      return { fast, fallback: Math.max(0, total - fast) };
+    }
+
+    const fastScore =
+      this.laneHealth.fast.score >= this.minimumHealthyLaneScore
+        ? this.laneHealth.fast.score
+        : 0;
+    const fallbackScore =
+      (this.laneHealth.fallback?.score ?? 0) >= this.minimumHealthyLaneScore
+        ? (this.laneHealth.fallback?.score ?? 0)
+        : 0;
+
+    if (fastScore === 0 && fallbackScore === 0) {
+      return { fast: Math.min(total, this.fastFanout), fallback: total - Math.min(total, this.fastFanout) };
+    }
+    if (fastScore === 0) {
+      return { fast: 0, fallback: total };
+    }
+    if (fallbackScore === 0) {
+      return { fast: total, fallback: 0 };
+    }
+
+    let fast = Math.round((total * fastScore) / (fastScore + fallbackScore));
+    fast = Math.max(1, Math.min(total - 1, fast));
+    return { fast, fallback: total - fast };
+  }
+
+  private async sendOnLane(
+    lane: "fast" | "fallback",
+    adapter: LaneAdapter,
+    peer: string,
+    bytes: Uint8Array,
+  ): Promise<void> {
+    try {
+      await adapter.send(peer, bytes);
+      this.updateLaneHealth(lane, "send_ok");
+      this.hooks.onForward?.(peer, bytes);
+    } catch (error) {
+      this.updateLaneHealth(lane, "send_error");
+      this.hooks.onForwardError?.(lane, peer, error);
+    }
+  }
+
+  private async sendShardRequest(
+    sourcePeer: string,
+    payload: ShardRequestPayload,
+  ): Promise<void> {
+    if (!this.enableShardRequests || this.requestFanout <= 0) {
+      return;
+    }
+    const requestBytes = encodeShardRequest(payload);
+    const fanout = this.computeRequestFanout();
+    const total = fanout.fast + fanout.fallback;
+    if (total <= 0) {
+      return;
+    }
+    const peers = this.forwardPeers.filter((peer) => peer !== sourcePeer);
+    const selected = peers.slice(0, total);
+    const fastPeers = selected.slice(0, fanout.fast);
+    let fallbackPeers = selected.slice(fanout.fast, fanout.fast + fanout.fallback);
+    if (fallbackPeers.length === 0 && fanout.fallback > 0) {
+      fallbackPeers = peers.slice(0, fanout.fallback);
+    }
+
+    for (const peer of fastPeers) {
+      await this.sendOnLane("fast", this.fastLane, peer, requestBytes);
+    }
+    if (this.fallbackLane) {
+      for (const peer of fallbackPeers) {
+        await this.sendOnLane("fallback", this.fallbackLane, peer, requestBytes);
+      }
+    }
+  }
+
+  private async handleShardRequest(
+    lane: "fast" | "fallback",
+    adapter: LaneAdapter,
+    peer: string,
+    request: ShardRequestPayload,
+  ): Promise<void> {
+    if (!this.enableShardRequests) {
+      return;
+    }
+
+    const tagHex = request.tagHex.toLowerCase();
+    const objectRootHex = request.objectRootHex.toLowerCase();
+
+    for (const index of request.want) {
+      const key = `${objectRootHex}:${index}`;
+      const shardId = this.indexToShardId.get(key);
+      if (!shardId) {
+        continue;
+      }
+      const shardBytes = await this.cacheStore.get(shardId);
+      if (!shardBytes) {
+        continue;
+      }
+      await this.sendOnLane(lane, adapter, peer, shardBytes);
+    }
+
+    if (!this.subscriptions.has(tagHex)) {
+      return;
+    }
+    if (this.requestHopLimit <= 0 || request.hop >= this.requestHopLimit) {
+      return;
+    }
+    await this.sendShardRequest(peer, {
+      ...request,
+      hop: request.hop + 1,
+    });
+  }
+
+  private async maybeRequestMissing(
+    meta: Awaited<ReturnType<typeof decodeShardMeta>>,
+    sourcePeer: string,
+    nowMs: number,
+  ): Promise<void> {
+    if (!this.enableShardRequests || this.requestFanout <= 0) {
+      return;
+    }
+    const objectRootHex = meta.objectRootHex.toLowerCase();
+    const state = this.objectShardState.get(objectRootHex);
+    if (!state) {
+      return;
+    }
+    if (state.indices.size >= state.k) {
+      return;
+    }
+    const threshold = Math.max(1, state.k - 1);
+    if (state.indices.size < threshold) {
+      return;
+    }
+    if (nowMs - state.lastRequestAt < this.requestCooldownMs) {
+      return;
+    }
+
+    const missing: number[] = [];
+    for (let idx = 0; idx < state.n; idx += 1) {
+      if (!state.indices.has(idx)) {
+        missing.push(idx);
+      }
+    }
+    if (missing.length === 0) {
+      return;
+    }
+    const needed = Math.max(1, state.k - state.indices.size);
+    const want = missing.slice(0, Math.min(needed, 8));
+
+    state.lastRequestAt = nowMs;
+    await this.sendShardRequest(sourcePeer, {
+      version: SHARD_REQUEST_VERSION,
+      objectRootHex,
+      tagHex: state.tagHex,
+      k: state.k,
+      n: state.n,
+      want,
+      hop: 0,
+    });
+  }
+
   private async forwardOnLane(
     lane: "fast" | "fallback",
     adapter: LaneAdapter,
@@ -620,7 +969,18 @@ export class VeilClient {
     }
   }
 
-  private async processInbound(peer: string, bytes: Uint8Array): Promise<void> {
+  private async processInbound(
+    lane: "fast" | "fallback",
+    adapter: LaneAdapter,
+    peer: string,
+    bytes: Uint8Array,
+  ): Promise<void> {
+    const request = decodeShardRequest(bytes);
+    if (request) {
+      await this.handleShardRequest(lane, adapter, peer, request);
+      return;
+    }
+
     const nowMs = Date.now();
     this.maybePruneSeenShardIds(nowMs);
     const shardIdHex = this.shardIdHex(bytes);
@@ -654,8 +1014,19 @@ export class VeilClient {
     this.seenShardIds.set(shardIdHex, nowMs);
     await this.cacheStore.set(shardIdHex, bytes);
     this.cacheMeta.set(shardIdHex, { tier: inboundTier, lastSeenMs: nowMs });
+    this.cacheSeenCount.set(
+      shardIdHex,
+      (this.cacheSeenCount.get(shardIdHex) ?? 0) + 1,
+    );
+    this.noteShardIndex(meta, shardIdHex);
     await this.enforceCacheBudgets();
     this.hooks.onShard?.(peer, bytes);
+    await this.maybeRequestMissing(meta, peer, nowMs);
+
+    const hops = this.shardForwardHops.get(shardIdHex) ?? 0;
+    if (this.maxForwardHops === 0 || hops >= this.maxForwardHops) {
+      return;
+    }
 
     const fanout = this.computeLaneFanout();
     const totalFanout = fanout.fast + fanout.fallback;
@@ -677,6 +1048,9 @@ export class VeilClient {
         bytes,
       );
     }
+    if (totalFanout > 0) {
+      this.shardForwardHops.set(shardIdHex, hops + 1);
+    }
   }
 
   async tick(): Promise<void> {
@@ -684,14 +1058,19 @@ export class VeilClient {
       const msg = await this.fastLane.recv();
       if (msg) {
         this.updateLaneHealth("fast", "recv");
-        await this.processInbound(msg.peer, msg.bytes);
+        await this.processInbound("fast", this.fastLane, msg.peer, msg.bytes);
       }
 
       if (this.fallbackLane) {
         const fallbackMsg = await this.fallbackLane.recv();
         if (fallbackMsg) {
           this.updateLaneHealth("fallback", "recv");
-          await this.processInbound(fallbackMsg.peer, fallbackMsg.bytes);
+          await this.processInbound(
+            "fallback",
+            this.fallbackLane,
+            fallbackMsg.peer,
+            fallbackMsg.bytes,
+          );
         }
       }
     } catch (error) {

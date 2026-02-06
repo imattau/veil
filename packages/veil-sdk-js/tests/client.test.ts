@@ -1,3 +1,4 @@
+import { encode } from "cbor-x";
 import { describe, expect, test, vi } from "vitest";
 
 vi.mock("../src/codec", () => ({
@@ -217,5 +218,44 @@ describe("VeilClient lane scoring", () => {
     expect(health.fast.sendFailures).toBe(3);
     expect(health.fast.receives).toBe(5);
     expect(health.fast.transport.reconnectAttempts).toBe(2);
+  });
+
+  test("responds to shard pull requests with cached shards", async () => {
+    const fastLane = new StubLane();
+    const client = new VeilClient(
+      fastLane,
+      undefined,
+      {},
+      {
+        enableShardRequests: true,
+        requestFanout: 0,
+      },
+    );
+    client.subscribe("11".repeat(32));
+
+    const shardBytes = new Uint8Array([9, 9, 9]);
+    fastLane.enqueue("origin", shardBytes);
+    await client.tick();
+
+    const prefix = new TextEncoder().encode("VEILREQ1");
+    const payload = encode({
+      v: 1,
+      object_root: new Uint8Array(32).fill(0x22),
+      tag: new Uint8Array(32).fill(0x11),
+      k: 6,
+      n: 10,
+      want: [0],
+      hop: 0,
+    });
+    const request = new Uint8Array(prefix.length + payload.length);
+    request.set(prefix, 0);
+    request.set(payload, prefix.length);
+
+    fastLane.enqueue("peerB", request);
+    await client.tick();
+
+    expect(fastLane.sent.length).toBe(1);
+    expect(fastLane.sent[0]?.peer).toBe("peerB");
+    expect(fastLane.sent[0]?.bytes).toEqual(shardBytes);
   });
 });

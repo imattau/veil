@@ -29,6 +29,18 @@ export {
 } from "./codec";
 export type { ObjectMeta, ShardMeta } from "./codec";
 export {
+  decodeBlobManifestV1Bytes,
+  decodeDirectoryBundleV1Bytes,
+  encodeBlobManifestV1,
+  encodeDirectoryBundleV1,
+} from "./blob";
+export type {
+  BlobChunkRefV1,
+  BlobManifestV1,
+  DirectoryBundleV1,
+  DirectoryEntryV1,
+} from "./blob";
+export {
   configureTagBackend,
   currentEpoch,
   deriveChannelFeedTagHex,
@@ -36,6 +48,7 @@ export {
   deriveChannelRvTagHex,
   deriveFeedTagHex,
   deriveRvTagHex,
+  deriveRvTagWindowHex,
   hexToBytes,
   normalizeChannelId,
   initVeilWasm,

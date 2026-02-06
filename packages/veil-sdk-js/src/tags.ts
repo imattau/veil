@@ -119,6 +119,32 @@ export async function deriveRvTagHex(
   return bytesToHex(deriveRvTagPure(pubkey, epoch, namespace));
 }
 
+export async function deriveRvTagWindowHex(
+  recipientPubkeyHex: string,
+  nowSeconds: number,
+  namespace: number,
+  options: { epochSeconds?: number; overlapSeconds?: number } = {},
+): Promise<string[]> {
+  const epochSeconds = options.epochSeconds ?? 86_400;
+  const overlapSeconds = Math.max(0, options.overlapSeconds ?? 3_600);
+  const epoch = await currentEpoch(nowSeconds, epochSeconds);
+  const offset = nowSeconds % epochSeconds;
+  const epochs = new Set<number>();
+  epochs.add(epoch);
+  if (overlapSeconds > 0) {
+    if (offset >= epochSeconds - overlapSeconds) {
+      epochs.add(epoch + 1);
+    }
+    if (offset < overlapSeconds && epoch > 0) {
+      epochs.add(epoch - 1);
+    }
+  }
+  const ordered = [...epochs].sort((a, b) => a - b);
+  return Promise.all(
+    ordered.map((value) => deriveRvTagHex(recipientPubkeyHex, value, namespace)),
+  );
+}
+
 export async function deriveChannelFeedTagHex(
   publisherPubkeyHex: string,
   baseNamespace: number,

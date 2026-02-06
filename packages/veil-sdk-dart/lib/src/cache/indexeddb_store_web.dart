@@ -18,13 +18,16 @@ class IndexedDbShardCacheStore implements ShardCacheStore {
       return _db!;
     }
     final completer = Completer<Database>();
-    final request = window.indexedDB!.open(dbName, version: 1,
-        onUpgradeNeeded: (e) {
-      final db = (e.target as Request).result as Database;
-      if (!db.objectStoreNames!.contains(storeName)) {
-        db.createObjectStore(storeName);
-      }
-    });
+    final request = window.indexedDB!.open(
+      dbName,
+      version: 1,
+      onUpgradeNeeded: (e) {
+        final db = (e.target as Request).result as Database;
+        if (!db.objectStoreNames!.contains(storeName)) {
+          db.createObjectStore(storeName);
+        }
+      },
+    );
     request.onSuccess.listen((event) {
       _db = request.result as Database;
       completer.complete(_db!);

@@ -64,6 +64,34 @@ const client = new VeilClient(fastLane, fallbackLane, hooks, {
 });
 ```
 
+## Shard pull requests (missing shard recovery)
+
+`VeilClient` can auto-request missing shards when it has `k-1` indices.
+Requests are forwarded with a hop limit and cooldown to avoid flooding.
+
+```ts
+const client = new VeilClient(fastLane, fallbackLane, hooks, {
+  enableShardRequests: true,
+  requestFanout: 2,
+  requestHopLimit: 2,
+  requestCooldownMs: 2000,
+  maxForwardHops: 6,
+});
+```
+
+## Overlapping rendezvous tags
+
+For epoch transitions, derive current + adjacent RV tags to overlap windows.
+
+```ts
+import { deriveRvTagWindowHex } from "@veil/sdk-js";
+
+const tags = await deriveRvTagWindowHex(pubkeyHex, nowSeconds, namespace, {
+  epochSeconds: 86_400,
+  overlapSeconds: 3_600,
+});
+```
+
 ## Endorsement ingestion helpers
 
 `LocalWotPolicy` de-dupes endorsements per endorser/publisher pair and can prune
@@ -72,6 +100,23 @@ stale edges.
 ```ts
 policy.addEndorsement(endorserPubkey, publisherPubkey, nowStep);
 policy.pruneStaleEndorsements(nowStep);
+```
+
+## Blob manifests (app-level, non-normative)
+
+Use lightweight manifests to describe multi-object attachments.
+
+```ts
+import { encodeBlobManifestV1 } from "@veil/sdk-js";
+
+const manifestBytes = encodeBlobManifestV1({
+  version: 1,
+  mime: "image/png",
+  size: 245_103,
+  hashHex: imageHashHex,
+  chunks: [{ objectRootHex, tagHex, size: 131_072 }],
+  filename: "avatar.png",
+});
 ```
 
 ## Channel-scoped helpers

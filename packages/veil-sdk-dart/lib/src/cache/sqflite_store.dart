@@ -29,11 +29,10 @@ class SqfliteShardCacheStore implements ShardCacheStore {
 
   @override
   Future<void> set(String key, List<int> value) async {
-    await db.insert(
-      table,
-      {"key": key, "bytes": value},
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await db.insert(table, {
+      "key": key,
+      "bytes": value,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   @override

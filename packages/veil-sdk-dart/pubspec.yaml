@@ -15,3 +15,6 @@ dependencies:
   flutter_reactive_ble: ^5.1.1
 
 # Optional platform deps can be added by the app (sqflite, drift, flutter_reactive_ble).
+
+dev_dependencies:
+  test: ^1.25.8

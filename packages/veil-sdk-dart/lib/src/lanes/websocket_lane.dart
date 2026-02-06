@@ -71,8 +71,9 @@ class WebSocketLane implements VeilLane {
     }
     final delay = _reconnectDelay;
     _reconnectDelay = Duration(
-      milliseconds:
-          (delay.inMilliseconds * backoffMultiplier).clamp(0, reconnectMax.inMilliseconds).toInt(),
+      milliseconds: (delay.inMilliseconds * backoffMultiplier)
+          .clamp(0, reconnectMax.inMilliseconds)
+          .toInt(),
     );
     _reconnectAttempts += 1;
     _reconnectTimer = Timer(delay, () {

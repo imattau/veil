@@ -23,11 +23,13 @@ class BleLane implements VeilLane {
     this.mtu = 180,
   }) {
     _subscription = ble
-        .subscribeToCharacteristic(QualifiedCharacteristic(
-          serviceId: serviceUuid,
-          characteristicId: characteristicUuid,
-          deviceId: deviceId,
-        ))
+        .subscribeToCharacteristic(
+          QualifiedCharacteristic(
+            serviceId: serviceUuid,
+            characteristicId: characteristicUuid,
+            deviceId: deviceId,
+          ),
+        )
         .listen((data) {
           _inbox.add(LaneMessage(peer: deviceId, bytes: data));
         });
