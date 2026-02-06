@@ -35,10 +35,8 @@ impl Assembly {
 
     fn reassemble(self) -> Vec<u8> {
         let mut out = Vec::new();
-        for chunk in self.received.into_iter() {
-            if let Some(bytes) = chunk {
-                out.extend_from_slice(&bytes);
-            }
+        for bytes in self.received.into_iter().flatten() {
+            out.extend_from_slice(&bytes);
         }
         out
     }
@@ -73,7 +71,7 @@ pub fn split_into_frames(shard_id: [u8; 32], payload: &[u8], mtu: usize) -> Vec<
     let header_len = crate::protocol::BLE_FRAME_HEADER_LEN;
     let max_payload = mtu.saturating_sub(header_len).max(1);
     let mut frames = Vec::new();
-    let total = ((payload.len() + max_payload - 1) / max_payload).max(1) as u16;
+    let total = payload.len().div_ceil(max_payload).max(1) as u16;
 
     for (index, chunk) in payload.chunks(max_payload).enumerate() {
         frames.push(BleFrame::new(shard_id, index as u16, total, chunk.to_vec()));

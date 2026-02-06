@@ -126,6 +126,7 @@ pub fn build_ack_shard_bytes_with_mode(
 }
 
 /// Builds ACK object shards with explicit coding mode and bucket jitter.
+#[allow(clippy::too_many_arguments)]
 pub fn build_ack_shard_bytes_with_mode_and_padding(
     acked_object_root: ObjectRoot,
     tag: Tag,

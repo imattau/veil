@@ -101,7 +101,7 @@ impl CombinedFallbackAdapter {
     fn combined_max_payload_hint(&self) -> Option<usize> {
         let ws_hint = self.ws.as_ref().and_then(|w| w.max_payload_hint());
         let tor_hint = self.tor.as_ref().and_then(|t| t.max_payload_hint());
-        let mut hint = match (ws_hint, tor_hint) {
+        let hint = match (ws_hint, tor_hint) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (Some(a), None) => Some(a),
             (None, Some(b)) => Some(b),
@@ -110,7 +110,7 @@ impl CombinedFallbackAdapter {
         #[cfg(feature = "ble")]
         {
             let ble_hint = self.ble.as_ref().and_then(|b| b.max_payload_hint());
-            hint = match (hint, ble_hint) {
+            return match (hint, ble_hint) {
                 (Some(a), Some(b)) => Some(a.min(b)),
                 (Some(a), None) => Some(a),
                 (None, Some(b)) => Some(b),
@@ -199,20 +199,20 @@ impl TransportAdapter for CombinedFallbackAdapter {
     }
 
     fn can_send(&self) -> bool {
-        let mut ok = self.ws.as_ref().map(|w| w.can_send()).unwrap_or(false)
+        let ok = self.ws.as_ref().map(|w| w.can_send()).unwrap_or(false)
             || self.tor.as_ref().map(|t| t.can_send()).unwrap_or(false);
         #[cfg(feature = "ble")]
         {
-            ok = ok || self.ble.as_ref().map(|b| b.can_send()).unwrap_or(false);
+            return ok || self.ble.as_ref().map(|b| b.can_send()).unwrap_or(false);
         }
         ok
     }
 
     fn can_recv(&self) -> bool {
-        let mut ok = self.ws.as_ref().map(|w| w.can_recv()).unwrap_or(false);
+        let ok = self.ws.as_ref().map(|w| w.can_recv()).unwrap_or(false);
         #[cfg(feature = "ble")]
         {
-            ok = ok || self.ble.as_ref().map(|b| b.can_recv()).unwrap_or(false);
+            return ok || self.ble.as_ref().map(|b| b.can_recv()).unwrap_or(false);
         }
         ok
     }
@@ -464,10 +464,10 @@ fn parse_fallback_peer_strings(values: &[String]) -> Vec<FallbackPeer> {
                 Some(FallbackPeer::WebSocket(rest.to_string()))
             } else if let Some(rest) = value.strip_prefix("tor:") {
                 Some(FallbackPeer::Tor(rest.to_string()))
-            } else if let Some(rest) = value.strip_prefix("ble:") {
+            } else if let Some(_rest) = value.strip_prefix("ble:") {
                 #[cfg(feature = "ble")]
                 {
-                    Some(FallbackPeer::Ble(BlePeer::new(rest.to_string())))
+                    Some(FallbackPeer::Ble(BlePeer::new(_rest.to_string())))
                 }
                 #[cfg(not(feature = "ble"))]
                 {
@@ -553,69 +553,65 @@ fn start_health_server(
                 return;
             }
         };
-        for stream in listener.incoming() {
-            if let Ok(mut stream) = stream {
-                let mut buf = [0_u8; 1024];
-                let _ = stream.read(&mut buf);
-                let req = String::from_utf8_lossy(&buf);
-                let ok = req.starts_with("GET /health") || req.starts_with("GET /healthz");
-                let is_metrics = req.starts_with("GET /metrics");
-                let is_peers = req.starts_with("GET /peers");
-                let (status, body) = if ok {
-                    ("200 OK", "ok".to_string())
-                } else if is_metrics {
-                    let body = format!(
-                        "veil_ticks_total {}\nveil_delivered_total {}\nveil_send_failures_total {}\nveil_ack_clears_total {}\nveil_fast_outbound_ok {}\nveil_fast_outbound_err {}\nveil_fallback_outbound_ok {}\nveil_fallback_outbound_err {}\nveil_fast_inbound {}\nveil_fallback_inbound {}\n",
-                        metrics.ticks.load(Ordering::Relaxed),
-                        metrics.delivered.load(Ordering::Relaxed),
-                        metrics.send_failures.load(Ordering::Relaxed),
-                        metrics.ack_clears.load(Ordering::Relaxed),
-                        metrics.last_fast_outbound_ok.load(Ordering::Relaxed),
-                        metrics.last_fast_outbound_err.load(Ordering::Relaxed),
-                        metrics.last_fallback_outbound_ok.load(Ordering::Relaxed),
-                        metrics.last_fallback_outbound_err.load(Ordering::Relaxed),
-                        metrics.last_fast_inbound.load(Ordering::Relaxed),
-                        metrics.last_fallback_inbound.load(Ordering::Relaxed),
-                    );
-                    ("200 OK", body)
-                } else if is_peers {
-                    let mut limit = 200usize;
-                    let mut prefix: Option<String> = None;
-                    if let Some(line) = req.lines().next() {
-                        if let Some(path) = line.split_whitespace().nth(1) {
-                            if let Some(query) = path.split('?').nth(1) {
-                                for pair in query.split('&') {
-                                    let mut parts = pair.splitn(2, '=');
-                                    let key = parts.next().unwrap_or("");
-                                    let value = parts.next().unwrap_or("");
-                                    if key == "limit" {
-                                        if let Ok(parsed) = value.parse::<usize>() {
-                                            limit = parsed.min(1000);
-                                        }
-                                    } else if key == "prefix" {
-                                        if !value.is_empty() {
-                                            prefix = Some(value.to_string());
-                                        }
+        for mut stream in listener.incoming().flatten() {
+            let mut buf = [0_u8; 1024];
+            let _ = stream.read(&mut buf);
+            let req = String::from_utf8_lossy(&buf);
+            let ok = req.starts_with("GET /health") || req.starts_with("GET /healthz");
+            let is_metrics = req.starts_with("GET /metrics");
+            let is_peers = req.starts_with("GET /peers");
+            let (status, body) = if ok {
+                ("200 OK", "ok".to_string())
+            } else if is_metrics {
+                let body = format!(
+                    "veil_ticks_total {}\nveil_delivered_total {}\nveil_send_failures_total {}\nveil_ack_clears_total {}\nveil_fast_outbound_ok {}\nveil_fast_outbound_err {}\nveil_fallback_outbound_ok {}\nveil_fallback_outbound_err {}\nveil_fast_inbound {}\nveil_fallback_inbound {}\n",
+                    metrics.ticks.load(Ordering::Relaxed),
+                    metrics.delivered.load(Ordering::Relaxed),
+                    metrics.send_failures.load(Ordering::Relaxed),
+                    metrics.ack_clears.load(Ordering::Relaxed),
+                    metrics.last_fast_outbound_ok.load(Ordering::Relaxed),
+                    metrics.last_fast_outbound_err.load(Ordering::Relaxed),
+                    metrics.last_fallback_outbound_ok.load(Ordering::Relaxed),
+                    metrics.last_fallback_outbound_err.load(Ordering::Relaxed),
+                    metrics.last_fast_inbound.load(Ordering::Relaxed),
+                    metrics.last_fallback_inbound.load(Ordering::Relaxed),
+                );
+                ("200 OK", body)
+            } else if is_peers {
+                let mut limit = 200usize;
+                let mut prefix: Option<String> = None;
+                if let Some(line) = req.lines().next() {
+                    if let Some(path) = line.split_whitespace().nth(1) {
+                        if let Some(query) = path.split('?').nth(1) {
+                            for pair in query.split('&') {
+                                let mut parts = pair.splitn(2, '=');
+                                let key = parts.next().unwrap_or("");
+                                let value = parts.next().unwrap_or("");
+                                if key == "limit" {
+                                    if let Ok(parsed) = value.parse::<usize>() {
+                                        limit = parsed.min(1000);
                                     }
+                                } else if key == "prefix" && !value.is_empty() {
+                                    prefix = Some(value.to_string());
                                 }
                             }
                         }
                     }
-                    let peers = peer_snapshot.lock().unwrap_or_else(|e| e.into_inner());
-                    let iter = peers.iter().filter(|peer| {
-                        prefix.as_ref().map(|p| peer.starts_with(p)).unwrap_or(true)
-                    });
-                    let body = iter.take(limit).cloned().collect::<Vec<_>>().join("\n");
-                    ("200 OK", body)
-                } else {
-                    ("404 Not Found", "not found".to_string())
-                };
-                let resp = format!(
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(resp.as_bytes());
-            }
+                }
+                let peers = peer_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+                let iter = peers
+                    .iter()
+                    .filter(|peer| prefix.as_ref().map(|p| peer.starts_with(p)).unwrap_or(true));
+                let body = iter.take(limit).cloned().collect::<Vec<_>>().join("\n");
+                ("200 OK", body)
+            } else {
+                ("404 Not Found", "not found".to_string())
+            };
+            let resp = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
         }
     });
 }

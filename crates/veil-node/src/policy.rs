@@ -592,14 +592,18 @@ mod tests {
 
     #[test]
     fn eviction_weight_tuning_changes_priority_order() {
-        let mut cfg = super::WotConfig::default();
-        cfg.eviction_weight_replica = 1.0;
-        cfg.eviction_weight_trust = 0.0;
+        let cfg = super::WotConfig {
+            eviction_weight_replica: 1.0,
+            eviction_weight_trust: 0.0,
+            ..Default::default()
+        };
         let replica_policy = LocalWotPolicy::new(cfg);
 
-        let mut cfg = super::WotConfig::default();
-        cfg.eviction_weight_replica = 0.0;
-        cfg.eviction_weight_trust = 1.0;
+        let cfg = super::WotConfig {
+            eviction_weight_replica: 0.0,
+            eviction_weight_trust: 1.0,
+            ..Default::default()
+        };
         let trust_policy = LocalWotPolicy::new(cfg);
 
         let high_replica_known = ShardMeta {

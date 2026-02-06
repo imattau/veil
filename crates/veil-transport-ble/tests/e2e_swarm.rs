@@ -112,10 +112,10 @@ fn ble_swarm_propagates_shard() {
     let peers = vec![nodes[0].peer(), nodes[1].peer(), nodes[2].peer()];
 
     for step in 0..6_u64 {
-        for i in 0..nodes.len() {
+        for node in nodes.iter_mut() {
             let mut peer_list = peers.clone();
-            peer_list.retain(|p| p.addr != nodes[i].name);
-            let _ = nodes[i].runtime.tick(step, &peer_list, &[]);
+            peer_list.retain(|p| p.addr != node.name);
+            let _ = node.runtime.tick(step, &peer_list, &[]);
         }
         route_ble_frames(&mut nodes);
     }
