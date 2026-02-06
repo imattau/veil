@@ -1,24 +1,13 @@
 # VEIL Desktop (Electron + React)
 
 This is a Linux desktop example that connects to a VEIL WebSocket lane using the
-JavaScript SDK. It is intentionally minimal: a control panel on the left and
-real‑time shard activity on the right.
+JavaScript SDK. It can optionally spawn a local relay so the app is self‑contained.
 
-## Prerequisites
-
-- Node.js 18+
-- A running VEIL WebSocket relay or node (e.g. `ws://127.0.0.1:9001`)
-
-## Install
+## Build & Run
 
 ```bash
 cd apps/veil-desktop
 npm install
-```
-
-If you change the SDK, rebuild it before running the desktop app:
-
-```bash
 npm --prefix ../../packages/veil-sdk-js run build
 ```
 
@@ -28,26 +17,23 @@ npm --prefix ../../packages/veil-sdk-js run build
 npm run dev
 ```
 
-This starts Vite and Electron. The app loads `ELECTRON_START_URL` pointing at the
-Vite dev server.
+## Self-contained mode (local relay)
 
-## Package (Linux)
+Build the relay binary:
 
 ```bash
-npm run package
+cargo build -p veil-desktop-relay --release
 ```
 
-Output will be in `apps/veil-desktop/dist/` (AppImage by default).
+Run the app with the relay path:
 
-## Usage
+```bash
+VEIL_DESKTOP_RELAY_PATH=../../target/release/veil-desktop-relay npm run dev
+```
 
-- Set the WebSocket URL of your VEIL relay/node.
-- Provide a peer ID string that matches your relay config.
-- Enter forward peers (comma-separated) for fanout targets.
-- Subscribe to the tag hex your publisher uses.
-- Click **Start**.
+The app will spawn the relay and connect to `ws://127.0.0.1:9001` by default.
 
 ## Notes
 
-- This example uses the SDK’s `WebSocketLaneAdapter` and `VeilClient`.
-- BLE/QUIC/Tor lanes are not available in Electron; they are Rust runtime lanes.
+- Uses the SDK’s `WebSocketLaneAdapter` and `VeilClient`.
+- The local relay is a simple broadcast relay (no persistence).

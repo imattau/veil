@@ -1,0 +1,10 @@
+[package]
+name = "veil-desktop-relay"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+futures-util = "0.3"

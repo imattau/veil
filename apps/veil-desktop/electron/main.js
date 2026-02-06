@@ -1,5 +1,29 @@
 const { app, BrowserWindow } = require("electron");
 const path = require("path");
+const { spawn } = require("child_process");
+
+let relayProcess = null;
+
+const startRelay = () => {
+  const relayPath = process.env.VEIL_DESKTOP_RELAY_PATH;
+  if (!relayPath) {
+    return;
+  }
+  relayProcess = spawn(relayPath, [], {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      VEIL_RELAY_BIND: process.env.VEIL_RELAY_BIND ?? "127.0.0.1:9001",
+    },
+  });
+};
+
+const stopRelay = () => {
+  if (relayProcess) {
+    relayProcess.kill();
+    relayProcess = null;
+  }
+};
 
 const createWindow = () => {
   const win = new BrowserWindow({
@@ -21,6 +45,7 @@ const createWindow = () => {
 };
 
 app.whenReady().then(() => {
+  startRelay();
   createWindow();
 
   app.on("activate", () => {
@@ -31,7 +56,12 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
+  stopRelay();
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("quit", () => {
+  stopRelay();
 });

@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "apps/veil-vps-node",
+  "apps/veil-desktop-relay",
   "crates/veil-core",
   "crates/veil-codec",
   "crates/veil-crypto",
