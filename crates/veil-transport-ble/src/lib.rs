@@ -42,6 +42,12 @@ impl BlePeer {
     }
 }
 
+impl std::fmt::Display for BlePeer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.addr)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BleAdapterConfig {
     pub mtu: usize,

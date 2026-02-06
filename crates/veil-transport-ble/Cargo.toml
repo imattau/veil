@@ -18,3 +18,8 @@ btleplug = ["dep:btleplug", "dep:futures-util", "dep:tokio", "dep:uuid"]
 
 [dev-dependencies]
 rand = { workspace = true }
+veil-codec = { path = "../veil-codec" }
+veil-core = { path = "../veil-core" }
+veil-crypto = { path = "../veil-crypto" }
+veil-fec = { path = "../veil-fec" }
+veil-node = { path = "../veil-node" }

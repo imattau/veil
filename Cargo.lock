@@ -1898,6 +1898,11 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "uuid",
+ "veil-codec",
+ "veil-core",
+ "veil-crypto",
+ "veil-fec",
+ "veil-node",
  "veil-transport",
 ]
 
