@@ -32,6 +32,7 @@ VEIL is designed to be practical first:
 - `crates/veil-sim` - e2e, performance, stress, and memory tests
 - `crates/veil-schema-feed` - optional, non-normative app/feed bundle schema
 - `apps/veil-desktop` - Electron + React desktop example using SDK-js
+- `packages/veil-sdk-dart` - Flutter/Dart SDK scaffold (FRB bridge + lanes)
 - `docs/runbooks/transport_profiles.md` - deployment notes for fast/fallback lane profiles
 
 ## Quick start

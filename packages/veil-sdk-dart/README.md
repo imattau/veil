@@ -1,0 +1,29 @@
+# VEIL Dart/Flutter SDK (Scaffold)
+
+This package provides a Dart/Flutter-facing API and a Rust FFI bridge scaffold
+for the VEIL protocol. The current implementation focuses on structure and
+interfaces; the Rust bridge functions are stubbed for now.
+
+## Goals
+
+- Wrap Rust core crates for tag derivation, encoding, FEC, and crypto.
+- Provide Dart-native transport lanes (WebSocket + BLE).
+- Provide a client runtime loop and cache policy hooks.
+- Keep Flutter apps transport-agnostic.
+
+## Status
+
+- FFI bridge: scaffolded API surface in `lib/src/bridge/veil_bridge.dart`.
+- WebSocket lane: reconnection + buffered send queue.
+- BLE lane: skeleton with MTU chunking hooks (requires flutter_reactive_ble in app).
+- Client runtime: minimal loop + subscription set.
+
+## Next steps
+
+1. Generate FRB bindings from a Rust crate that exposes:
+   - `derive_feed_tag`, `derive_rv_tag`, `current_epoch` (veil-core)
+   - `encode_object`, `decode_object` (veil-codec)
+   - `object_to_shards`, `reconstruct_object` (veil-fec)
+2. Wire `VeilClient` to call the bridge for validation and reconstruction.
+3. Add persistence adapters (Sqflite / drift / IndexedDB).
+
