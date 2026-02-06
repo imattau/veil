@@ -29,6 +29,18 @@ export {
 } from "./codec";
 export type { ObjectMeta, ShardMeta } from "./codec";
 export {
+  buildMediaDescriptorFromChunks,
+  decodeAppEnvelope,
+  encodeAppEnvelope,
+  encodeCanonicalMap,
+  encodeFileChunk,
+  encodeMediaDescriptor,
+  encodeSocialPost,
+  extractReferences,
+  splitIntoFileChunks,
+} from "./app_schemas";
+export type { AppEnvelope, FileChunkV1, MediaDescriptorV1, SocialPostV1 } from "./app_schemas";
+export {
   decodeBlobManifestV1Bytes,
   decodeDirectoryBundleV1Bytes,
   encodeBlobManifestV1,

@@ -119,6 +119,25 @@ const manifestBytes = encodeBlobManifestV1({
 });
 ```
 
+## Social app schemas (non-normative)
+
+Use the app schema helpers for `post`, `media_desc`, and `chunk` payloads. Maps
+are encoded with lexicographically sorted keys to keep deterministic roots.
+
+```ts
+import { encodeSocialPost, extractReferences } from "@veil/sdk-js";
+
+const bytes = encodeSocialPost({
+  type: "post",
+  version: 1,
+  body: "hello",
+  thread_root: threadRootHex,
+  attachments: [mediaDescriptor],
+});
+
+const refs = extractReferences({ type: "post", version: 1, payload: { ... } });
+```
+
 ## Channel-scoped helpers
 
 Use channel-scoped helpers to avoid cross-channel feed collisions:

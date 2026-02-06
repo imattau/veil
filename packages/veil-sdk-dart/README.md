@@ -22,6 +22,7 @@ interfaces; the Rust bridge functions are stubbed for now.
 - Shard pull requests: request missing shards when `k-1` indices arrive.
 - Overlapping RV tags: helper for epoch transition windows.
 - Blob manifests: app-level CBOR helpers for attachment bundles.
+- Social schemas: non-normative app payload helpers (post/media/chunk).
 
 ## Next steps
 
