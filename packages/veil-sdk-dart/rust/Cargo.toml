@@ -8,7 +8,7 @@ license = "GPL-2.0-or-later"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-flutter_rust_bridge = "2.4.0"
+flutter_rust_bridge = "=2.11.1"
 veil-core = { path = "../../../crates/veil-core" }
 veil-codec = { path = "../../../crates/veil-codec" }
 veil-fec = { path = "../../../crates/veil-fec" }
