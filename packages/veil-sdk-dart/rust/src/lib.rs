@@ -1,6 +1,5 @@
 mod frb_generated; /* AUTO INJECTED BY flutter_rust_bridge. This line may not be accurate, and you can change it according to your needs. */
-#![allow(unexpected_cfgs)]
-
+#[allow(unexpected_cfgs)]
 use flutter_rust_bridge::frb;
 
 #[frb]
@@ -11,11 +10,11 @@ pub mod api {
         OBJECT_FLAG_SIGNED,
     };
     use veil_codec::shard::decode_shard_cbor;
-    use veil_crypto::aead::{build_veil_aad, AeadCipher, XChaCha20Poly1305Cipher};
     use veil_core::hash::blake3_32;
     use veil_core::tags::{current_epoch, derive_feed_tag, derive_rv_tag};
     use veil_core::types::{Epoch, Namespace};
     use veil_core::{ObjectRoot, Tag};
+    use veil_crypto::aead::{build_veil_aad, AeadCipher, XChaCha20Poly1305Cipher};
     use veil_fec::sharder::reconstruct_object_padded;
 
     #[derive(Clone, Debug)]
