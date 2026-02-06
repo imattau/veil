@@ -22,9 +22,7 @@ async fn e2e_transport_runtime_smoke_starts_and_stops() {
     let ws_listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) => {
-            eprintln!(
-                "skipping transport runtime smoke test (bind failed: {err})"
-            );
+            eprintln!("skipping transport runtime smoke test (bind failed: {err})");
             return;
         }
     };
@@ -47,9 +45,7 @@ async fn e2e_transport_runtime_smoke_starts_and_stops() {
     let socks_listener = match TcpListener::bind("127.0.0.1:0").await {
         Ok(listener) => listener,
         Err(err) => {
-            eprintln!(
-                "skipping transport runtime smoke test (socks bind failed: {err})"
-            );
+            eprintln!("skipping transport runtime smoke test (socks bind failed: {err})");
             return;
         }
     };

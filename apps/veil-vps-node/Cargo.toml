@@ -1,0 +1,15 @@
+[package]
+name = "veil-vps-node"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+
+[dependencies]
+rand = { workspace = true }
+veil-core = { path = "../../crates/veil-core" }
+veil-crypto = { path = "../../crates/veil-crypto" }
+veil-node = { path = "../../crates/veil-node" }
+veil-transport = { path = "../../crates/veil-transport" }
+veil-transport-quic = { path = "../../crates/veil-transport-quic" }
+veil-transport-websocket = { path = "../../crates/veil-transport-websocket" }
+veil-transport-tor = { path = "../../crates/veil-transport-tor" }

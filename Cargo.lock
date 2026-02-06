@@ -1480,6 +1480,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "veil-vps-node"
+version = "0.1.0"
+dependencies = [
+ "rand 0.8.5",
+ "veil-core",
+ "veil-crypto",
+ "veil-node",
+ "veil-transport",
+ "veil-transport-quic",
+ "veil-transport-tor",
+ "veil-transport-websocket",
+]
+
+[[package]]
 name = "veil-wasm"
 version = "0.1.0"
 dependencies = [

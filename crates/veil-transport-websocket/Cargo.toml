@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 veil-transport = { path = "../veil-transport" }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "net"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "net", "macros"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 thiserror.workspace = true
