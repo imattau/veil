@@ -3,6 +3,7 @@ import { blake3 } from "@noble/hashes/blake3";
 import { bytesToHex } from "./bytes";
 import { decodeShardMeta } from "./codec";
 import { MemoryShardCacheStore, type ShardCacheStore } from "./storage";
+import type { LocalWotPolicy, TrustTier } from "./wot";
 
 export type TagHex = string;
 
@@ -51,6 +52,25 @@ export interface VeilClientOptions {
   maxSeenShardIds?: number;
   seenShardTtlMs?: number;
   laneHealthEmitMs?: number;
+  tieredForwarding?: boolean;
+  forwardingQuotas?: Partial<ForwardingQuotas>;
+  unknownForwardFloor?: number;
+  classifyPeerTier?: (peer: string, meta: Awaited<ReturnType<typeof decodeShardMeta>>) => TrustTier;
+  resolvePublisher?:
+    | ((
+        peer: string,
+        meta: Awaited<ReturnType<typeof decodeShardMeta>>,
+      ) => string | null)
+    | null;
+  wotPolicy?: LocalWotPolicy;
+  shouldAcceptShard?:
+    | ((
+        peer: string,
+        meta: Awaited<ReturnType<typeof decodeShardMeta>>,
+      ) => boolean | Promise<boolean>)
+    | null;
+  maxCacheShards?: number;
+  tierCacheBudgets?: Partial<TierCacheBudgets>;
 }
 
 export interface LaneHealth {
@@ -67,6 +87,30 @@ export interface LaneHealthSnapshot {
   fallback?: LaneHealth;
 }
 
+export interface ForwardingQuotas {
+  trusted: number;
+  known: number;
+  unknown: number;
+  muted: number;
+  blocked: number;
+}
+
+export interface TierCacheBudgets {
+  trusted: number;
+  known: number;
+  unknown: number;
+  muted: number;
+  blocked: number;
+}
+
+const DEFAULT_FORWARDING_QUOTAS: ForwardingQuotas = {
+  trusted: 0.7,
+  known: 0.25,
+  unknown: 0.05,
+  muted: 0,
+  blocked: 0,
+};
+
 export class VeilClient {
   private readonly subscriptions = new Set<TagHex>();
   private readonly cacheStore: ShardCacheStore;
@@ -80,6 +124,29 @@ export class VeilClient {
   private readonly maxSeenShardIds: number;
   private readonly seenShardTtlMs: number;
   private readonly laneHealthEmitMs: number;
+  private readonly tieredForwarding: boolean;
+  private readonly forwardingQuotas: ForwardingQuotas;
+  private readonly unknownForwardFloor: number;
+  private readonly classifyPeerTier?: (
+    peer: string,
+    meta: Awaited<ReturnType<typeof decodeShardMeta>>,
+  ) => TrustTier;
+  private readonly resolvePublisher?:
+    | ((
+        peer: string,
+        meta: Awaited<ReturnType<typeof decodeShardMeta>>,
+      ) => string | null)
+    | null;
+  private readonly wotPolicy?: LocalWotPolicy;
+  private readonly shouldAcceptShard?:
+    | ((
+        peer: string,
+        meta: Awaited<ReturnType<typeof decodeShardMeta>>,
+      ) => boolean | Promise<boolean>)
+    | null;
+  private readonly maxCacheShards: number;
+  private readonly tierCacheBudgets: TierCacheBudgets;
+  private readonly cacheMeta = new Map<string, { tier: TrustTier; lastSeenMs: number }>();
   private seenSincePrune = 0;
   private running = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -112,6 +179,22 @@ export class VeilClient {
     this.maxSeenShardIds = Math.max(1, options.maxSeenShardIds ?? 50_000);
     this.seenShardTtlMs = Math.max(1_000, options.seenShardTtlMs ?? 30 * 60 * 1_000);
     this.laneHealthEmitMs = Math.max(0, options.laneHealthEmitMs ?? 250);
+    this.tieredForwarding = options.tieredForwarding ?? true;
+    this.forwardingQuotas = { ...DEFAULT_FORWARDING_QUOTAS, ...options.forwardingQuotas };
+    this.unknownForwardFloor = Math.max(0, options.unknownForwardFloor ?? 0.05);
+    this.classifyPeerTier = options.classifyPeerTier;
+    this.resolvePublisher = options.resolvePublisher ?? null;
+    this.wotPolicy = options.wotPolicy;
+    this.shouldAcceptShard = options.shouldAcceptShard ?? null;
+    this.maxCacheShards = Math.max(0, options.maxCacheShards ?? Number.POSITIVE_INFINITY);
+    this.tierCacheBudgets = {
+      trusted: Number.POSITIVE_INFINITY,
+      known: Number.POSITIVE_INFINITY,
+      unknown: Number.POSITIVE_INFINITY,
+      muted: Number.POSITIVE_INFINITY,
+      blocked: 0,
+      ...options.tierCacheBudgets,
+    };
     if (fallbackLane) {
       this.laneHealth.fallback = {
         score: 1,
@@ -203,6 +286,163 @@ export class VeilClient {
 
   private shardIdHex(bytes: Uint8Array): string {
     return bytesToHex(blake3(bytes, { dkLen: 32 }));
+  }
+
+  private resolveTier(
+    peer: string,
+    meta: Awaited<ReturnType<typeof decodeShardMeta>>,
+  ): TrustTier {
+    if (this.classifyPeerTier) {
+      return this.classifyPeerTier(peer, meta);
+    }
+    if (this.wotPolicy && this.resolvePublisher) {
+      const publisher = this.resolvePublisher(peer, meta);
+      if (publisher) {
+        return this.wotPolicy.classifyPublisher(publisher, meta.epoch);
+      }
+    }
+    return "unknown";
+  }
+
+  private buildTieredForwardPeers(
+    meta: Awaited<ReturnType<typeof decodeShardMeta>>,
+    totalFanout: number,
+  ): string[] {
+    if (!this.tieredForwarding || totalFanout <= 0) {
+      return [...this.forwardPeers];
+    }
+
+    const tierBuckets: Record<TrustTier, string[]> = {
+      trusted: [],
+      known: [],
+      unknown: [],
+      muted: [],
+      blocked: [],
+    };
+    for (const peer of this.forwardPeers) {
+      const tier = this.resolveTier(peer, meta);
+      tierBuckets[tier].push(peer);
+    }
+
+    const unknownFloor = Math.ceil(totalFanout * this.unknownForwardFloor);
+    const desired: Record<TrustTier, number> = {
+      trusted: Math.floor(totalFanout * this.forwardingQuotas.trusted),
+      known: Math.floor(totalFanout * this.forwardingQuotas.known),
+      unknown: Math.floor(totalFanout * this.forwardingQuotas.unknown),
+      muted: Math.floor(totalFanout * this.forwardingQuotas.muted),
+      blocked: 0,
+    };
+    if (unknownFloor > desired.unknown) {
+      desired.unknown = unknownFloor;
+    }
+
+    const tierOrder: TrustTier[] = ["trusted", "known", "unknown", "muted"];
+    let desiredTotal =
+      desired.trusted + desired.known + desired.unknown + desired.muted;
+    while (desiredTotal > totalFanout) {
+      for (const tier of ["trusted", "known", "muted"] as const) {
+        if (desiredTotal <= totalFanout) {
+          break;
+        }
+        if (desired[tier] > 0) {
+          desired[tier] -= 1;
+          desiredTotal -= 1;
+        }
+      }
+      if (desiredTotal <= totalFanout) {
+        break;
+      }
+      if (desired.unknown > unknownFloor) {
+        desired.unknown -= 1;
+        desiredTotal -= 1;
+      } else {
+        break;
+      }
+    }
+
+    const selected: string[] = [];
+    for (const tier of tierOrder) {
+      const take = Math.min(desired[tier], tierBuckets[tier].length);
+      selected.push(...tierBuckets[tier].slice(0, take));
+    }
+
+    if (selected.length < totalFanout) {
+      for (const tier of tierOrder) {
+        if (selected.length >= totalFanout) {
+          break;
+        }
+        for (const peer of tierBuckets[tier]) {
+          if (selected.length >= totalFanout) {
+            break;
+          }
+          if (!selected.includes(peer)) {
+            selected.push(peer);
+          }
+        }
+      }
+    }
+
+    return selected;
+  }
+
+  private async enforceCacheBudgets(): Promise<void> {
+    const total = this.cacheMeta.size;
+    if (total === 0) {
+      return;
+    }
+
+    const tierCounts: Record<TrustTier, number> = {
+      trusted: 0,
+      known: 0,
+      unknown: 0,
+      muted: 0,
+      blocked: 0,
+    };
+    for (const meta of this.cacheMeta.values()) {
+      tierCounts[meta.tier] += 1;
+    }
+
+    const evictTier = async (tier: TrustTier, limit: number): Promise<void> => {
+      if (limit <= 0) {
+        return;
+      }
+      const candidates = [...this.cacheMeta.entries()]
+        .filter(([, meta]) => meta.tier === tier)
+        .sort((a, b) => a[1].lastSeenMs - b[1].lastSeenMs)
+        .slice(0, limit);
+      for (const [shardId] of candidates) {
+        await this.cacheStore.delete(shardId);
+        this.cacheMeta.delete(shardId);
+        tierCounts[tier] -= 1;
+      }
+    };
+
+    for (const tier of ["blocked", "muted", "unknown", "known", "trusted"] as const) {
+      const over = tierCounts[tier] - (this.tierCacheBudgets[tier] ?? Infinity);
+      if (over > 0) {
+        await evictTier(tier, over);
+      }
+    }
+
+    while (this.cacheMeta.size > this.maxCacheShards) {
+      for (const tier of ["blocked", "muted", "unknown", "known", "trusted"] as const) {
+        if (this.cacheMeta.size <= this.maxCacheShards) {
+          break;
+        }
+        const candidates = [...this.cacheMeta.entries()]
+          .filter(([, meta]) => meta.tier === tier)
+          .sort((a, b) => a[1].lastSeenMs - b[1].lastSeenMs);
+        if (candidates.length === 0) {
+          continue;
+        }
+        const [shardId] = candidates[0];
+        await this.cacheStore.delete(shardId);
+        this.cacheMeta.delete(shardId);
+      }
+      if (this.cacheMeta.size <= this.maxCacheShards) {
+        break;
+      }
+    }
   }
 
   private scheduleNextTick(delayMs: number): void {
@@ -396,19 +636,32 @@ export class VeilClient {
       this.hooks.onIgnoredMalformed?.(peer, error);
       return;
     }
+
+    if (this.shouldAcceptShard) {
+      const accepted = await this.shouldAcceptShard(peer, meta);
+      if (!accepted) {
+        return;
+      }
+    }
+
     const tagHex = meta.tagHex.toLowerCase();
     if (!this.subscriptions.has(tagHex)) {
       this.hooks.onIgnoredUnsubscribed?.(tagHex);
       return;
     }
 
+    const inboundTier = this.resolveTier(peer, meta);
     this.seenShardIds.set(shardIdHex, nowMs);
     await this.cacheStore.set(shardIdHex, bytes);
+    this.cacheMeta.set(shardIdHex, { tier: inboundTier, lastSeenMs: nowMs });
+    await this.enforceCacheBudgets();
     this.hooks.onShard?.(peer, bytes);
 
     const fanout = this.computeLaneFanout();
-    const fastPeers = this.forwardPeers.slice(0, fanout.fast);
-    let fallbackPeers = this.forwardPeers.slice(fanout.fast, fanout.fast + fanout.fallback);
+    const totalFanout = fanout.fast + fanout.fallback;
+    const forwardPeers = this.buildTieredForwardPeers(meta, totalFanout);
+    const fastPeers = forwardPeers.slice(0, fanout.fast);
+    let fallbackPeers = forwardPeers.slice(fanout.fast, fanout.fast + fanout.fallback);
     if (fallbackPeers.length === 0 && fanout.fallback > 0) {
       // If peer list is smaller than desired total fanout, allow overlap.
       fallbackPeers = this.forwardPeers.slice(0, fanout.fallback);

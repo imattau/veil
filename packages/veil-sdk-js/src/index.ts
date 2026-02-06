@@ -1,6 +1,8 @@
 export { VeilClient } from "./client";
 export type {
   LaneAdapter,
+  ForwardingQuotas,
+  TierCacheBudgets,
   LaneHealth,
   LaneHealthSnapshot,
   TransportHealthSnapshot,
@@ -49,4 +51,11 @@ export {
   verifyEd25519,
 } from "./keys";
 export { defaultWotConfig, LocalWotPolicy, rankFeedItemsByTrust } from "./wot";
-export type { Endorsement, RankableFeedItem, TrustScoreExplanation, TrustTier, WotConfig } from "./wot";
+export type {
+  Endorsement,
+  EndorsementRecord,
+  RankableFeedItem,
+  TrustScoreExplanation,
+  TrustTier,
+  WotConfig,
+} from "./wot";

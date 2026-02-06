@@ -48,6 +48,31 @@ describe("LocalWotPolicy", () => {
     expect(imported.classifyPublisher(trusted, 50)).toBe("trusted");
     expect(imported.scorePublisher(publisher, 50)).toBeGreaterThan(0);
   });
+
+  test("de-duplicates endorsements and keeps newest", () => {
+    const policy = new LocalWotPolicy();
+    const endorser = hex("a");
+    const publisher = hex("b");
+    policy.trust(endorser);
+
+    policy.addEndorsement(endorser, publisher, 10);
+    policy.addEndorsement(endorser, publisher, 5);
+    policy.addEndorsement(endorser, publisher, 12);
+
+    const score = policy.scorePublisher(publisher, 20);
+    expect(score).toBeGreaterThan(0);
+  });
+
+  test("prunes stale endorsements", () => {
+    const policy = new LocalWotPolicy({ ageDecayWindowSteps: 10 });
+    const endorser = hex("c");
+    const publisher = hex("d");
+    policy.trust(endorser);
+    policy.addEndorsement(endorser, publisher, 0);
+
+    policy.pruneStaleEndorsements(100, 20);
+    expect(policy.scorePublisher(publisher, 100)).toBe(0);
+  });
 });
 
 describe("rankFeedItemsByTrust", () => {

@@ -45,6 +45,35 @@ const ranked = rankFeedItemsByTrust(feedItems, policy, nowStep);
 Use `policy.exportJson()` / `LocalWotPolicy.importJson(json)` to persist and
 restore trust lists + endorsements in app storage.
 
+## Tier-aware forwarding (runtime glue)
+
+`VeilClient` can use a WoT policy to order forward peers and reserve an
+unknown budget floor under load.
+
+```ts
+import { VeilClient, LocalWotPolicy } from "@veil/sdk-js";
+
+const policy = new LocalWotPolicy();
+policy.trust(myFriendPubkeyHex);
+
+const client = new VeilClient(fastLane, fallbackLane, hooks, {
+  wotPolicy: policy,
+  resolvePublisher: (peerId) => peerToPublisherMap.get(peerId) ?? null,
+  forwardingQuotas: { trusted: 0.7, known: 0.25, unknown: 0.05 },
+  unknownForwardFloor: 0.05,
+});
+```
+
+## Endorsement ingestion helpers
+
+`LocalWotPolicy` de-dupes endorsements per endorser/publisher pair and can prune
+stale edges.
+
+```ts
+policy.addEndorsement(endorserPubkey, publisherPubkey, nowStep);
+policy.pruneStaleEndorsements(nowStep);
+```
+
 ## Channel-scoped helpers
 
 Use channel-scoped helpers to avoid cross-channel feed collisions:

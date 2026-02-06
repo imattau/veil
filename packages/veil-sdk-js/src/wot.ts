@@ -27,6 +27,12 @@ export interface Endorsement {
   atStep: number;
 }
 
+export interface EndorsementRecord {
+  endorser: string;
+  publisher: string;
+  atStep: number;
+}
+
 interface WotSnapshot {
   config: WotConfig;
   trusted: string[];
@@ -90,8 +96,38 @@ export class LocalWotPolicy {
     const endorser = normalizePubkeyHex(endorserHex);
     const publisher = normalizePubkeyHex(publisherHex);
     const edges = this.endorsementsByEndorser.get(endorser) ?? [];
-    edges.push({ publisher, atStep });
+    const existingIndex = edges.findIndex((edge) => edge.publisher === publisher);
+    if (existingIndex >= 0) {
+      if (edges[existingIndex].atStep < atStep) {
+        edges[existingIndex] = { publisher, atStep };
+      }
+    } else {
+      edges.push({ publisher, atStep });
+    }
     this.endorsementsByEndorser.set(endorser, edges);
+  }
+
+  ingestEndorsement(record: EndorsementRecord): void {
+    this.addEndorsement(record.endorser, record.publisher, record.atStep);
+  }
+
+  ingestEndorsements(records: EndorsementRecord[]): void {
+    for (const record of records) {
+      this.ingestEndorsement(record);
+    }
+  }
+
+  pruneStaleEndorsements(nowStep: number, maxAgeSteps?: number): void {
+    const maxAge =
+      maxAgeSteps ?? Math.max(1, this.config.ageDecayWindowSteps) * 4;
+    for (const [endorser, edges] of this.endorsementsByEndorser.entries()) {
+      const filtered = edges.filter((edge) => nowStep - edge.atStep <= maxAge);
+      if (filtered.length === 0) {
+        this.endorsementsByEndorser.delete(endorser);
+      } else if (filtered.length !== edges.length) {
+        this.endorsementsByEndorser.set(endorser, filtered);
+      }
+    }
   }
 
   scorePublisher(pubkeyHex: string, nowStep: number): number {
