@@ -1,9 +1,12 @@
 use std::collections::HashSet;
 use std::env;
 use std::fs;
+use std::hash::Hash;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -140,6 +143,62 @@ impl TransportAdapter for CombinedFallbackAdapter {
     }
 }
 
+struct RecordingAdapter<A: TransportAdapter> {
+    inner: A,
+    seen: Arc<Mutex<HashSet<A::Peer>>>,
+}
+
+impl<A: TransportAdapter> RecordingAdapter<A> {
+    fn new(inner: A, seen: Arc<Mutex<HashSet<A::Peer>>>) -> Self {
+        Self { inner, seen }
+    }
+
+    fn snapshot_seen(&self) -> Vec<A::Peer>
+    where
+        A::Peer: Clone,
+    {
+        let guard = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+        guard.iter().cloned().collect()
+    }
+}
+
+impl<A: TransportAdapter> TransportAdapter for RecordingAdapter<A>
+where
+    A::Peer: Clone + Eq + Hash,
+{
+    type Peer = A::Peer;
+    type Error = A::Error;
+
+    fn send(&mut self, peer: &Self::Peer, bytes: &[u8]) -> Result<(), Self::Error> {
+        self.inner.send(peer, bytes)
+    }
+
+    fn recv(&mut self) -> Option<(Self::Peer, Vec<u8>)> {
+        let item = self.inner.recv();
+        if let Some((ref peer, _)) = item {
+            let mut guard = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+            guard.insert(peer.clone());
+        }
+        item
+    }
+
+    fn max_payload_hint(&self) -> Option<usize> {
+        self.inner.max_payload_hint()
+    }
+
+    fn can_send(&self) -> bool {
+        self.inner.can_send()
+    }
+
+    fn can_recv(&self) -> bool {
+        self.inner.can_recv()
+    }
+
+    fn health_snapshot(&self) -> TransportHealthSnapshot {
+        self.inner.health_snapshot()
+    }
+}
+
 fn env_var(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
 }
@@ -177,6 +236,36 @@ fn env_list(key: &str) -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+fn load_peer_list(path: &Path) -> Vec<String> {
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_string())
+        .collect()
+}
+
+fn save_peer_list(path: &Path, peers: &[String]) {
+    if let Err(err) = ensure_parent(path) {
+        eprintln!("failed to create peer list dir: {err}");
+        return;
+    }
+    let mut contents = String::new();
+    for peer in peers {
+        contents.push_str(peer);
+        contents.push('\n');
+    }
+    if let Err(err) = fs::write(path, contents) {
+        eprintln!("failed to write peer list: {err}");
+    }
 }
 
 fn ensure_parent(path: &Path) -> std::io::Result<()> {
@@ -257,6 +346,47 @@ fn parse_fallback_peers(ws_peer: Option<String>, tor_peers: Vec<String>) -> Vec<
         peers.push(FallbackPeer::Tor(peer));
     }
     peers
+}
+
+fn parse_fallback_peer_strings(values: &[String]) -> Vec<FallbackPeer> {
+    values
+        .iter()
+        .filter_map(|value| {
+            if let Some(rest) = value.strip_prefix("ws:") {
+                Some(FallbackPeer::WebSocket(rest.to_string()))
+            } else if let Some(rest) = value.strip_prefix("tor:") {
+                Some(FallbackPeer::Tor(rest.to_string()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn encode_fallback_peers(peers: &[FallbackPeer]) -> Vec<String> {
+    peers.iter().map(|peer| peer.to_string()).collect()
+}
+
+fn merge_peers<T: Clone + Eq + Hash>(
+    configured: &[T],
+    discovered: &[T],
+    max_total: usize,
+) -> Vec<T> {
+    let mut out = Vec::new();
+    for peer in configured {
+        if !out.contains(peer) {
+            out.push(peer.clone());
+        }
+    }
+    for peer in discovered {
+        if out.len() >= max_total {
+            break;
+        }
+        if !out.contains(peer) {
+            out.push(peer.clone());
+        }
+    }
+    out
 }
 
 fn load_or_create_node_key(path: &Path) -> Result<[u8; 32], String> {
@@ -353,6 +483,11 @@ fn main() {
     let fast_peers = env_list("VEIL_VPS_FAST_PEERS");
     let core_tags = env_list("VEIL_VPS_CORE_TAGS");
     let tor_peers = env_list("VEIL_VPS_TOR_PEERS");
+    let peer_list_path = PathBuf::from(env_var(
+        "VEIL_VPS_PEER_LIST_PATH",
+        "data/discovered_peers.txt",
+    ));
+    let max_dynamic_peers = env_usize("VEIL_VPS_MAX_DYNAMIC_PEERS", 512);
 
     let quic_bind = env_var("VEIL_VPS_QUIC_BIND", "0.0.0.0:5000");
     let ws_url = env::var("VEIL_VPS_WS_URL").ok();
@@ -416,7 +551,7 @@ fn main() {
         }
     };
 
-    let fast_adapter = match QuicAdapter::connect(QuicAdapterConfig {
+    let fast_adapter_raw = match QuicAdapter::connect(QuicAdapterConfig {
         bind_addr: quic_bind_addr,
         server_name: "veil-node".to_string(),
         identity,
@@ -463,6 +598,32 @@ fn main() {
     let fallback_adapter = CombinedFallbackAdapter::new(ws_adapter, tor_adapter);
     let fallback_peers = parse_fallback_peers(ws_peer, tor_peers);
 
+    let discovered_fast = Arc::new(Mutex::new(HashSet::new()));
+    let discovered_fallback = Arc::new(Mutex::new(HashSet::new()));
+
+    let fast_adapter = RecordingAdapter::new(fast_adapter_raw, Arc::clone(&discovered_fast));
+    let fallback_adapter = RecordingAdapter::new(fallback_adapter, Arc::clone(&discovered_fallback));
+
+    let discovered_seed = load_peer_list(&peer_list_path);
+    {
+        let mut guard = discovered_fast.lock().unwrap_or_else(|e| e.into_inner());
+        for peer in discovered_seed
+            .iter()
+            .filter(|p| !p.starts_with("ws:") && !p.starts_with("tor:"))
+        {
+            guard.insert(peer.to_string());
+        }
+    }
+    let fallback_seed = parse_fallback_peer_strings(&discovered_seed);
+    {
+        let mut guard = discovered_fallback
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for peer in fallback_seed {
+            guard.insert(peer);
+        }
+    }
+
     let mut runtime = NodeRuntime::new(
         state,
         fast_adapter,
@@ -486,10 +647,18 @@ fn main() {
     let mut now_step = 0_u64;
     loop {
         let metrics_ref = Arc::clone(&metrics);
+        let discovered_fast_snapshot = runtime.fast_adapter.snapshot_seen();
+        let discovered_fallback_snapshot = runtime.fallback_adapter.snapshot_seen();
+        let fast_peer_list = merge_peers(&fast_peers, &discovered_fast_snapshot, max_dynamic_peers);
+        let fallback_peer_list = merge_peers(
+            &fallback_peers,
+            &discovered_fallback_snapshot,
+            max_dynamic_peers,
+        );
         let _ = runtime.tick_with_callbacks(
             now_step,
-            &fast_peers,
-            &fallback_peers,
+            &fast_peer_list,
+            &fallback_peer_list,
             NodeRuntimeCallbacks {
                 on_delivered: Some(&mut |_root, _payload| {
                     metrics_ref.delivered.fetch_add(1, Ordering::Relaxed);
@@ -514,6 +683,16 @@ fn main() {
             if let Err(err) = save_state_to_path(&state_path, &runtime.state) {
                 eprintln!("snapshot failed: {err}");
             }
+            let mut fast_snapshot = runtime.fast_adapter.snapshot_seen();
+            fast_snapshot.sort();
+            let mut fallback_snapshot =
+                encode_fallback_peers(&runtime.fallback_adapter.snapshot_seen());
+            fallback_snapshot.sort();
+            let mut merged = fast_snapshot;
+            merged.extend(fallback_snapshot);
+            merged.sort();
+            merged.dedup();
+            save_peer_list(&peer_list_path, &merged);
             last_snapshot = Instant::now();
         }
 
@@ -547,5 +726,3 @@ fn main() {
         thread::sleep(tick_interval);
     }
 }
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
