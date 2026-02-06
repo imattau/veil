@@ -21,11 +21,19 @@ use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 use veil_transport_quic::{QuicAdapter, QuicAdapterConfig, QuicIdentity};
 use veil_transport_tor::{TorSocksAdapter, TorSocksAdapterConfig};
 use veil_transport_websocket::{WebSocketAdapter, WebSocketAdapterConfig};
+#[cfg(feature = "ble")]
+use veil_transport_ble::{BleAdapter, BleAdapterConfig, BlePeer};
+#[cfg(all(feature = "ble", not(feature = "ble-btleplug")))]
+use veil_transport_ble::MockBleLink;
+#[cfg(feature = "ble-btleplug")]
+use veil_transport_ble::btleplug_backend::{BtleplugLink, BtleplugLinkConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum FallbackPeer {
     WebSocket(String),
     Tor(String),
+    #[cfg(feature = "ble")]
+    Ble(BlePeer),
 }
 
 impl std::fmt::Display for FallbackPeer {
@@ -33,6 +41,8 @@ impl std::fmt::Display for FallbackPeer {
         match self {
             FallbackPeer::WebSocket(peer) => write!(f, "ws:{peer}"),
             FallbackPeer::Tor(peer) => write!(f, "tor:{peer}"),
+            #[cfg(feature = "ble")]
+            FallbackPeer::Ble(peer) => write!(f, "ble:{}", peer.addr),
         }
     }
 }
@@ -43,16 +53,36 @@ enum FallbackSendError {
     Tor,
     MissingWebSocket,
     MissingTor,
+    #[cfg(feature = "ble")]
+    Ble,
+    #[cfg(feature = "ble")]
+    MissingBle,
 }
+
+#[cfg(feature = "ble-btleplug")]
+type BleLinkImpl = BtleplugLink;
+#[cfg(all(feature = "ble", not(feature = "ble-btleplug")))]
+type BleLinkImpl = MockBleLink;
 
 struct CombinedFallbackAdapter {
     ws: Option<WebSocketAdapter>,
     tor: Option<TorSocksAdapter>,
+    #[cfg(feature = "ble")]
+    ble: Option<BleAdapter<BleLinkImpl>>,
 }
 
 impl CombinedFallbackAdapter {
-    fn new(ws: Option<WebSocketAdapter>, tor: Option<TorSocksAdapter>) -> Self {
-        Self { ws, tor }
+    fn new(
+        ws: Option<WebSocketAdapter>,
+        tor: Option<TorSocksAdapter>,
+        #[cfg(feature = "ble")] ble: Option<BleAdapter<BleLinkImpl>>,
+    ) -> Self {
+        Self {
+            ws,
+            tor,
+            #[cfg(feature = "ble")]
+            ble,
+        }
     }
 
     fn ws_mut(&mut self) -> Option<&mut WebSocketAdapter> {
@@ -63,15 +93,31 @@ impl CombinedFallbackAdapter {
         self.tor.as_mut()
     }
 
+    #[cfg(feature = "ble")]
+    fn ble_mut(&mut self) -> Option<&mut BleAdapter<BleLinkImpl>> {
+        self.ble.as_mut()
+    }
+
     fn combined_max_payload_hint(&self) -> Option<usize> {
         let ws_hint = self.ws.as_ref().and_then(|w| w.max_payload_hint());
         let tor_hint = self.tor.as_ref().and_then(|t| t.max_payload_hint());
-        match (ws_hint, tor_hint) {
+        let mut hint = match (ws_hint, tor_hint) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (Some(a), None) => Some(a),
             (None, Some(b)) => Some(b),
             (None, None) => None,
+        };
+        #[cfg(feature = "ble")]
+        {
+            let ble_hint = self.ble.as_ref().and_then(|b| b.max_payload_hint());
+            hint = match (hint, ble_hint) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            };
         }
+        hint
     }
 
     fn combined_health_snapshot(&self) -> TransportHealthSnapshot {
@@ -87,6 +133,16 @@ impl CombinedFallbackAdapter {
         }
         if let Some(tor) = &self.tor {
             let h = tor.health_snapshot();
+            out.outbound_queued += h.outbound_queued;
+            out.outbound_send_ok += h.outbound_send_ok;
+            out.outbound_send_err += h.outbound_send_err;
+            out.inbound_received += h.inbound_received;
+            out.inbound_dropped += h.inbound_dropped;
+            out.reconnect_attempts += h.reconnect_attempts;
+        }
+        #[cfg(feature = "ble")]
+        if let Some(ble) = &self.ble {
+            let h = ble.health_snapshot();
             out.outbound_queued += h.outbound_queued;
             out.outbound_send_ok += h.outbound_send_ok;
             out.outbound_send_err += h.outbound_send_err;
@@ -114,6 +170,12 @@ impl TransportAdapter for CombinedFallbackAdapter {
                 tor.send(tor_peer, bytes)
                     .map_err(|_| FallbackSendError::Tor)
             }
+            #[cfg(feature = "ble")]
+            FallbackPeer::Ble(ble_peer) => {
+                let ble = self.ble_mut().ok_or(FallbackSendError::MissingBle)?;
+                ble.send(ble_peer, bytes)
+                    .map_err(|_| FallbackSendError::Ble)
+            }
         }
     }
 
@@ -121,6 +183,12 @@ impl TransportAdapter for CombinedFallbackAdapter {
         if let Some(ws) = self.ws_mut() {
             if let Some((peer, bytes)) = ws.recv() {
                 return Some((FallbackPeer::WebSocket(peer), bytes));
+            }
+        }
+        #[cfg(feature = "ble")]
+        if let Some(ble) = self.ble_mut() {
+            if let Some((peer, bytes)) = ble.recv() {
+                return Some((FallbackPeer::Ble(peer), bytes));
             }
         }
         None
@@ -131,12 +199,22 @@ impl TransportAdapter for CombinedFallbackAdapter {
     }
 
     fn can_send(&self) -> bool {
-        self.ws.as_ref().map(|w| w.can_send()).unwrap_or(false)
-            || self.tor.as_ref().map(|t| t.can_send()).unwrap_or(false)
+        let mut ok = self.ws.as_ref().map(|w| w.can_send()).unwrap_or(false)
+            || self.tor.as_ref().map(|t| t.can_send()).unwrap_or(false);
+        #[cfg(feature = "ble")]
+        {
+            ok = ok || self.ble.as_ref().map(|b| b.can_send()).unwrap_or(false);
+        }
+        ok
     }
 
     fn can_recv(&self) -> bool {
-        self.ws.as_ref().map(|w| w.can_recv()).unwrap_or(false)
+        let mut ok = self.ws.as_ref().map(|w| w.can_recv()).unwrap_or(false);
+        #[cfg(feature = "ble")]
+        {
+            ok = ok || self.ble.as_ref().map(|b| b.can_recv()).unwrap_or(false);
+        }
+        ok
     }
 
     fn health_snapshot(&self) -> TransportHealthSnapshot {
@@ -282,14 +360,11 @@ fn save_peer_list(conn: &Connection, peers: &[String]) {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64;
-    if let Ok(tx) = conn.transaction() {
-        for peer in peers {
-            let _ = tx.execute(
-                "INSERT INTO peers (peer, last_seen_ms) VALUES (?1, ?2)\n                 ON CONFLICT(peer) DO UPDATE SET last_seen_ms=excluded.last_seen_ms",
-                params![peer, now_ms],
-            );
-        }
-        let _ = tx.commit();
+    for peer in peers {
+        let _ = conn.execute(
+            "INSERT INTO peers (peer, last_seen_ms) VALUES (?1, ?2)\n             ON CONFLICT(peer) DO UPDATE SET last_seen_ms=excluded.last_seen_ms",
+            params![peer, now_ms],
+        );
     }
 }
 
@@ -362,13 +437,21 @@ fn parse_core_tags(values: &[String]) -> Vec<[u8; 32]> {
         .collect()
 }
 
-fn parse_fallback_peers(ws_peer: Option<String>, tor_peers: Vec<String>) -> Vec<FallbackPeer> {
+fn parse_fallback_peers(
+    ws_peer: Option<String>,
+    tor_peers: Vec<String>,
+    #[cfg(feature = "ble")] ble_peers: Vec<String>,
+) -> Vec<FallbackPeer> {
     let mut peers = Vec::new();
     if let Some(ws_peer) = ws_peer {
         peers.push(FallbackPeer::WebSocket(ws_peer));
     }
     for peer in tor_peers {
         peers.push(FallbackPeer::Tor(peer));
+    }
+    #[cfg(feature = "ble")]
+    for peer in ble_peers {
+        peers.push(FallbackPeer::Ble(BlePeer::new(peer)));
     }
     peers
 }
@@ -381,6 +464,15 @@ fn parse_fallback_peer_strings(values: &[String]) -> Vec<FallbackPeer> {
                 Some(FallbackPeer::WebSocket(rest.to_string()))
             } else if let Some(rest) = value.strip_prefix("tor:") {
                 Some(FallbackPeer::Tor(rest.to_string()))
+            } else if let Some(rest) = value.strip_prefix("ble:") {
+                #[cfg(feature = "ble")]
+                {
+                    Some(FallbackPeer::Ble(BlePeer::new(rest.to_string())))
+                }
+                #[cfg(not(feature = "ble"))]
+                {
+                    None
+                }
             } else {
                 None
             }
@@ -542,6 +634,18 @@ fn main() {
     let fast_peers = env_list("VEIL_VPS_FAST_PEERS");
     let core_tags = env_list("VEIL_VPS_CORE_TAGS");
     let tor_peers = env_list("VEIL_VPS_TOR_PEERS");
+    #[cfg(feature = "ble")]
+    let ble_enabled = env_bool("VEIL_VPS_BLE_ENABLE", false);
+    #[cfg(feature = "ble")]
+    let ble_peers = if ble_enabled {
+        env_list("VEIL_VPS_BLE_PEERS")
+    } else {
+        Vec::new()
+    };
+    #[cfg(feature = "ble")]
+    let ble_allowlist = env_list("VEIL_VPS_BLE_ALLOWLIST");
+    #[cfg(feature = "ble")]
+    let ble_mtu = env_usize("VEIL_VPS_BLE_MTU", 180);
     let peer_db_path = PathBuf::from(env_var("VEIL_VPS_PEER_DB_PATH", "data/peers.db"));
     let max_dynamic_peers = env_usize("VEIL_VPS_MAX_DYNAMIC_PEERS", 512);
 
@@ -651,8 +755,46 @@ fn main() {
         .expect("tor adapter should start")
     });
 
-    let fallback_adapter = CombinedFallbackAdapter::new(ws_adapter, tor_adapter);
-    let fallback_peers = parse_fallback_peers(ws_peer, tor_peers);
+    #[cfg(feature = "ble")]
+    let ble_adapter = if ble_enabled {
+        #[cfg(feature = "ble-btleplug")]
+        let link = match BtleplugLink::spawn(BtleplugLinkConfig {
+            allowlist: ble_allowlist,
+            ..BtleplugLinkConfig::default()
+        }) {
+            Ok(link) => link,
+            Err(err) => {
+                eprintln!("ble adapter failed to start: {err:?}");
+                return;
+            }
+        };
+        #[cfg(all(feature = "ble", not(feature = "ble-btleplug")))]
+        let link = MockBleLink::with_mtu(ble_mtu);
+
+        Some(BleAdapter::new(
+            link,
+            BleAdapterConfig {
+                mtu: ble_mtu,
+                max_payload_hint: Some(16 * 1024),
+                drop_outbound: false,
+            },
+        ))
+    } else {
+        None
+    };
+
+    let fallback_adapter = CombinedFallbackAdapter::new(
+        ws_adapter,
+        tor_adapter,
+        #[cfg(feature = "ble")]
+        ble_adapter,
+    );
+    let fallback_peers = parse_fallback_peers(
+        ws_peer,
+        tor_peers,
+        #[cfg(feature = "ble")]
+        ble_peers,
+    );
 
     let discovered_fast = Arc::new(Mutex::new(HashSet::new()));
     let discovered_fallback = Arc::new(Mutex::new(HashSet::new()));
@@ -670,7 +812,7 @@ fn main() {
         let mut guard = discovered_fast.lock().unwrap_or_else(|e| e.into_inner());
         for peer in discovered_seed
             .iter()
-            .filter(|p| !p.starts_with("ws:") && !p.starts_with("tor:"))
+            .filter(|p| !p.starts_with("ws:") && !p.starts_with("tor:") && !p.starts_with("ble:"))
         {
             guard.insert(peer.to_string());
         }

@@ -9,6 +9,12 @@ This runbook describes how to deploy and operate the VEIL VPS node app
 cargo build -p veil-vps-node --release
 ```
 
+Enable BLE lane (btleplug backend):
+
+```bash
+cargo build -p veil-vps-node --release --features ble-btleplug
+```
+
 Binary:
 - `target/release/veil-vps-node`
 
@@ -38,6 +44,11 @@ export VEIL_VPS_WS_URL=ws://relay.example:8080
 export VEIL_VPS_WS_PEER=relay-ws
 export VEIL_VPS_TOR_SOCKS_ADDR=127.0.0.1:9050
 export VEIL_VPS_TOR_PEERS=peer.onion:5000
+# Optional BLE fallback lane (requires build with --features ble-btleplug)
+export VEIL_VPS_BLE_ENABLE=0
+export VEIL_VPS_BLE_PEERS=ble-peer-1,ble-peer-2
+export VEIL_VPS_BLE_ALLOWLIST=AA:BB:CC:DD:EE:FF
+export VEIL_VPS_BLE_MTU=180
 
 # Optional policy knobs
 export VEIL_VPS_MAX_CACHE_SHARDS=200000
@@ -53,6 +64,7 @@ Notes:
 - QUIC requires trusted certs. If you have peer certs, set
   `VEIL_VPS_QUIC_TRUSTED_CERTS=/path/peer1.der,/path/peer2.der`.
 - Tor lane is outbound-only. Use for fallback resilience.
+- BLE lane uses btleplug when compiled with `--features ble-btleplug`.
 
 ## 3) Run
 
@@ -73,7 +85,7 @@ Health check, metrics, peers:
 - Local HTTP health endpoint: `http://127.0.0.1:9090/health`
 - Metrics endpoint: `http://127.0.0.1:9090/metrics`
 - Peers endpoint: `http://127.0.0.1:9090/peers`
-  - Optional query params: `limit` (max 1000), `prefix` (e.g., `ws:` or `tor:`)
+  - Optional query params: `limit` (max 1000), `prefix` (e.g., `ws:`, `tor:`, `ble:`)
 
 ## 5) Recovery
 

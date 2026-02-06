@@ -2,12 +2,19 @@
 
 This app runs a production-oriented VEIL node using the **Edge Forwarder** profile
 with a **Hot Cache** configuration. It wires QUIC as the fast lane and optional
-WebSocket + Tor SOCKS5 as fallback lanes.
+WebSocket + Tor SOCKS5 as fallback lanes. BLE fallback is available when built
+with `--features ble-btleplug`.
 
 ## Build & Run
 
 ```bash
 cargo run -p veil-vps-node
+```
+
+Enable BLE lane (btleplug backend):
+
+```bash
+cargo run -p veil-vps-node --features ble-btleplug
 ```
 
 ## Docker Compose
@@ -51,6 +58,10 @@ Optional:
 - `VEIL_VPS_WS_PEER` (peer id label used by WebSocket adapter)
 - `VEIL_VPS_TOR_SOCKS_ADDR` (e.g. `127.0.0.1:9050`)
 - `VEIL_VPS_TOR_PEERS` (comma-separated `host:port` destination peers)
+- `VEIL_VPS_BLE_ENABLE` (`1`/`0`, default `0`, requires `--features ble-btleplug`)
+- `VEIL_VPS_BLE_PEERS` (comma-separated BLE peer ids/addresses)
+- `VEIL_VPS_BLE_ALLOWLIST` (comma-separated BLE adapter addresses to accept)
+- `VEIL_VPS_BLE_MTU` (default `180`)
 - `VEIL_VPS_SNAPSHOT_SECS` (default `60`)
 - `VEIL_VPS_TICK_MS` (default `50`)
 - `VEIL_VPS_HEALTH_PORT` (default `9090`, set `0` to disable `/health`, `/metrics`, and `/peers`)
@@ -63,4 +74,5 @@ Optional:
 - QUIC requires trusted peer certificates. Provide peer certs via
   `VEIL_VPS_QUIC_TRUSTED_CERTS` if you expect to connect to other nodes.
 - WebSocket is best-effort outbound; Tor SOCKS5 is outbound-only in this profile.
-- `/peers` supports optional query params: `limit` (max 1000), `prefix` (e.g., `ws:` or `tor:`).
+- BLE fallback uses btleplug when the `ble-btleplug` feature is enabled.
+- `/peers` supports optional query params: `limit` (max 1000), `prefix` (e.g., `ws:`, `tor:`, `ble:`).
