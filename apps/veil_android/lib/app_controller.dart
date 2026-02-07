@@ -27,6 +27,7 @@ class VeilAppController extends ChangeNotifier {
   String _profileBio = '';
   String _profileWebsite = '';
   String _profileLocation = '';
+  DateTime? _profileLastPublished;
   final PublishQueue _publishQueue = PublishQueue();
   bool _publishInFlight = false;
   int _publishAttempts = 0;
@@ -80,6 +81,8 @@ class VeilAppController extends ChangeNotifier {
   String get profileBio => _profileBio;
   String get profileWebsite => _profileWebsite;
   String get profileLocation => _profileLocation;
+  DateTime? get profileLastPublished => _profileLastPublished;
+  DateTime? get profileLastPublished => _profileLastPublished;
   bool get relayReady => _relayReady;
   bool get connected => _connected;
   String get relayUrl => _relay?.url ?? '';
@@ -247,6 +250,8 @@ class VeilAppController extends ChangeNotifier {
       _publishQueue.enqueue(profileObject);
       _persistPublishObject(profileObject);
       _events.insert(0, 'Profile update queued');
+      _profileLastPublished = DateTime.now();
+      _persistPrefs();
       notifyListeners();
       _drainPublishQueue();
     }();
@@ -295,6 +300,11 @@ class VeilAppController extends ChangeNotifier {
     _profileBio = prefs.getString('profileBio') ?? _profileBio;
     _profileWebsite = prefs.getString('profileWebsite') ?? _profileWebsite;
     _profileLocation = prefs.getString('profileLocation') ?? _profileLocation;
+    final profilePublishedMs = prefs.getInt('profileLastPublished');
+    if (profilePublishedMs != null && profilePublishedMs > 0) {
+      _profileLastPublished =
+          DateTime.fromMillisecondsSinceEpoch(profilePublishedMs);
+    }
     _extraTags
       ..clear()
       ..addAll(prefs.getStringList('extraTags') ?? const []);
@@ -331,6 +341,12 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setString('profileBio', _profileBio);
     await prefs.setString('profileWebsite', _profileWebsite);
     await prefs.setString('profileLocation', _profileLocation);
+    if (_profileLastPublished != null) {
+      await prefs.setInt(
+        'profileLastPublished',
+        _profileLastPublished!.millisecondsSinceEpoch,
+      );
+    }
     await prefs.setStringList('extraTags', _extraTags);
     await prefs.setStringList('forwardPeers', _forwardPeers);
     await prefs.setStringList('trustedFeeds', _trustedFeeds.toList());

@@ -133,6 +133,16 @@ class ProfileSheet extends StatelessWidget {
                               ),
                             ],
                           ),
+                        if (controller.profileLastPublished != null)
+                          const SizedBox(height: 12),
+                        if (controller.profileLastPublished != null)
+                          Text(
+                            'Last published ${controller.profileLastPublished}',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: Colors.white54),
+                          ),
                       ],
                     );
                   },
