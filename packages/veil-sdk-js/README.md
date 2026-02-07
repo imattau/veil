@@ -18,6 +18,18 @@ configureTagBackend("auto");
 - Use `configureTagBackend("pure-js")` or `auto`.
 - Provide a persistent `ShardCacheStore` implementation (AsyncStorage/MMKV/SQLite).
 - Use `WebSocketLaneAdapter` (or your own adapter) for transport lanes.
+- Use `MultiLaneAdapter` to pool multiple transport lanes.
+
+## Multi-lane usage
+
+```ts
+import { MultiLaneAdapter, WebSocketLaneAdapter } from "@veil/sdk-js";
+
+const lane = new MultiLaneAdapter([
+  new WebSocketLaneAdapter({ url: "wss://node-a.example" }),
+  new WebSocketLaneAdapter({ url: "wss://node-b.example" }),
+]);
+```
 
 ## Transport health snapshots
 

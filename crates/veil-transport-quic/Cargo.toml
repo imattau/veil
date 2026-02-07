@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 veil-transport = { path = "../veil-transport" }
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "net", "io-util"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time", "net", "io-util"] }
 rustls = { version = "0.23", features = ["ring"] }
 rustls-pki-types = "1"
 rcgen = "0.13"

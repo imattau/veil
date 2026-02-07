@@ -14,3 +14,7 @@ node_modules/
 packages/*/dist/
 packages/*/wasm/
 apps/*/dist/
+# Dart/Flutter test artifacts
+packages/veil-sdk-dart/.dart_tool/
+packages/veil-sdk-dart/build/
+packages/veil-sdk-dart/pubspec.lock

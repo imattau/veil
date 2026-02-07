@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blurhash/flutter_blurhash.dart';
+
 class Panel extends StatelessWidget {
   final String title;
   final Widget child;
@@ -54,6 +55,8 @@ class InputField extends StatelessWidget {
   final ValueChanged<String>? onChanged;
   final String? errorText;
   final VoidCallback? onScan;
+  final int? minLines;
+  final int? maxLines;
 
   const InputField({
     required this.label,
@@ -61,6 +64,8 @@ class InputField extends StatelessWidget {
     this.onChanged,
     this.errorText,
     this.onScan,
+    this.minLines,
+    this.maxLines,
   });
 
   @override
@@ -70,6 +75,8 @@ class InputField extends StatelessWidget {
       child: TextField(
         controller: controller,
         onChanged: onChanged,
+        minLines: minLines,
+        maxLines: maxLines,
         decoration: InputDecoration(
           labelText: label,
           errorText: errorText,
@@ -85,7 +92,6 @@ class InputField extends StatelessWidget {
     );
   }
 }
-
 
 class BlurPlaceholder extends StatefulWidget {
   final String? blurHash;
@@ -149,7 +155,6 @@ class BlurPlaceholderState extends State<BlurPlaceholder>
     );
   }
 }
-
 
 class ShardProgressRing extends StatelessWidget {
   final int have;

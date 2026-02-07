@@ -2120,6 +2120,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "veil-desktop-relay"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "veil-fec"
 version = "0.1.0"
 dependencies = [
@@ -2269,10 +2278,17 @@ name = "veil_sdk_bridge"
 version = "0.1.0"
 dependencies = [
  "flutter_rust_bridge",
+ "once_cell",
+ "quinn",
+ "rustls",
+ "rustls-pki-types",
+ "tokio",
  "veil-codec",
  "veil-core",
  "veil-crypto",
  "veil-fec",
+ "veil-transport",
+ "veil-transport-quic",
 ]
 
 [[package]]

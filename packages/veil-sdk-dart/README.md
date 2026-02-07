@@ -15,6 +15,7 @@ interfaces; the Rust bridge functions are stubbed for now.
 
 - FFI bridge: scaffolded API surface in `lib/src/bridge/veil_bridge.dart`.
 - WebSocket lane: reconnection + buffered send queue.
+- MultiLane: pool multiple lanes for round-robin or broadcast sending.
 - BLE lane: FlutterReactiveBle-backed lane with MTU chunking helpers.
 - Client runtime: loop with shard decoding + reconstruction + payload decrypt.
 - Persistence adapters: sqflite + IndexedDB (web).
@@ -30,6 +31,19 @@ interfaces; the Rust bridge functions are stubbed for now.
 1. Add transport health scoring + adaptive lane fanout.
 2. Add hop-aware forward limits and shard request budgeting in the runtime loop.
 3. Provide optional Wasm builds for Flutter web.
+
+## Multi-lane usage
+
+Use `MultiLane` to pool multiple WebSocket or BLE lanes:
+
+```dart
+final lane = MultiLane(
+  lanes: [
+    WebSocketLane(url: Uri.parse("wss://node-a.example"), peerId: "app"),
+    WebSocketLane(url: Uri.parse("wss://node-b.example"), peerId: "app"),
+  ],
+);
+```
 
 ## Web support
 

@@ -21,6 +21,8 @@ export { InMemoryLaneAdapter, WebSocketLaneAdapter } from "./transports";
 export type { WebSocketLaneOptions, WebSocketLike } from "./transports";
 export { WebRtcLaneAdapter } from "./webrtc";
 export type { WebRtcDataChannelLike, WebRtcLaneOptions } from "./webrtc";
+export { MultiLaneAdapter } from "./multi_lane";
+export type { MultiLaneSendMode } from "./multi_lane";
 export {
   decodeObjectMeta,
   decodeShardMeta,

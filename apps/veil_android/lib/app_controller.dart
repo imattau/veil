@@ -15,6 +15,7 @@ import 'package:veil_sdk/veil_sdk.dart';
 
 import 'models.dart';
 import 'services/link_preview_service.dart';
+
 class VeilAppController extends ChangeNotifier {
   final _bridge = const VeilBridge();
   final _ble = FlutterReactiveBle();
@@ -51,6 +52,7 @@ class VeilAppController extends ChangeNotifier {
   String namespaceChoice = 'Public Square';
   String peerId = 'android-client';
   String wsUrl = 'ws://127.0.0.1:9001';
+  final List<String> _wsEndpoints = [];
   String tagHex = '';
   String channelLabel = '';
   static const String _channelPublisherKey =
@@ -61,13 +63,15 @@ class VeilAppController extends ChangeNotifier {
   String bleServiceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   String bleCharacteristicUuid = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
   String quicEndpoint = '';
+  String quicTrustedCertHex = '';
 
   VeilClient? _client;
-  WebSocketLane? _lane;
+  VeilLane? _lane;
+  QuicLane? _quicLane;
   VeilLane? _fallbackLane;
   LocalRelay? _relay;
   bool _relayReady = false;
-  bool _useLocalRelay = true;
+  final bool _useLocalRelay = true;
   bool _connected = false;
   bool _ghostMode = false;
   bool _bleEnabled = false;
@@ -98,6 +102,7 @@ class VeilAppController extends ChangeNotifier {
   int get maxCacheEntries => _maxCacheEntries;
   int get maxPublishQueue => _maxPublishQueue;
   String get quicEndpointValue => quicEndpoint;
+  String get quicTrustedCertValue => quicTrustedCertHex;
   String? get wsUrlError {
     if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
       return 'Use ws:// or wss://';
@@ -114,16 +119,20 @@ class VeilAppController extends ChangeNotifier {
     }
     return 'Use a label or tag:HEX';
   }
+
   LaneHealthSnapshot? get fastLaneHealth =>
       _client?.fastLane.healthSnapshot() ?? _lane?.healthSnapshot();
+  LaneHealthSnapshot? get quicLaneHealth => _quicLane?.healthSnapshot();
   LaneHealthSnapshot? get fallbackLaneHealth =>
-      _client?.fallbackLane?.healthSnapshot() ?? _fallbackLane?.healthSnapshot();
+      _client?.fallbackLane?.healthSnapshot() ??
+      _fallbackLane?.healthSnapshot();
   List<FeedEntry> get feed => List.unmodifiable(_feed);
   List<String> get events => List.unmodifiable(_events);
   List<String> get suggestedFeeds => List.unmodifiable(_suggestedFeeds);
   Set<String> get trustedFeeds => Set.unmodifiable(_trustedFeeds);
   List<String> get extraTags => List.unmodifiable(_extraTags);
   List<String> get forwardPeers => List.unmodifiable(_forwardPeers);
+  List<String> get wsEndpoints => List.unmodifiable(_wsEndpoints);
 
   String get connectionStatus {
     if (!_connected) return 'OFFLINE';
@@ -169,11 +178,7 @@ class VeilAppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setUseLocalRelay(bool value) {
-    _useLocalRelay = value;
-    _persistPrefs();
-    notifyListeners();
-  }
+  void setUseLocalRelay(bool value) {}
 
   void setDisplayName(String value) {
     displayName = value.trim();
@@ -181,11 +186,7 @@ class VeilAppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void updateProfileDetails({
-    String? bio,
-    String? website,
-    String? location,
-  }) {
+  void updateProfileDetails({String? bio, String? website, String? location}) {
     if (bio != null) _profileBio = bio;
     if (website != null) _profileWebsite = website;
     if (location != null) _profileLocation = location;
@@ -287,6 +288,9 @@ class VeilAppController extends ChangeNotifier {
     namespaceChoice = prefs.getString('namespaceChoice') ?? namespaceChoice;
     peerId = prefs.getString('peerId') ?? peerId;
     wsUrl = prefs.getString('wsUrl') ?? wsUrl;
+    _wsEndpoints
+      ..clear()
+      ..addAll(prefs.getStringList('wsEndpoints') ?? []);
     tagHex = prefs.getString('tagHex') ?? tagHex;
     channelLabel = prefs.getString('channelLabel') ?? channelLabel;
     bleDeviceId = prefs.getString('bleDeviceId') ?? bleDeviceId;
@@ -294,13 +298,13 @@ class VeilAppController extends ChangeNotifier {
     bleCharacteristicUuid =
         prefs.getString('bleCharacteristicUuid') ?? bleCharacteristicUuid;
     quicEndpoint = prefs.getString('quicEndpoint') ?? quicEndpoint;
-    _useLocalRelay = prefs.getBool('useLocalRelay') ?? _useLocalRelay;
+    quicTrustedCertHex =
+        prefs.getString('quicTrustedCertHex') ?? quicTrustedCertHex;
     _ghostMode = prefs.getBool('ghostMode') ?? _ghostMode;
     _bleEnabled = prefs.getBool('bleEnabled') ?? _bleEnabled;
     _requireSignedPublic =
         prefs.getBool('requireSignedPublic') ?? _requireSignedPublic;
-    _clockSkewSeconds =
-        prefs.getInt('clockSkewSeconds') ?? _clockSkewSeconds;
+    _clockSkewSeconds = prefs.getInt('clockSkewSeconds') ?? _clockSkewSeconds;
     _maxCacheEntries = prefs.getInt('maxCacheEntries') ?? _maxCacheEntries;
     _maxPublishQueue = prefs.getInt('maxPublishQueue') ?? _maxPublishQueue;
     _publishQueue.updateMaxSize(_maxPublishQueue);
@@ -309,8 +313,9 @@ class VeilAppController extends ChangeNotifier {
     _profileLocation = prefs.getString('profileLocation') ?? _profileLocation;
     final profilePublishedMs = prefs.getInt('profileLastPublished');
     if (profilePublishedMs != null && profilePublishedMs > 0) {
-      _profileLastPublished =
-          DateTime.fromMillisecondsSinceEpoch(profilePublishedMs);
+      _profileLastPublished = DateTime.fromMillisecondsSinceEpoch(
+        profilePublishedMs,
+      );
     }
     _extraTags
       ..clear()
@@ -333,13 +338,14 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setString('namespaceChoice', namespaceChoice);
     await prefs.setString('peerId', peerId);
     await prefs.setString('wsUrl', wsUrl);
+    await prefs.setStringList('wsEndpoints', _wsEndpoints);
     await prefs.setString('tagHex', tagHex);
     await prefs.setString('channelLabel', channelLabel);
     await prefs.setString('bleDeviceId', bleDeviceId);
     await prefs.setString('bleServiceUuid', bleServiceUuid);
     await prefs.setString('bleCharacteristicUuid', bleCharacteristicUuid);
     await prefs.setString('quicEndpoint', quicEndpoint);
-    await prefs.setBool('useLocalRelay', _useLocalRelay);
+    await prefs.setString('quicTrustedCertHex', quicTrustedCertHex);
     await prefs.setBool('ghostMode', _ghostMode);
     await prefs.setBool('bleEnabled', _bleEnabled);
     await prefs.setBool('requireSignedPublic', _requireSignedPublic);
@@ -371,16 +377,16 @@ class VeilAppController extends ChangeNotifier {
   Future<void> _loadPublishQueue() async {
     final db = _db;
     if (db == null) return;
-    final rows = await db.query(
-      'publish_queue',
-      orderBy: 'enqueued_at ASC',
-    );
+    final rows = await db.query('publish_queue', orderBy: 'enqueued_at ASC');
     for (final row in rows) {
       final root = row['object_root'] as String?;
       final bytes = row['bytes'] as List<int>?;
       if (root == null || bytes == null) continue;
       _publishQueue.enqueue(
-        PublishObject(objectRootHex: root, objectBytes: Uint8List.fromList(bytes)),
+        PublishObject(
+          objectRootHex: root,
+          objectBytes: Uint8List.fromList(bytes),
+        ),
       );
     }
   }
@@ -388,15 +394,11 @@ class VeilAppController extends ChangeNotifier {
   Future<void> _persistPublishObject(PublishObject object) async {
     final db = _db;
     if (db == null) return;
-    await db.insert(
-      'publish_queue',
-      {
-        'object_root': object.objectRootHex,
-        'bytes': object.objectBytes,
-        'enqueued_at': DateTime.now().millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: ConflictAlgorithm.ignore,
-    );
+    await db.insert('publish_queue', {
+      'object_root': object.objectRootHex,
+      'bytes': object.objectBytes,
+      'enqueued_at': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
   Future<void> _removePublishObject(String objectRootHex) async {
@@ -413,6 +415,30 @@ class VeilAppController extends ChangeNotifier {
     wsUrl = value.trim();
     _persistPrefs();
     notifyListeners();
+  }
+
+  void addWsEndpoint(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return;
+    if (!trimmed.startsWith('ws://') && !trimmed.startsWith('wss://')) {
+      _events.insert(0, 'Endpoint must start with ws:// or wss://');
+      _notify();
+      return;
+    }
+    if (!_wsEndpoints.contains(trimmed)) {
+      _wsEndpoints.add(trimmed);
+      _persistPrefs();
+      _events.insert(0, 'Added WebSocket endpoint');
+      _notify();
+    }
+  }
+
+  void removeWsEndpoint(String value) {
+    if (_wsEndpoints.remove(value)) {
+      _persistPrefs();
+      _events.insert(0, 'Removed WebSocket endpoint');
+      _notify();
+    }
   }
 
   void setPeerId(String value) {
@@ -491,7 +517,6 @@ class VeilAppController extends ChangeNotifier {
     _persistPrefs();
     notifyListeners();
   }
-
 
   void handleScanValue(String value) {
     final raw = value.trim();
@@ -614,6 +639,37 @@ class VeilAppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setQuicTrustedCert(String value) {
+    quicTrustedCertHex = value.trim();
+    _persistPrefs();
+    notifyListeners();
+  }
+
+  Future<void> pinQuicCertFromServer() async {
+    if (quicEndpoint.isEmpty) {
+      _events.insert(0, 'Set QUIC endpoint first');
+      _notify();
+      return;
+    }
+    if (!await QuicLane.isSupported()) {
+      _events.insert(0, 'QUIC not supported on this device');
+      _notify();
+      return;
+    }
+    _events.insert(0, 'Fetching QUIC certificate...');
+    _notify();
+    final cert = await QuicLane.fetchPinnedCertHex(quicEndpoint);
+    if (cert == null || cert.isEmpty) {
+      _events.insert(0, 'Failed to fetch QUIC cert');
+      _notify();
+      return;
+    }
+    quicTrustedCertHex = cert;
+    await _persistPrefs();
+    _events.insert(0, 'Pinned QUIC certificate');
+    _notify();
+  }
+
   void generateIdentity() {
     final words = [
       'ember',
@@ -643,11 +699,41 @@ class VeilAppController extends ChangeNotifier {
     final store = SqfliteShardCacheStore(db: _db!);
     await store.init();
 
-    final url = _useLocalRelay && _relay != null ? _relay!.url : wsUrl;
-    final wsLane = WebSocketLane(
-      url: Uri.parse(url.isEmpty ? 'ws://127.0.0.1:9001' : url),
-      peerId: peerId,
-    );
+    final String primaryUrl;
+    List<String> endpoints;
+    if (_relay != null) {
+      primaryUrl = _relay!.url;
+      endpoints = [primaryUrl, ..._wsEndpoints];
+      if (endpoints.length == 1 && wsUrl.isNotEmpty) {
+        endpoints = [primaryUrl, wsUrl];
+      }
+    } else if (_wsEndpoints.isNotEmpty) {
+      primaryUrl = _wsEndpoints.first;
+      endpoints = List<String>.from(_wsEndpoints);
+    } else {
+      primaryUrl = wsUrl.isEmpty ? 'ws://127.0.0.1:9001' : wsUrl;
+      endpoints = [primaryUrl];
+    }
+
+    final wsLanes = endpoints
+        .map(
+          (endpoint) => WebSocketLane(url: Uri.parse(endpoint), peerId: peerId),
+        )
+        .toList();
+    final VeilLane wsLane = wsLanes.length > 1
+        ? MultiLane(lanes: wsLanes)
+        : wsLanes.first;
+    _lane = wsLane;
+
+    if (quicEndpoint.isNotEmpty && await QuicLane.isSupported()) {
+      _quicLane = QuicLane(
+        endpoint: quicEndpoint,
+        peerId: peerId,
+        trustedPeerCertHex: quicTrustedCertHex.isEmpty
+            ? null
+            : quicTrustedCertHex,
+      );
+    }
 
     BleLane? bleLane;
     if (_bleEnabled && bleDeviceId.isNotEmpty) {
@@ -663,8 +749,9 @@ class VeilAppController extends ChangeNotifier {
       }
     }
 
-    final fastLane = _ghostMode && bleLane != null ? bleLane : wsLane;
-    final fallbackLane = _ghostMode ? wsLane : bleLane;
+    final primaryLane = _quicLane ?? wsLane;
+    final fastLane = _ghostMode && bleLane != null ? bleLane : primaryLane;
+    final fallbackLane = _ghostMode ? primaryLane : bleLane;
 
     final client = VeilClient(
       fastLane: fastLane,
@@ -714,7 +801,7 @@ class VeilAppController extends ChangeNotifier {
     _lane = wsLane;
     _fallbackLane = fallbackLane;
     _connected = true;
-    _events.insert(0, 'Connected via ${wsLane.url}');
+    _events.insert(0, 'Connected via $primaryUrl');
     _startHealthTimer();
     _notify();
     _drainPublishQueue();
@@ -743,7 +830,10 @@ class VeilAppController extends ChangeNotifier {
     _notify();
   }
 
-  void publishLocalPost(String text, {List<Attachment> attachments = const []}) {
+  void publishLocalPost(
+    String text, {
+    List<Attachment> attachments = const [],
+  }) {
     if (text.trim().isEmpty) return;
     final mentions = _extractMentions(text);
     final previews = _linkPreviewService.extractCached(text);
@@ -785,9 +875,9 @@ class VeilAppController extends ChangeNotifier {
   ) {
     final bytes = attachments.map((a) => a.bytes).toList();
     final mimes = attachments.map((a) => a.mime).toList();
-    _publisher
-        .buildPostWithAttachments(text, bytes, mimes, mentions)
-        .then((batch) {
+    _publisher.buildPostWithAttachments(text, bytes, mimes, mentions).then((
+      batch,
+    ) {
       _publishQueue.enqueue(batch.rootObject);
       _publishQueue.enqueueAll(batch.relatedObjects);
       _persistPublishObject(batch.rootObject);
@@ -917,8 +1007,7 @@ class VeilAppController extends ChangeNotifier {
     void update() {
       const epochSeconds = 86400;
       final nowSeconds =
-          (DateTime.now().millisecondsSinceEpoch ~/ 1000) +
-          _clockSkewSeconds;
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000) + _clockSkewSeconds;
       final offset = nowSeconds % epochSeconds;
       _epochRemainingSeconds = epochSeconds - offset;
       _epochOverlapActive = _epochRemainingSeconds <= 3600;
