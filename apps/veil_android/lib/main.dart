@@ -2692,6 +2692,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
   final _controller = TextEditingController();
   final _picker = ImagePicker();
   final List<Attachment> _attachments = [];
+  bool _attachMenuOpen = false;
 
   @override
   void dispose() {
@@ -2739,8 +2740,13 @@ class _ComposeScreenState extends State<ComposeScreen> {
                 controller: _controller,
                 maxLines: 8,
                 autofocus: true,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   hintText: 'Share an update...',
+                  suffixIcon: IconButton(
+                    tooltip: 'Attach',
+                    icon: const Icon(Icons.attach_file),
+                    onPressed: _openAttachMenu,
+                  ),
                 ),
               ),
               const SizedBox(height: 16),
@@ -2838,6 +2844,43 @@ class _ComposeScreenState extends State<ComposeScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _openAttachMenu() async {
+    if (_attachMenuOpen) return;
+    _attachMenuOpen = true;
+    if (!mounted) {
+      _attachMenuOpen = false;
+      return;
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.image_outlined),
+              title: const Text('Attach image'),
+              onTap: () async {
+                Navigator.of(context).pop();
+                await _pickImage();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.insert_drive_file_outlined),
+              title: const Text('Attach file'),
+              onTap: () async {
+                Navigator.of(context).pop();
+                await _pickFile();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+    _attachMenuOpen = false;
   }
 
   Future<void> _pickImage() async {
