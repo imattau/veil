@@ -212,6 +212,20 @@ class VeilClient {
     }
   }
 
+  Future<void> publishBytes(List<int> bytes, {String? selfPeer}) async {
+    final peers = _forwardPeers.isEmpty
+        ? [selfPeer ?? "self"]
+        : List<String>.from(_forwardPeers);
+    for (final peer in peers) {
+      await fastLane.send(peer, bytes);
+    }
+    if (fallbackLane != null && options.fallbackFanout > 0) {
+      for (final peer in peers) {
+        await fallbackLane!.send(peer, bytes);
+      }
+    }
+  }
+
   Future<void> _processInbound(LaneMessage msg, VeilLane lane) async {
     try {
       final request = decodeShardRequest(Uint8List.fromList(msg.bytes));

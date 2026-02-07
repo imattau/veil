@@ -107,6 +107,15 @@ export type {
 export { BlobManager } from "./blob_manager";
 export type { BlobAssembly } from "./blob_manager";
 export {
+  buildFileChunks,
+  buildMediaDescriptor,
+  buildObject,
+  buildPostWithAttachments,
+  buildSocialPost,
+  PublishQueue,
+} from "./publisher";
+export type { PublishBatch, PublishObject } from "./publisher";
+export {
   configureTagBackend,
   currentEpoch,
   deriveChannelFeedTagHex,

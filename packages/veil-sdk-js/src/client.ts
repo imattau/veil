@@ -379,6 +379,18 @@ export class VeilClient {
     }
   }
 
+  async publishBytes(bytes: Uint8Array, selfPeer = "self"): Promise<void> {
+    const peers = this.forwardPeers.length > 0 ? this.forwardPeers : [selfPeer];
+    for (const peer of peers) {
+      await this.sendOnLane("fast", this.fastLane, peer, bytes);
+    }
+    if (this.fallbackLane && this.fallbackFanout > 0) {
+      for (const peer of peers) {
+        await this.sendOnLane("fallback", this.fallbackLane, peer, bytes);
+      }
+    }
+  }
+
   isRunning(): boolean {
     return this.running;
   }

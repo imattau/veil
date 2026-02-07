@@ -6,6 +6,7 @@ export "src/cache/sqflite_store_selector.dart";
 export "src/cache/indexeddb_store_selector.dart";
 export "src/client.dart";
 export "src/blob_manager.dart";
+export "src/publisher.dart";
 export "src/lanes/lane.dart";
 export "src/lanes/websocket_lane.dart";
 export "src/lanes/ble_lane.dart";

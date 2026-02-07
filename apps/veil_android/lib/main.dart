@@ -2,12 +2,20 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'dart:ui';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blurhash/flutter_blurhash.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:crypto/crypto.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:mime/mime.dart';
+import 'package:video_player/video_player.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:veil_sdk/veil_sdk.dart';
@@ -170,8 +178,8 @@ class _RootShellState extends State<RootShell> {
               : _controller.tagHex.isNotEmpty
                   ? 'Custom tag'
                   : 'General',
-          onPublish: (text) {
-            _controller.publishLocalPost(text);
+          onPublish: (text, attachments) {
+            _controller.publishLocalPost(text, attachments: attachments);
             Navigator.of(context).pop();
           },
         ),
@@ -201,6 +209,14 @@ class _RootShellState extends State<RootShell> {
         clockSkewSeconds: _controller.clockSkewSeconds,
         onClockSkewChanged: (value) {
           setState(() => _controller.setClockSkewSeconds(value));
+        },
+        maxCacheEntries: _controller.maxCacheEntries,
+        maxPublishQueue: _controller.maxPublishQueue,
+        onMaxCacheEntriesChanged: (value) {
+          setState(() => _controller.setMaxCacheEntries(value));
+        },
+        onMaxPublishQueueChanged: (value) {
+          setState(() => _controller.setMaxPublishQueue(value));
         },
       ),
     );
@@ -288,6 +304,14 @@ class VeilAppController extends ChangeNotifier {
   final _bridge = const VeilBridge();
   final _ble = FlutterReactiveBle();
   final _secureStorage = const FlutterSecureStorage();
+  final _linkPreviewService = LinkPreviewService();
+  final _publisher = const VeilPublisher();
+  final PublishQueue _publishQueue = PublishQueue();
+  bool _publishInFlight = false;
+  int _publishAttempts = 0;
+  Database? _db;
+  int _maxCacheEntries = 50000;
+  int _maxPublishQueue = 500;
   SharedPreferences? _prefs;
   final List<FeedEntry> _feed = [];
   final List<String> _events = [];
@@ -341,6 +365,8 @@ class VeilAppController extends ChangeNotifier {
   bool get epochOverlapActive => _epochOverlapActive;
   bool get requireSignedPublic => _requireSignedPublic;
   int get clockSkewSeconds => _clockSkewSeconds;
+  int get maxCacheEntries => _maxCacheEntries;
+  int get maxPublishQueue => _maxPublishQueue;
   String? get wsUrlError {
     if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
       return 'Use ws:// or wss://';
@@ -388,6 +414,8 @@ class VeilAppController extends ChangeNotifier {
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
     await _loadPrefs();
+    await _openDb();
+    await _loadPublishQueue();
     _startLocalRelay();
     _startEpochTimer();
     connect();
@@ -398,6 +426,7 @@ class VeilAppController extends ChangeNotifier {
     _relay?.stop();
     _epochTimer?.cancel();
     _healthTimer?.cancel();
+    _db?.close();
     super.dispose();
   }
 
@@ -458,6 +487,9 @@ class VeilAppController extends ChangeNotifier {
         prefs.getBool('requireSignedPublic') ?? _requireSignedPublic;
     _clockSkewSeconds =
         prefs.getInt('clockSkewSeconds') ?? _clockSkewSeconds;
+    _maxCacheEntries = prefs.getInt('maxCacheEntries') ?? _maxCacheEntries;
+    _maxPublishQueue = prefs.getInt('maxPublishQueue') ?? _maxPublishQueue;
+    _publishQueue.updateMaxSize(_maxPublishQueue);
     _extraTags
       ..clear()
       ..addAll(prefs.getStringList('extraTags') ?? const []);
@@ -489,9 +521,60 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setBool('bleEnabled', _bleEnabled);
     await prefs.setBool('requireSignedPublic', _requireSignedPublic);
     await prefs.setInt('clockSkewSeconds', _clockSkewSeconds);
+    await prefs.setInt('maxCacheEntries', _maxCacheEntries);
+    await prefs.setInt('maxPublishQueue', _maxPublishQueue);
     await prefs.setStringList('extraTags', _extraTags);
     await prefs.setStringList('forwardPeers', _forwardPeers);
     await prefs.setStringList('trustedFeeds', _trustedFeeds.toList());
+  }
+
+  Future<void> _openDb() async {
+    if (_db != null) return;
+    _db = await openDatabase('veil_android_cache.db');
+    await _db!.execute(
+      'CREATE TABLE IF NOT EXISTS publish_queue (object_root TEXT PRIMARY KEY, bytes BLOB, enqueued_at INTEGER)',
+    );
+  }
+
+  Future<void> _loadPublishQueue() async {
+    final db = _db;
+    if (db == null) return;
+    final rows = await db.query(
+      'publish_queue',
+      orderBy: 'enqueued_at ASC',
+    );
+    for (final row in rows) {
+      final root = row['object_root'] as String?;
+      final bytes = row['bytes'] as List<int>?;
+      if (root == null || bytes == null) continue;
+      _publishQueue.enqueue(
+        PublishObject(objectRootHex: root, objectBytes: Uint8List.fromList(bytes)),
+      );
+    }
+  }
+
+  Future<void> _persistPublishObject(PublishObject object) async {
+    final db = _db;
+    if (db == null) return;
+    await db.insert(
+      'publish_queue',
+      {
+        'object_root': object.objectRootHex,
+        'bytes': object.objectBytes,
+        'enqueued_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+  }
+
+  Future<void> _removePublishObject(String objectRootHex) async {
+    final db = _db;
+    if (db == null) return;
+    await db.delete(
+      'publish_queue',
+      where: 'object_root = ?',
+      whereArgs: [objectRootHex],
+    );
   }
 
   void setWsUrl(String value) {
@@ -657,6 +740,23 @@ class VeilAppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setMaxCacheEntries(String value) {
+    final parsed = int.tryParse(value.trim()) ?? _maxCacheEntries;
+    _maxCacheEntries = parsed.clamp(1000, 200000);
+    _events.insert(0, 'Cache limit $_maxCacheEntries entries');
+    _persistPrefs();
+    notifyListeners();
+  }
+
+  void setMaxPublishQueue(String value) {
+    final parsed = int.tryParse(value.trim()) ?? _maxPublishQueue;
+    _maxPublishQueue = parsed.clamp(50, 5000);
+    _publishQueue.updateMaxSize(_maxPublishQueue);
+    _events.insert(0, 'Publish queue limit $_maxPublishQueue entries');
+    _persistPrefs();
+    notifyListeners();
+  }
+
   void setBleDeviceId(String value) {
     bleDeviceId = value.trim();
     _persistPrefs();
@@ -700,8 +800,8 @@ class VeilAppController extends ChangeNotifier {
 
   Future<void> connect() async {
     _client?.stop();
-    final db = await openDatabase('veil_android_cache.db');
-    final store = SqfliteShardCacheStore(db: db);
+    await _openDb();
+    final store = SqfliteShardCacheStore(db: _db!);
     await store.init();
 
     final url = _useLocalRelay && _relay != null ? _relay!.url : wsUrl;
@@ -751,6 +851,7 @@ class VeilAppController extends ChangeNotifier {
         },
       ),
       options: VeilClientOptions(
+        maxCacheEntries: _maxCacheEntries,
         requiredSignedNamespaces: _requireSignedPublic ? {1} : {},
         plugins: [
           AutoFetchPlugin(resolveTagForRoot: (_, __) => tagHex),
@@ -777,6 +878,7 @@ class VeilAppController extends ChangeNotifier {
     _events.insert(0, 'Connected via ${wsLane.url}');
     _startHealthTimer();
     _notify();
+    _drainPublishQueue();
   }
 
   void disconnect() {
@@ -802,18 +904,91 @@ class VeilAppController extends ChangeNotifier {
     _notify();
   }
 
-  void publishLocalPost(String text) {
+  void publishLocalPost(String text, {List<Attachment> attachments = const []}) {
     if (text.trim().isEmpty) return;
+    final previews = _linkPreviewService.extractCached(text);
+    final shardTotal = attachments.isEmpty
+        ? 1
+        : attachments.fold<int>(0, (sum, a) => sum + a.chunkCount);
     final entry = FeedEntry(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       author: displayName,
       body: text.trim(),
+      attachments: attachments,
+      linkPreviews: previews,
       reconstructed: true,
+      shardsHave: shardTotal,
+      shardsTotal: shardTotal,
       timestamp: DateTime.now(),
     );
     _feed.insert(0, entry);
     _events.insert(0, 'Local post created');
     _notify();
+    _enqueuePublishObjects(text, attachments);
+    _linkPreviewService.prefetch(text).then((_) {
+      final updated = _linkPreviewService.extractCached(text);
+      for (final item in _feed) {
+        if (item.id == entry.id) {
+          item.linkPreviews
+            ..clear()
+            ..addAll(updated);
+        }
+      }
+      notifyListeners();
+    });
+  }
+
+  void _enqueuePublishObjects(String text, List<Attachment> attachments) {
+    final bytes = attachments.map((a) => a.bytes).toList();
+    final mimes = attachments.map((a) => a.mime).toList();
+    _publisher.buildPostWithAttachments(text, bytes, mimes).then((batch) {
+      _publishQueue.enqueue(batch.rootObject);
+      _publishQueue.enqueueAll(batch.relatedObjects);
+      _persistPublishObject(batch.rootObject);
+      for (final obj in batch.relatedObjects) {
+        _persistPublishObject(obj);
+      }
+      _events.insert(
+        0,
+        'Queued ${1 + batch.relatedObjects.length} objects for publish',
+      );
+      notifyListeners();
+      _drainPublishQueue();
+    });
+  }
+
+  Future<void> _drainPublishQueue() async {
+    if (_publishInFlight) return;
+    final client = _client;
+    if (client == null) return;
+    _publishInFlight = true;
+    try {
+      var next = _publishQueue.pop();
+      while (next != null) {
+        try {
+          await client.publishBytes(next.objectBytes);
+          _events.insert(0, 'Published object ${next.objectRootHex}');
+          await _removePublishObject(next.objectRootHex);
+          _publishAttempts = 0;
+        } catch (_) {
+          _publishQueue.enqueue(next);
+          _publishAttempts += 1;
+          final delayMs = _backoffForAttempt(_publishAttempts);
+          _events.insert(0, 'Publish retry in ${delayMs}ms');
+          notifyListeners();
+          await Future.delayed(Duration(milliseconds: delayMs));
+        }
+        next = _publishQueue.pop();
+      }
+    } finally {
+      _publishInFlight = false;
+      notifyListeners();
+    }
+  }
+
+  int _backoffForAttempt(int attempt) {
+    final capped = attempt.clamp(1, 6);
+    return 300 * (1 << (capped - 1));
   }
 
   void addSkeletons() {
@@ -912,6 +1087,8 @@ class FeedEntry {
   final String author;
   final String body;
   final String? blurHash;
+  final List<Attachment> attachments;
+  final List<LinkPreview> linkPreviews;
   bool reconstructed;
   bool isGhost;
   final DateTime timestamp;
@@ -925,6 +1102,9 @@ class FeedEntry {
     required this.author,
     required this.body,
     this.blurHash,
+    this.attachments = const [],
+    List<LinkPreview>? linkPreviews,
+    this.linkPreviews = linkPreviews ?? <LinkPreview>[],
     required this.reconstructed,
     required this.timestamp,
     this.isGhost = false,
@@ -941,6 +1121,293 @@ class FeedEntry {
     reconstructed: false,
     timestamp: DateTime.now(),
   );
+}
+
+class Attachment {
+  final String name;
+  final String mime;
+  final Uint8List bytes;
+  final String hashHex;
+  final int size;
+  final bool isImage;
+  final bool isVideo;
+  final int chunkCount;
+  final MediaDescriptorV1? descriptor;
+
+  const Attachment({
+    required this.name,
+    required this.mime,
+    required this.bytes,
+    required this.hashHex,
+    required this.size,
+    required this.isImage,
+    required this.isVideo,
+    required this.chunkCount,
+    this.descriptor,
+  });
+}
+
+class LinkPreview {
+  final Uri url;
+  final String title;
+  final String? description;
+  final String? imageUrl;
+
+  const LinkPreview({
+    required this.url,
+    required this.title,
+    this.description,
+    this.imageUrl,
+  });
+}
+
+class LinkPreviewService {
+  final Map<String, LinkPreview> _cache = {};
+  final RegExp _urlRegex = RegExp(r'(https?://[^\\s]+)', caseSensitive: false);
+
+  List<LinkPreview> extractCached(String text) {
+    final matches = _urlRegex.allMatches(text);
+    final previews = <LinkPreview>[];
+    for (final match in matches) {
+      final url = match.group(0);
+      if (url == null) continue;
+      final preview = _cache[url];
+      if (preview != null) {
+        previews.add(preview);
+      }
+    }
+    return previews;
+  }
+
+  Future<void> prefetch(String text) async {
+    final matches = _urlRegex.allMatches(text);
+    for (final match in matches) {
+      final url = match.group(0);
+      if (url == null || _cache.containsKey(url)) continue;
+      final uri = Uri.tryParse(url);
+      if (uri == null) continue;
+      try {
+        final response = await http.get(uri);
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          continue;
+        }
+        final preview = _parseOpenGraph(uri, response.body);
+        if (preview != null) {
+          _cache[url] = preview;
+        }
+      } catch (_) {}
+    }
+  }
+
+  LinkPreview? _parseOpenGraph(Uri url, String html) {
+    String? title;
+    String? description;
+    String? image;
+
+    final metaTag = RegExp(r'<meta[^>]+>', caseSensitive: false);
+    final attr = RegExp(r'(property|name)=[\"\\\']([^\"\\\']+)[\"\\\']');
+    final content = RegExp(r'content=[\"\\\']([^\"\\\']+)[\"\\\']');
+    for (final match in metaTag.allMatches(html)) {
+      final tag = match.group(0) ?? '';
+      final attrMatch = attr.firstMatch(tag);
+      final contentMatch = content.firstMatch(tag);
+      if (attrMatch == null || contentMatch == null) continue;
+      final key = attrMatch.group(2)?.toLowerCase();
+      final value = contentMatch.group(1);
+      if (key == null || value == null) continue;
+      if (key == 'og:title' && title == null) title = value;
+      if (key == 'og:description' && description == null) {
+        description = value;
+      }
+      if (key == 'og:image' && image == null) image = value;
+    }
+
+    if (title == null || title.isEmpty) {
+      final titleMatch = RegExp(r'<title>([^<]+)</title>', caseSensitive: false)
+          .firstMatch(html);
+      title = titleMatch?.group(1)?.trim();
+    }
+
+    if (title == null || title.isEmpty) {
+      return null;
+    }
+    return LinkPreview(
+      url: url,
+      title: title,
+      description: description,
+      imageUrl: image,
+    );
+  }
+}
+
+class LinkPreviewCard extends StatelessWidget {
+  final LinkPreview preview;
+
+  const LinkPreviewCard({required this.preview});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: InkWell(
+        onTap: () => launchUrl(preview.url, mode: LaunchMode.externalApplication),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: const Color(0xFF1F2937)),
+          ),
+          child: Row(
+            children: [
+              if (preview.imageUrl != null)
+                ClipRRect(
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(14),
+                    bottomLeft: Radius.circular(14),
+                  ),
+                  child: Image.network(
+                    preview.imageUrl!,
+                    width: 96,
+                    height: 96,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => const SizedBox(
+                      width: 96,
+                      height: 96,
+                      child: Icon(Icons.link),
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        preview.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      if (preview.description != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          preview.description!,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: Colors.white70),
+                        ),
+                      ],
+                      const SizedBox(height: 6),
+                      Text(
+                        preview.url.host,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: Colors.white54),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class VideoAttachmentPreview extends StatefulWidget {
+  final Uint8List bytes;
+  final String title;
+
+  const VideoAttachmentPreview({required this.bytes, required this.title});
+
+  @override
+  State<VideoAttachmentPreview> createState() => _VideoAttachmentPreviewState();
+}
+
+class _VideoAttachmentPreviewState extends State<VideoAttachmentPreview> {
+  VideoPlayerController? _controller;
+  bool _initialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    final temp = await File('${Directory.systemTemp.path}/${DateTime.now().millisecondsSinceEpoch}.mp4').create();
+    await temp.writeAsBytes(widget.bytes, flush: true);
+    final controller = VideoPlayerController.file(temp);
+    await controller.initialize();
+    setState(() {
+      _controller = controller;
+      _initialized = true;
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_initialized || _controller == null) {
+      return Container(
+        color: const Color(0xFF0F172A),
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.play_circle_outline, size: 32),
+              const SizedBox(height: 6),
+              Text(
+                widget.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return Stack(
+      children: [
+        AspectRatio(
+          aspectRatio: _controller!.value.aspectRatio,
+          child: VideoPlayer(_controller!),
+        ),
+        Align(
+          alignment: Alignment.center,
+          child: IconButton(
+            icon: Icon(
+              _controller!.value.isPlaying ? Icons.pause : Icons.play_arrow,
+              color: Colors.white,
+            ),
+            onPressed: () {
+              setState(() {
+                if (_controller!.value.isPlaying) {
+                  _controller!.pause();
+                } else {
+                  _controller!.play();
+                }
+              });
+            },
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class OnboardingScreen extends StatefulWidget {
@@ -1324,7 +1791,64 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
               ),
               const SizedBox(height: 12),
               Text(entry.body),
-              if (entry.blurHash != null) ...[
+              if (entry.attachments.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 120,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: entry.attachments.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 12),
+                    itemBuilder: (context, index) {
+                      final attachment = entry.attachments[index];
+                      return ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: AspectRatio(
+                          aspectRatio: 1,
+                          child: attachment.isVideo
+                              ? VideoAttachmentPreview(
+                                  bytes: attachment.bytes,
+                                  title: attachment.name,
+                                )
+                              : attachment.isImage
+                              ? Image.memory(
+                                  attachment.bytes,
+                                  fit: BoxFit.cover,
+                                )
+                              : Container(
+                                  color: const Color(0xFF0F172A),
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Icon(Icons.insert_drive_file),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        attachment.name,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall,
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        '${attachment.chunkCount} chunks',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(color: Colors.white70),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ] else if (entry.blurHash != null) ...[
                 const SizedBox(height: 12),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
@@ -1336,6 +1860,12 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                       duration: const Duration(milliseconds: 300),
                     ),
                   ),
+                ),
+              ],
+              if (entry.linkPreviews.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                ...entry.linkPreviews.map(
+                  (preview) => LinkPreviewCard(preview: preview),
                 ),
               ],
               if (!entry.reconstructed) ...[
@@ -2085,7 +2615,7 @@ class _LaneHealthTile extends StatelessWidget {
 }
 
 class ComposeScreen extends StatefulWidget {
-  final void Function(String text) onPublish;
+  final void Function(String text, List<Attachment> attachments) onPublish;
   final String channelLabel;
 
   const ComposeScreen({
@@ -2100,6 +2630,8 @@ class ComposeScreen extends StatefulWidget {
 
 class _ComposeScreenState extends State<ComposeScreen> {
   final _controller = TextEditingController();
+  final _picker = ImagePicker();
+  final List<Attachment> _attachments = [];
 
   @override
   void dispose() {
@@ -2114,7 +2646,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
         title: const Text('Compose'),
         actions: [
           TextButton(
-            onPressed: () => widget.onPublish(_controller.text),
+            onPressed: () => widget.onPublish(_controller.text, _attachments),
             child: const Text('Publish'),
           ),
         ],
@@ -2151,11 +2683,168 @@ class _ComposeScreenState extends State<ComposeScreen> {
                   hintText: 'Share an update...',
                 ),
               ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _pickImage,
+                    icon: const Icon(Icons.image_outlined),
+                    label: const Text('Attach image'),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: _pickFile,
+                    icon: const Icon(Icons.attach_file),
+                    label: const Text('Attach file'),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    '${_attachments.length} attached',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
+              ),
+              if (_attachments.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 120,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: _attachments.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 12),
+                    itemBuilder: (context, index) {
+                      final attachment = _attachments[index];
+                      return Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: attachment.isImage
+                                ? Image.memory(
+                                    attachment.bytes,
+                                    width: 120,
+                                    height: 120,
+                                    fit: BoxFit.cover,
+                                  )
+                                : Container(
+                                    width: 120,
+                                    height: 120,
+                                    color: const Color(0xFF0F172A),
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        const Icon(Icons.insert_drive_file),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          attachment.name,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          textAlign: TextAlign.center,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                          ),
+                          Positioned(
+                            right: 6,
+                            top: 6,
+                            child: InkWell(
+                              onTap: () {
+                                setState(() => _attachments.removeAt(index));
+                              },
+                              child: Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: Colors.black54,
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: const Icon(Icons.close, size: 16),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ],
             ],
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _pickImage() async {
+    final image = await _picker.pickImage(source: ImageSource.gallery);
+    if (image == null) return;
+    final bytes = await image.readAsBytes();
+    final digest = sha256.convert(bytes).toString();
+    final chunks = splitIntoFileChunks(bytes);
+    final chunkRoots = chunks
+        .map((chunk) => sha256.convert(chunk.data).toString())
+        .toList();
+    final descriptor = MediaDescriptorV1(
+      mime: image.mimeType ?? 'image/*',
+      size: bytes.length,
+      hashHex: digest,
+      chunkRoots: chunkRoots,
+    );
+    setState(() {
+      _attachments.add(
+        Attachment(
+          name: image.name,
+          mime: image.mimeType ?? 'image/*',
+          bytes: bytes,
+          hashHex: digest,
+          size: bytes.length,
+          isImage: true,
+          isVideo: false,
+          chunkCount: chunks.length,
+          descriptor: descriptor,
+        ),
+      );
+    });
+  }
+
+  Future<void> _pickFile() async {
+    final result = await FilePicker.platform.pickFiles(withData: true);
+    if (result == null || result.files.isEmpty) return;
+    final file = result.files.first;
+    final bytes = file.bytes;
+    if (bytes == null) return;
+    final mime = lookupMimeType(file.name) ?? 'application/octet-stream';
+    final digest = sha256.convert(bytes).toString();
+    final chunks = splitIntoFileChunks(bytes);
+    final chunkRoots = chunks
+        .map((chunk) => sha256.convert(chunk.data).toString())
+        .toList();
+    final descriptor = MediaDescriptorV1(
+      mime: mime,
+      size: bytes.length,
+      hashHex: digest,
+      chunkRoots: chunkRoots,
+    );
+    setState(() {
+      _attachments.add(
+        Attachment(
+          name: file.name,
+          mime: mime,
+          bytes: bytes,
+          hashHex: digest,
+          size: bytes.length,
+          isImage: mime.startsWith('image/'),
+          isVideo: mime.startsWith('video/'),
+          chunkCount: chunks.length,
+          descriptor: descriptor,
+        ),
+      );
+    });
   }
 }
 
@@ -2168,6 +2857,10 @@ class SettingsSheet extends StatelessWidget {
   final ValueChanged<bool> onToggleRequireSigned;
   final int clockSkewSeconds;
   final ValueChanged<String> onClockSkewChanged;
+  final int maxCacheEntries;
+  final int maxPublishQueue;
+  final ValueChanged<String> onMaxCacheEntriesChanged;
+  final ValueChanged<String> onMaxPublishQueueChanged;
 
   const SettingsSheet({
     super.key,
@@ -2179,6 +2872,10 @@ class SettingsSheet extends StatelessWidget {
     required this.onToggleRequireSigned,
     required this.clockSkewSeconds,
     required this.onClockSkewChanged,
+    required this.maxCacheEntries,
+    required this.maxPublishQueue,
+    required this.onMaxCacheEntriesChanged,
+    required this.onMaxPublishQueueChanged,
   });
 
   @override
@@ -2226,6 +2923,26 @@ class SettingsSheet extends StatelessWidget {
                       ),
                       initialValue: clockSkewSeconds.toString(),
                       onFieldSubmitted: onClockSkewChanged,
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Cache entry limit',
+                        helperText: 'Approx shard cache size cap.',
+                      ),
+                      initialValue: maxCacheEntries.toString(),
+                      onFieldSubmitted: onMaxCacheEntriesChanged,
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Publish queue limit',
+                        helperText: 'Max queued objects pending send.',
+                      ),
+                      initialValue: maxPublishQueue.toString(),
+                      onFieldSubmitted: onMaxPublishQueueChanged,
                     ),
                   ],
                 );
