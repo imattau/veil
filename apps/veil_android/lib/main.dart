@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
@@ -148,6 +149,7 @@ class _RootShellState extends State<RootShell> {
 
 class VeilAppController extends ChangeNotifier {
   final _bridge = const VeilBridge();
+  final _ble = FlutterReactiveBle();
   final List<FeedEntry> _feed = [];
   final List<String> _events = [];
   final List<String> _suggestedFeeds = [
@@ -161,15 +163,21 @@ class VeilAppController extends ChangeNotifier {
   String recoveryPhrase = '';
   String namespaceChoice = 'Public Square';
   String peerId = 'android-client';
+  String wsUrl = 'ws://127.0.0.1:9001';
   String tagHex = '';
+  String bleDeviceId = '';
+  String bleServiceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+  String bleCharacteristicUuid = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
 
   VeilClient? _client;
   WebSocketLane? _lane;
+  VeilLane? _fallbackLane;
   LocalRelay? _relay;
   bool _relayReady = false;
   bool _useLocalRelay = true;
   bool _connected = false;
   bool _ghostMode = false;
+  bool _bleEnabled = false;
   Timer? _epochTimer;
   int _epochRemainingSeconds = 0;
 
@@ -178,6 +186,8 @@ class VeilAppController extends ChangeNotifier {
   bool get connected => _connected;
   String get relayUrl => _relay?.url ?? '';
   bool get ghostMode => _ghostMode;
+  bool get bleEnabled => _bleEnabled;
+  bool get useLocalRelay => _useLocalRelay;
   int get epochRemainingSeconds => _epochRemainingSeconds;
   List<FeedEntry> get feed => List.unmodifiable(_feed);
   List<String> get events => List.unmodifiable(_events);
@@ -218,9 +228,45 @@ class VeilAppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setWsUrl(String value) {
+    wsUrl = value.trim();
+    notifyListeners();
+  }
+
+  void setPeerId(String value) {
+    peerId = value.trim();
+    notifyListeners();
+  }
+
+  void setTagHex(String value) {
+    tagHex = value.trim();
+    notifyListeners();
+  }
+
   void setGhostMode(bool value) {
     _ghostMode = value;
     _events.insert(0, value ? 'Ghost mode enabled' : 'Ghost mode disabled');
+    notifyListeners();
+  }
+
+  void setBleEnabled(bool value) {
+    _bleEnabled = value;
+    _events.insert(0, value ? 'BLE lane enabled' : 'BLE lane disabled');
+    notifyListeners();
+  }
+
+  void setBleDeviceId(String value) {
+    bleDeviceId = value.trim();
+    notifyListeners();
+  }
+
+  void setBleServiceUuid(String value) {
+    bleServiceUuid = value.trim();
+    notifyListeners();
+  }
+
+  void setBleCharacteristicUuid(String value) {
+    bleCharacteristicUuid = value.trim();
     notifyListeners();
   }
 
@@ -252,16 +298,32 @@ class VeilAppController extends ChangeNotifier {
     final store = SqfliteShardCacheStore(db: db);
     await store.init();
 
-    final url = _useLocalRelay && _relay != null
-        ? _relay!.url
-        : _wsController.text.trim();
-    final lane = WebSocketLane(
+    final url = _useLocalRelay && _relay != null ? _relay!.url : wsUrl;
+    final wsLane = WebSocketLane(
       url: Uri.parse(url.isEmpty ? 'ws://127.0.0.1:9001' : url),
       peerId: peerId,
     );
 
+    BleLane? bleLane;
+    if (_bleEnabled && bleDeviceId.isNotEmpty) {
+      try {
+        bleLane = BleLane(
+          ble: _ble,
+          serviceUuid: Uuid.parse(bleServiceUuid),
+          characteristicUuid: Uuid.parse(bleCharacteristicUuid),
+          deviceId: bleDeviceId,
+        );
+      } catch (err) {
+        _events.insert(0, 'BLE init failed: $err');
+      }
+    }
+
+    final fastLane = _ghostMode && bleLane != null ? bleLane : wsLane;
+    final fallbackLane = _ghostMode ? wsLane : bleLane;
+
     final client = VeilClient(
-      fastLane: lane,
+      fastLane: fastLane,
+      fallbackLane: fallbackLane,
       bridge: _bridge,
       cacheStore: store,
       hooks: VeilClientHooks(
@@ -283,16 +345,16 @@ class VeilAppController extends ChangeNotifier {
       ),
     );
 
-    tagHex = _tagController.text.trim();
     if (tagHex.isNotEmpty) {
       client.subscribe(tagHex);
     }
     client.start();
 
     _client = client;
-    _lane = lane;
+    _lane = wsLane;
+    _fallbackLane = fallbackLane;
     _connected = true;
-    _events.insert(0, 'Connected via ${lane.url}');
+    _events.insert(0, 'Connected via ${wsLane.url}');
     _notify();
   }
 
@@ -774,13 +836,49 @@ class VaultView extends StatelessWidget {
   }
 }
 
-class NetworkView extends StatelessWidget {
+class NetworkView extends StatefulWidget {
   final VeilAppController controller;
 
   const NetworkView({super.key, required this.controller});
 
   @override
+  State<NetworkView> createState() => _NetworkViewState();
+}
+
+class _NetworkViewState extends State<NetworkView> {
+  late final TextEditingController _wsController;
+  late final TextEditingController _peerController;
+  late final TextEditingController _tagController;
+  late final TextEditingController _bleDeviceController;
+  late final TextEditingController _bleServiceController;
+  late final TextEditingController _bleCharController;
+
+  @override
+  void initState() {
+    super.initState();
+    final c = widget.controller;
+    _wsController = TextEditingController(text: c.wsUrl);
+    _peerController = TextEditingController(text: c.peerId);
+    _tagController = TextEditingController(text: c.tagHex);
+    _bleDeviceController = TextEditingController(text: c.bleDeviceId);
+    _bleServiceController = TextEditingController(text: c.bleServiceUuid);
+    _bleCharController = TextEditingController(text: c.bleCharacteristicUuid);
+  }
+
+  @override
+  void dispose() {
+    _wsController.dispose();
+    _peerController.dispose();
+    _tagController.dispose();
+    _bleDeviceController.dispose();
+    _bleServiceController.dispose();
+    _bleCharController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -814,10 +912,105 @@ class NetworkView extends StatelessWidget {
               ),
               ListTile(
                 dense: true,
-                leading: const Icon(Icons.lock_outline, size: 18),
-                title: const Text('Privacy Lane'),
-                subtitle: Text(controller.ghostMode ? 'Forced' : 'Auto'),
-                trailing: const Text('TOR/BLE'),
+                leading: const Icon(Icons.bluetooth, size: 18),
+                title: const Text('Bluetooth Lane'),
+                subtitle: Text(controller.bleEnabled ? 'Enabled' : 'Disabled'),
+                trailing: const Text('BLE'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _Panel(
+          title: 'Connection',
+          child: Column(
+            children: [
+              SwitchListTile(
+                value: controller.useLocalRelay,
+                onChanged: controller.relayReady
+                    ? (value) =>
+                          setState(() => controller.setUseLocalRelay(value))
+                    : null,
+                title: const Text('Use local relay'),
+                subtitle: Text(
+                  controller.relayReady
+                      ? 'Local relay at ${controller.relayUrl}'
+                      : 'Starting local relay...',
+                ),
+              ),
+              _InputField(
+                label: 'WebSocket URL',
+                controller: _wsController,
+                onChanged: controller.setWsUrl,
+              ),
+              _InputField(
+                label: 'Peer ID',
+                controller: _peerController,
+                onChanged: controller.setPeerId,
+              ),
+              _InputField(
+                label: 'Subscribe Tag (hex)',
+                controller: _tagController,
+                onChanged: controller.setTagHex,
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: controller.connected
+                          ? null
+                          : controller.connect,
+                      child: const Text('Connect'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: controller.connected
+                          ? controller.disconnect
+                          : null,
+                      child: const Text('Disconnect'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                onPressed: controller.connected
+                    ? () => controller.updateSubscription(_tagController.text)
+                    : null,
+                child: const Text('Update Subscription'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _Panel(
+          title: 'Bluetooth Lane',
+          child: Column(
+            children: [
+              SwitchListTile(
+                value: controller.bleEnabled,
+                onChanged: (value) =>
+                    setState(() => controller.setBleEnabled(value)),
+                title: const Text('Enable BLE lane'),
+                subtitle: const Text('Requires a paired BLE device id.'),
+              ),
+              _InputField(
+                label: 'BLE Device ID',
+                controller: _bleDeviceController,
+                onChanged: controller.setBleDeviceId,
+              ),
+              _InputField(
+                label: 'Service UUID',
+                controller: _bleServiceController,
+                onChanged: controller.setBleServiceUuid,
+              ),
+              _InputField(
+                label: 'Characteristic UUID',
+                controller: _bleCharController,
+                onChanged: controller.setBleCharacteristicUuid,
               ),
             ],
           ),
@@ -984,8 +1177,13 @@ class _Panel extends StatelessWidget {
 class _InputField extends StatelessWidget {
   final String label;
   final TextEditingController controller;
+  final ValueChanged<String>? onChanged;
 
-  const _InputField({required this.label, required this.controller});
+  const _InputField({
+    required this.label,
+    required this.controller,
+    this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -993,6 +1191,7 @@ class _InputField extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 12),
       child: TextField(
         controller: controller,
+        onChanged: onChanged,
         decoration: InputDecoration(
           labelText: label,
           filled: true,
