@@ -308,6 +308,25 @@ class _RootShellState extends State<RootShell> {
               ],
             ),
             actions: [
+              IconButton(
+                tooltip: _controller.ghostMode ? 'Ghost mode on' : 'Ghost mode off',
+                icon: Icon(
+                  _controller.ghostMode ? Icons.visibility_off : Icons.visibility,
+                ),
+                onPressed: () {
+                  _controller.setGhostMode(!_controller.ghostMode);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        _controller.ghostMode
+                            ? 'Ghost mode enabled'
+                            : 'Ghost mode disabled',
+                      ),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                },
+              ),
               Chip(
                 label: Text(_controller.connectionStatus),
                 backgroundColor: _controller.connectionStatus == 'LIVE'
