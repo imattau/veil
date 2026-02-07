@@ -33,7 +33,10 @@ async fn main() {
     }
 }
 
-async fn handle_client(stream: TcpStream, relay_tx: Arc<broadcast::Sender<Vec<u8>>>) -> anyhow::Result<()> {
+async fn handle_client(
+    stream: TcpStream,
+    relay_tx: Arc<broadcast::Sender<Vec<u8>>>,
+) -> anyhow::Result<()> {
     let ws_stream = accept_async(stream).await?;
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     let mut rx = relay_tx.subscribe();

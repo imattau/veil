@@ -15,6 +15,7 @@ veil-transport-quic = { path = "../../crates/veil-transport-quic" }
 veil-transport-websocket = { path = "../../crates/veil-transport-websocket" }
 veil-transport-tor = { path = "../../crates/veil-transport-tor" }
 veil-transport-ble = { path = "../../crates/veil-transport-ble", optional = true }
+signal-hook = "0.3"
 
 [features]
 default = []

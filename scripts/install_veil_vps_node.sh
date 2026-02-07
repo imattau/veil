@@ -15,12 +15,27 @@ PROXY_HTTP_PORT=${PROXY_HTTP_PORT:-80}
 PROXY_HTTPS_PORT=${PROXY_HTTPS_PORT:-443}
 PROXY_WS_PORT=${PROXY_WS_PORT:-8080}
 PROXY_HEALTH_PORT=${PROXY_HEALTH_PORT:-9090}
+PROXY_HEALTH_USER=${PROXY_HEALTH_USER:-veil-health}
+PROXY_HEALTH_PASS=${PROXY_HEALTH_PASS:-}
+PROXY_HEALTH_HTPASSWD=${PROXY_HEALTH_HTPASSWD:-/etc/nginx/veil-vps-node.htpasswd}
 
 NGINX_SITE_PATH=${NGINX_SITE_PATH:-/etc/nginx/sites-available/veil-vps-node.conf}
 NGINX_SITE_LINK=${NGINX_SITE_LINK:-/etc/nginx/sites-enabled/veil-vps-node.conf}
 CADDY_CONF_DIR=${CADDY_CONF_DIR:-/etc/caddy/conf.d}
 CADDY_SITE_PATH=${CADDY_SITE_PATH:-${CADDY_CONF_DIR}/veil-vps-node.caddy}
 CADDYFILE=${CADDYFILE:-/etc/caddy/Caddyfile}
+
+random_string() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 12
+    return
+  fi
+  if [[ -r /dev/urandom ]]; then
+    head -c 18 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16
+    return
+  fi
+  echo "veilhealth$(date +%s)"
+}
 
 if [[ "${EUID}" -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then
@@ -151,6 +166,7 @@ usermod -a -G "$RUN_GROUP" "$RUN_USER" || true
 ensure_writable_dir "$PREFIX"
 ensure_writable_dir "$PREFIX/data"
 ensure_writable_dir "$WEB_ROOT"
+chmod 0700 "$PREFIX" "$PREFIX/data" || true
 chown -R "$RUN_USER:$RUN_GROUP" "$PREFIX" "$WEB_ROOT" || true
 
 if [[ ! -f target/release/veil-vps-node ]]; then
@@ -164,9 +180,11 @@ install -m 0755 target/release/veil-vps-node "$PREFIX/veil-vps-node"
 ln -sf "$PREFIX/veil-vps-node" "$BIN"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  install -m 0644 docs/runbooks/veil-vps-node.env.example "$ENV_FILE"
+  install -m 0600 docs/runbooks/veil-vps-node.env.example "$ENV_FILE"
   echo "Wrote env template to $ENV_FILE"
 fi
+chmod 0600 "$ENV_FILE" || true
+chown "$RUN_USER:$RUN_GROUP" "$ENV_FILE" || true
 
 DEFAULT_CORE_TAGS="6914e6d3b151b9ac372db7c201ae4e043af645245ecce6175648d42b6177a9ca,7f3612b9145b9ae924e119dbce48ea5bba8ef366d50f10fdf490fc88378c7180,040257d0dadd0ec43e267cc60c2a3c4306e1665273e0ba88065254bbd082a590,7f3fccfbad7a618eecccf31277a79691c5d6a657e50f45dd671319f84ee1d010"
 if grep -q "^VEIL_VPS_CORE_TAGS=" "$ENV_FILE"; then
@@ -191,6 +209,9 @@ set_env_var() {
 }
 
 HOSTNAME_FQDN=$(hostname -f 2>/dev/null || hostname)
+if [[ -z "$PROXY_HEALTH_PASS" ]]; then
+  PROXY_HEALTH_PASS=$(random_string)
+fi
 set_env_var "VEIL_VPS_STATE_PATH" "${PREFIX}/data/node_state.cbor"
 set_env_var "VEIL_VPS_NODE_KEY_PATH" "${PREFIX}/data/node_identity.key"
 set_env_var "VEIL_VPS_QUIC_CERT_PATH" "${PREFIX}/data/quic_cert.der"
@@ -214,7 +235,10 @@ set_env_var "VEIL_VPS_REQUIRED_SIGNED_NAMESPACES" ""
 set_env_var "VEIL_VPS_ADAPTIVE_LANE_SCORING" "1"
 set_env_var "VEIL_VPS_SNAPSHOT_SECS" "60"
 set_env_var "VEIL_VPS_TICK_MS" "50"
+set_env_var "VEIL_VPS_HEALTH_BIND" "127.0.0.1"
 set_env_var "VEIL_VPS_HEALTH_PORT" "${PROXY_HEALTH_PORT}"
+set_env_var "PROXY_HEALTH_USER" "${PROXY_HEALTH_USER}"
+set_env_var "PROXY_HEALTH_PASS" "${PROXY_HEALTH_PASS}"
 
 if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   install -m 0644 docs/runbooks/veil-vps-node.service "$SERVICE_FILE" || true
@@ -247,7 +271,32 @@ configure_nginx() {
     echo "PROXY_DOMAIN not set; skipping nginx config"
     return 0
   fi
+  local health_auth_snippet=""
+  if ! command -v openssl >/dev/null 2>&1; then
+    local mgr
+    mgr=$(detect_pkg_mgr)
+    if [[ "$mgr" != "none" ]]; then
+      install_pkgs "$mgr" openssl || true
+    fi
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    install -d -m 0755 "$(dirname "$PROXY_HEALTH_HTPASSWD")"
+    local health_hash
+    health_hash=$(openssl passwd -apr1 "$PROXY_HEALTH_PASS")
+    echo "${PROXY_HEALTH_USER}:${health_hash}" > "$PROXY_HEALTH_HTPASSWD"
+    chmod 0640 "$PROXY_HEALTH_HTPASSWD" || true
+    health_auth_snippet=$(cat <<EOF
+        auth_basic "Veil Health";
+        auth_basic_user_file ${PROXY_HEALTH_HTPASSWD};
+EOF
+)
+  else
+    echo "openssl not available; skipping health basic auth for nginx."
+  fi
   cat <<NGINXCONF > "$NGINX_SITE_PATH"
+limit_req_zone \$binary_remote_addr zone=veil_ws:10m rate=30r/s;
+limit_req_zone \$binary_remote_addr zone=veil_health:1m rate=5r/s;
+
 server {
     listen ${PROXY_HTTP_PORT};
     server_name ${PROXY_DOMAIN};
@@ -264,15 +313,20 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
+        limit_req zone=veil_ws burst=60 nodelay;
     }
 
     location /health {
         proxy_pass http://127.0.0.1:${PROXY_HEALTH_PORT};
         proxy_set_header Host $host;
+        limit_req zone=veil_health burst=10 nodelay;
+        ${health_auth_snippet}
     }
     location /metrics {
         proxy_pass http://127.0.0.1:${PROXY_HEALTH_PORT};
         proxy_set_header Host $host;
+        limit_req zone=veil_health burst=10 nodelay;
+        ${health_auth_snippet}
     }
 }
 NGINXCONF
@@ -291,12 +345,29 @@ configure_caddy() {
     echo "PROXY_DOMAIN not set; skipping caddy config"
     return 0
   fi
+  local health_auth_block=""
+  if command -v caddy >/dev/null 2>&1; then
+    local health_hash
+    health_hash=$(caddy hash-password --plaintext "$PROXY_HEALTH_PASS" 2>/dev/null || true)
+    if [[ -n "$health_hash" ]]; then
+      health_auth_block=$(cat <<EOF
+  basicauth /health /metrics {
+    ${PROXY_HEALTH_USER} ${health_hash}
+  }
+EOF
+)
+    fi
+  fi
+  if [[ -z "$health_auth_block" ]]; then
+    echo "Warning: unable to generate Caddy basic auth hash for health endpoints."
+  fi
   install -d -m 0755 "$CADDY_CONF_DIR"
   cat <<CADDYCONF > "$CADDY_SITE_PATH"
 ${PROXY_DOMAIN} {
   root * ${WEB_ROOT}
   file_server
   reverse_proxy /ws/* 127.0.0.1:${PROXY_WS_PORT}
+${health_auth_block}
   reverse_proxy /health 127.0.0.1:${PROXY_HEALTH_PORT}
   reverse_proxy /metrics 127.0.0.1:${PROXY_HEALTH_PORT}
 }
@@ -392,7 +463,7 @@ configure_firewall() {
   if command -v ufw >/dev/null 2>&1; then
     ufw allow "${PROXY_HTTP_PORT}"/tcp || true
     ufw allow "${PROXY_HTTPS_PORT}"/tcp || true
-    ufw allow "${PROXY_HEALTH_PORT}"/tcp || true
+    # Health port is bound to localhost by default; no public firewall rule.
     ufw allow "${VEIL_VPS_QUIC_BIND##*:}"/udp || true
     ufw --force enable || true
     echo "Configured UFW rules."
@@ -401,7 +472,7 @@ configure_firewall() {
   if command -v firewall-cmd >/dev/null 2>&1; then
     firewall-cmd --permanent --add-port="${PROXY_HTTP_PORT}"/tcp || true
     firewall-cmd --permanent --add-port="${PROXY_HTTPS_PORT}"/tcp || true
-    firewall-cmd --permanent --add-port="${PROXY_HEALTH_PORT}"/tcp || true
+    # Health port is bound to localhost by default; no public firewall rule.
     firewall-cmd --permanent --add-port="${VEIL_VPS_QUIC_BIND##*:}"/udp || true
     firewall-cmd --reload || true
     echo "Configured firewalld rules."

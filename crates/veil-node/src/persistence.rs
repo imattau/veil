@@ -34,7 +34,10 @@ pub fn save_state_to_path(
     state: &NodeState,
 ) -> Result<(), PersistenceError> {
     let bytes = encode_state_cbor(state)?;
-    fs::write(path.as_ref(), bytes).map_err(PersistenceError::Write)
+    let path = path.as_ref();
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, bytes).map_err(PersistenceError::Write)?;
+    fs::rename(&tmp, path).map_err(PersistenceError::Write)
 }
 
 /// Loads state from the given CBOR file path.

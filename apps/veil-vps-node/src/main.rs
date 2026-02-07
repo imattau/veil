@@ -5,13 +5,15 @@ use std::hash::Hash;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use rand::RngCore;
 use rusqlite::{params, Connection};
+use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::flag;
 use veil_crypto::aead::XChaCha20Poly1305Cipher;
 use veil_crypto::signing::Ed25519Verifier;
 use veil_node::config::{AdaptiveLaneScoringConfig, NodeRuntimeConfig};
@@ -329,6 +331,9 @@ fn open_peer_db(path: &Path) -> Option<Connection> {
             return None;
         }
     };
+    let _ = conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
+    );
     if let Err(err) = conn.execute(
         "CREATE TABLE IF NOT EXISTS peers (peer TEXT PRIMARY KEY, last_seen_ms INTEGER NOT NULL)",
         [],
@@ -393,6 +398,12 @@ fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIden
     ensure_parent(key_path).map_err(|e| format!("create key dir: {e}"))?;
     fs::write(cert_path, &identity.cert_der).map_err(|e| format!("write cert: {e}"))?;
     fs::write(key_path, &identity.key_der).map_err(|e| format!("write key: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(cert_path, fs::Permissions::from_mode(0o600));
+        let _ = fs::set_permissions(key_path, fs::Permissions::from_mode(0o600));
+    }
     Ok(identity)
 }
 
@@ -520,6 +531,11 @@ fn load_or_create_node_key(path: &Path) -> Result<[u8; 32], String> {
     rand::thread_rng().fill_bytes(&mut key);
     ensure_parent(path).map_err(|e| format!("create node key dir: {e}"))?;
     fs::write(path, key).map_err(|e| format!("write node key: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
     Ok(key)
 }
 
@@ -538,6 +554,7 @@ struct MetricsState {
 }
 
 fn start_health_server(
+    bind_addr: String,
     port: u16,
     metrics: Arc<MetricsState>,
     peer_snapshot: Arc<Mutex<Vec<String>>>,
@@ -546,10 +563,10 @@ fn start_health_server(
         return;
     }
     thread::spawn(move || {
-        let listener = match TcpListener::bind(("127.0.0.1", port)) {
+        let listener = match TcpListener::bind((bind_addr.as_str(), port)) {
             Ok(listener) => listener,
             Err(err) => {
-                eprintln!("health server bind failed on {port}: {err}");
+                eprintln!("health server bind failed on {bind_addr}:{port}: {err}");
                 return;
             }
         };
@@ -626,6 +643,7 @@ fn main() {
     let quic_key_path = PathBuf::from(env_var("VEIL_VPS_QUIC_KEY_PATH", "data/quic_key.der"));
     let snapshot_secs = env_u64("VEIL_VPS_SNAPSHOT_SECS", 60);
     let tick_ms = env_u64("VEIL_VPS_TICK_MS", 50);
+    let health_bind = env_var("VEIL_VPS_HEALTH_BIND", "127.0.0.1");
     let health_port = env_u64("VEIL_VPS_HEALTH_PORT", 9090) as u16;
     let fast_peers = env_list("VEIL_VPS_FAST_PEERS");
     let core_tags = env_list("VEIL_VPS_CORE_TAGS");
@@ -841,8 +859,12 @@ fn main() {
     let health_log_interval = Duration::from_secs(30);
 
     let metrics = Arc::new(MetricsState::default());
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let _ = flag::register(SIGTERM, Arc::clone(&shutdown));
+    let _ = flag::register(SIGINT, Arc::clone(&shutdown));
     let peer_snapshot: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     start_health_server(
+        health_bind,
         health_port,
         Arc::clone(&metrics),
         Arc::clone(&peer_snapshot),
@@ -850,6 +872,12 @@ fn main() {
 
     let mut now_step = 0_u64;
     loop {
+        if shutdown.load(Ordering::Relaxed) {
+            if let Err(err) = save_state_to_path(&state_path, &runtime.state) {
+                eprintln!("snapshot failed on shutdown: {err}");
+            }
+            break;
+        }
         let metrics_ref = Arc::clone(&metrics);
         let discovered_fast_snapshot = runtime.fast_adapter.snapshot_seen();
         let discovered_fallback_snapshot = runtime.fallback_adapter.snapshot_seen();
