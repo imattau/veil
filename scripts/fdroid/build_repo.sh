@@ -45,4 +45,6 @@ if [[ -f "$REPO_ICON" ]]; then
   cp -f "$REPO_ICON" "$REPO_ROOT/repo/"
 fi
 
+pushd "$REPO_ROOT" >/dev/null
 fdroid update --create-metadata --verbose --clean
+popd >/dev/null
