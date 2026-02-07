@@ -1,6 +1,5 @@
 import { decode, encode } from "cbor-x";
 
-import { bytesToHex, hexToBytes } from "./bytes";
 
 export type AppEnvelope = {
   type: string;
@@ -217,5 +216,3 @@ export function extractReferences(envelope: AppEnvelope): {
 export function encodeCanonicalMap(map: Record<string, unknown>): Uint8Array {
   return encode(sortObject(map));
 }
-
-export { bytesToHex, hexToBytes, textBytes };

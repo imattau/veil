@@ -10,8 +10,9 @@ import "models/veil_types.dart";
 class VeilClientHooks {
   final void Function(String peer, ShardMeta meta)? onShardMeta;
   final void Function(String objectRootHex, int have, int need)?
-      onReconstructable;
+  onReconstructable;
   final void Function(String objectRootHex, Uint8List bytes)? onReconstructed;
+  final void Function(String objectRootHex, Uint8List bytes)? onObjectBytes;
   final void Function(String objectRootHex, ObjectMeta meta)? onObjectMeta;
   final void Function(String objectRootHex, Uint8List payload)? onPayload;
   final void Function(String tagHex)? onIgnoredUnsubscribed;
@@ -21,6 +22,7 @@ class VeilClientHooks {
     this.onShardMeta,
     this.onReconstructable,
     this.onReconstructed,
+    this.onObjectBytes,
     this.onObjectMeta,
     this.onPayload,
     this.onIgnoredUnsubscribed,
@@ -36,6 +38,7 @@ class VeilClientOptions {
   final int requestHopLimit;
   final int requestCooldownMs;
   final int maxForwardHops;
+  final List<VeilClientPlugin> plugins;
 
   const VeilClientOptions({
     this.maxCacheEntries = 50000,
@@ -45,7 +48,12 @@ class VeilClientOptions {
     this.requestHopLimit = 2,
     this.requestCooldownMs = 2000,
     this.maxForwardHops = 6,
+    this.plugins = const [],
   });
+}
+
+abstract class VeilClientPlugin {
+  void onObject(VeilClient client, String objectRootHex, Uint8List objectBytes);
 }
 
 class VeilClient {
@@ -65,6 +73,7 @@ class VeilClient {
   final Map<String, int> _cacheLastSeen = {};
   final Map<String, int> _cacheSeenCount = {};
   final Map<String, int> _shardForwardHops = {};
+  final Map<String, int> _objectPriority = {};
   bool _running = false;
   Timer? _timer;
 
@@ -77,8 +86,8 @@ class VeilClient {
     this.hooks = const VeilClientHooks(),
     this.decryptKey,
     this.options = const VeilClientOptions(),
-  })  : cacheStore = cacheStore ?? MemoryShardCacheStore(),
-        bridge = bridge ?? const VeilBridge();
+  }) : cacheStore = cacheStore ?? MemoryShardCacheStore(),
+       bridge = bridge ?? const VeilBridge();
 
   void subscribe(TagHex tagHex) => _subscriptions.add(tagHex.toLowerCase());
   void unsubscribe(TagHex tagHex) =>
@@ -130,6 +139,11 @@ class VeilClient {
 
     final entries = _cacheLastSeen.entries.toList();
     entries.sort((a, b) {
+      final priorityA = _objectPriority[_objectRootForKey(a.key)] ?? 0;
+      final priorityB = _objectPriority[_objectRootForKey(b.key)] ?? 0;
+      if (priorityA != priorityB) {
+        return priorityA.compareTo(priorityB);
+      }
       final countA = _cacheSeenCount[a.key] ?? 0;
       final countB = _cacheSeenCount[b.key] ?? 0;
       if (countA != countB) {
@@ -145,6 +159,22 @@ class VeilClient {
       _cacheLastSeen.remove(key);
       _cacheSeenCount.remove(key);
       _shardForwardHops.remove(key);
+    }
+  }
+
+  void prioritizeObjectRoot(String objectRootHex, {int priority = 1}) {
+    final key = objectRootHex.toLowerCase();
+    final next = priority < 0 ? 0 : priority;
+    final current = _objectPriority[key] ?? 0;
+    if (next > current) {
+      _objectPriority[key] = next;
+    }
+  }
+
+  void notifyObject(String objectRootHex, Uint8List objectBytes) {
+    hooks.onObjectBytes?.call(objectRootHex, objectBytes);
+    for (final plugin in options.plugins) {
+      plugin.onObject(this, objectRootHex, objectBytes);
     }
   }
 
@@ -184,6 +214,7 @@ class VeilClient {
           meta.objectRootHex,
         );
         hooks.onReconstructed?.call(meta.objectRootHex, reconstructed);
+        notifyObject(meta.objectRootHex, reconstructed);
 
         final objMeta = await bridge.decodeObjectMeta(reconstructed);
         hooks.onObjectMeta?.call(meta.objectRootHex, objMeta);
@@ -324,6 +355,14 @@ class VeilClient {
         break;
       }
     }
+  }
+
+  String _objectRootForKey(String key) {
+    final idx = key.indexOf(":");
+    if (idx <= 0) {
+      return key;
+    }
+    return key.substring(0, idx);
   }
 }
 

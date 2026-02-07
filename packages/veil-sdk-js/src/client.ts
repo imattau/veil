@@ -139,6 +139,7 @@ export interface VeilClientHooks {
   onIgnoredUnsubscribed?: (tagHex: string) => void;
   onLaneHealth?: (snapshot: LaneHealthSnapshot) => void;
   onError?: (error: unknown) => void;
+  onObject?: (objectRootHex: string, objectBytes: Uint8Array) => void;
 }
 
 export interface VeilClientOptions {
@@ -175,6 +176,11 @@ export interface VeilClientOptions {
   requestHopLimit?: number;
   requestCooldownMs?: number;
   maxForwardHops?: number;
+  plugins?: VeilClientPlugin[];
+}
+
+export interface VeilClientPlugin {
+  onObject?: (client: VeilClient, objectRootHex: string, objectBytes: Uint8Array) => void;
 }
 
 export interface LaneHealth {
@@ -264,6 +270,8 @@ export class VeilClient {
   private readonly requestHopLimit: number;
   private readonly requestCooldownMs: number;
   private readonly maxForwardHops: number;
+  private readonly plugins: VeilClientPlugin[];
+  private readonly objectRootPriority = new Map<string, number>();
   private seenSincePrune = 0;
   private running = false;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -317,6 +325,7 @@ export class VeilClient {
     this.requestHopLimit = Math.max(0, options.requestHopLimit ?? 2);
     this.requestCooldownMs = Math.max(0, options.requestCooldownMs ?? 2_000);
     this.maxForwardHops = Math.max(0, options.maxForwardHops ?? 6);
+    this.plugins = options.plugins ?? [];
     if (fallbackLane) {
       this.laneHealth.fallback = {
         score: 1,
@@ -347,6 +356,22 @@ export class VeilClient {
 
   async getCachedShard(shardId: string): Promise<Uint8Array | null> {
     return this.cacheStore.get(shardId);
+  }
+
+  prioritizeObjectRoot(objectRootHex: string, priority = 1): void {
+    const key = objectRootHex.toLowerCase();
+    const next = Math.max(0, priority);
+    const current = this.objectRootPriority.get(key) ?? 0;
+    if (next > current) {
+      this.objectRootPriority.set(key, next);
+    }
+  }
+
+  notifyObject(objectRootHex: string, objectBytes: Uint8Array): void {
+    this.hooks.onObject?.(objectRootHex, objectBytes);
+    for (const plugin of this.plugins) {
+      plugin.onObject?.(this, objectRootHex, objectBytes);
+    }
   }
 
   isRunning(): boolean {
@@ -527,6 +552,14 @@ export class VeilClient {
     }
   }
 
+  private shardPriority(shardId: string): number {
+    const indexMeta = this.shardIdToIndex.get(shardId);
+    if (!indexMeta) {
+      return 0;
+    }
+    return this.objectRootPriority.get(indexMeta.objectRootHex) ?? 0;
+  }
+
   private noteShardIndex(
     meta: Awaited<ReturnType<typeof decodeShardMeta>>,
     shardIdHex: string,
@@ -574,6 +607,11 @@ export class VeilClient {
       const candidates = [...this.cacheMeta.entries()]
         .filter(([, meta]) => meta.tier === tier)
         .sort((a, b) => {
+          const priorityA = this.shardPriority(a[0]);
+          const priorityB = this.shardPriority(b[0]);
+          if (priorityA !== priorityB) {
+            return priorityA - priorityB;
+          }
           const seenA = this.cacheSeenCount.get(a[0]) ?? 0;
           const seenB = this.cacheSeenCount.get(b[0]) ?? 0;
           if (seenA !== seenB) {
@@ -603,6 +641,11 @@ export class VeilClient {
         const candidates = [...this.cacheMeta.entries()]
           .filter(([, meta]) => meta.tier === tier)
           .sort((a, b) => {
+            const priorityA = this.shardPriority(a[0]);
+            const priorityB = this.shardPriority(b[0]);
+            if (priorityA !== priorityB) {
+              return priorityA - priorityB;
+            }
             const seenA = this.cacheSeenCount.get(a[0]) ?? 0;
             const seenB = this.cacheSeenCount.get(b[0]) ?? 0;
             if (seenA !== seenB) {

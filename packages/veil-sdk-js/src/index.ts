@@ -40,6 +40,8 @@ export {
   splitIntoFileChunks,
 } from "./app_schemas";
 export type { AppEnvelope, FileChunkV1, MediaDescriptorV1, SocialPostV1 } from "./app_schemas";
+export { createAutoFetchPlugin, createThreadContextPlugin } from "./app_plugins";
+export type { AutoFetchPluginOptions, RootTagResolver, ThreadContextPluginOptions } from "./app_plugins";
 export {
   decodeBlobManifestV1Bytes,
   decodeDirectoryBundleV1Bytes,

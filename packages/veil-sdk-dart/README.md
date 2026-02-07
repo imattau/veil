@@ -23,6 +23,7 @@ interfaces; the Rust bridge functions are stubbed for now.
 - Overlapping RV tags: helper for epoch transition windows.
 - Blob manifests: app-level CBOR helpers for attachment bundles.
 - Social schemas: non-normative app payload helpers (post/media/chunk).
+- Auto-fetch plugins: subscribe to thread/media references.
 
 ## Next steps
 

@@ -78,6 +78,26 @@ Uint8List encodeAppEnvelope(AppEnvelope envelope) {
   return encodeCbor(map);
 }
 
+AppEnvelope decodeAppEnvelope(Uint8List bytes) {
+  final decoded = decodeCbor(bytes);
+  if (decoded is! Map) {
+    throw ArgumentError("invalid app envelope");
+  }
+  final type = decoded["type"] as String? ?? "";
+  final version = decoded["version"] as int? ?? 0;
+  final payload = decoded["payload"];
+  if (payload is! Map<String, dynamic>) {
+    throw ArgumentError("invalid app envelope payload");
+  }
+  final extensions = decoded["extensions"];
+  return AppEnvelope(
+    type: type,
+    version: version,
+    payload: payload,
+    extensions: extensions is Map<String, dynamic> ? extensions : null,
+  );
+}
+
 Uint8List encodeSocialPost(SocialPostV1 post) {
   return encodeAppEnvelope(
     AppEnvelope(

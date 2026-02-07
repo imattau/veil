@@ -138,6 +138,29 @@ const bytes = encodeSocialPost({
 const refs = extractReferences({ type: "post", version: 1, payload: { ... } });
 ```
 
+## Auto-fetch + thread context plugins
+
+Attach the built-in plugins to auto-subscribe for parent/thread roots and media
+chunks.
+
+```ts
+import { VeilClient, createAutoFetchPlugin, createThreadContextPlugin } from "@veil/sdk-js";
+
+const client = new VeilClient(fastLane, fallbackLane, hooks, {
+  plugins: [
+    createAutoFetchPlugin({
+      resolveTagForRoot: (root) => rootTagIndex.get(root) ?? null,
+    }),
+    createThreadContextPlugin({
+      resolveTagForRoot: (root) => rootTagIndex.get(root) ?? null,
+    }),
+  ],
+});
+
+// When your app reconstructs an object, forward it to the plugins:
+// client.notifyObject(objectRootHex, objectBytes);
+```
+
 ## Channel-scoped helpers
 
 Use channel-scoped helpers to avoid cross-channel feed collisions:

@@ -12,4 +12,5 @@ export "src/models/blob_manifest.dart";
 export "src/models/app_schemas.dart";
 export "src/models/shard_request.dart";
 export "src/models/veil_types.dart";
+export "src/plugins/app_plugins.dart";
 export "src/tags.dart";
