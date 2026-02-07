@@ -188,6 +188,16 @@ class _RootShellState extends State<RootShell> {
     );
   }
 
+  void _openProfile() {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => ProfileSheet(controller: _controller),
+    );
+  }
+
   void _openSettings() {
     showModalBottomSheet(
       context: context,
@@ -285,10 +295,11 @@ class _RootShellState extends State<RootShell> {
               body: IndexedStack(
                 index: _tabIndex,
                 children: [
-                  HomeFeed(
-                    controller: _controller,
-                    showProtocolDetails: _showProtocolDetails,
-                  ),
+                HomeFeed(
+                  controller: _controller,
+                  showProtocolDetails: _showProtocolDetails,
+                  onOpenProfile: _openProfile,
+                ),
                   VaultView(controller: _controller),
                   NetworkView(controller: _controller),
                   DiscoveryView(controller: _controller),
@@ -1666,11 +1677,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 class HomeFeed extends StatelessWidget {
   final VeilAppController controller;
   final bool showProtocolDetails;
+  final VoidCallback onOpenProfile;
 
   const HomeFeed({
     super.key,
     required this.controller,
     required this.showProtocolDetails,
+    required this.onOpenProfile,
   });
 
   @override
@@ -1681,7 +1694,10 @@ class HomeFeed extends StatelessWidget {
       itemCount: items.isEmpty ? 2 : items.length + 2,
       itemBuilder: (context, index) {
         if (index == 0) {
-          return HeaderCard(controller: controller);
+          return HeaderCard(
+            controller: controller,
+            onOpenProfile: onOpenProfile,
+          );
         }
         if (index == 1) {
           return const SizedBox(height: 16);
@@ -1711,8 +1727,13 @@ class HomeFeed extends StatelessWidget {
 
 class HeaderCard extends StatelessWidget {
   final VeilAppController controller;
+  final VoidCallback onOpenProfile;
 
-  const HeaderCard({super.key, required this.controller});
+  const HeaderCard({
+    super.key,
+    required this.controller,
+    required this.onOpenProfile,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1736,26 +1757,39 @@ class HeaderCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Image.asset('assets/veil_logo.png', width: 48, height: 48),
+          GestureDetector(
+            onTap: onOpenProfile,
+            child: controller.profileAvatar?.isImage == true
+                ? CircleAvatar(
+                    radius: 24,
+                    backgroundImage: MemoryImage(
+                      controller.profileAvatar!.bytes,
+                    ),
+                  )
+                : Image.asset('assets/veil_logo.png', width: 48, height: 48),
+          ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  controller.displayName.isEmpty
-                      ? 'Operator'
-                      : controller.displayName,
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  controller.namespaceChoice,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
-                ),
-              ],
+            child: GestureDetector(
+              onTap: onOpenProfile,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    controller.displayName.isEmpty
+                        ? 'Operator'
+                        : controller.displayName,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    controller.namespaceChoice,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+                  ),
+                ],
+              ),
             ),
           ),
           Chip(
@@ -3290,6 +3324,80 @@ class _ProfileEditor extends StatefulWidget {
 
   @override
   State<_ProfileEditor> createState() => _ProfileEditorState();
+}
+
+class ProfileSheet extends StatelessWidget {
+  final VeilAppController controller;
+
+  const ProfileSheet({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Container(
+            color: Theme.of(context).colorScheme.surface.withOpacity(0.9),
+            child: DraggableScrollableSheet(
+              initialChildSize: 0.7,
+              minChildSize: 0.45,
+              maxChildSize: 0.95,
+              expand: false,
+              builder: (context, scrollController) {
+                return ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 30,
+                          backgroundColor: const Color(0xFF1E293B),
+                          backgroundImage:
+                              controller.profileAvatar?.isImage == true
+                                  ? MemoryImage(controller.profileAvatar!.bytes)
+                                  : null,
+                          child: controller.profileAvatar == null
+                              ? const Icon(Icons.person, size: 28)
+                              : null,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                controller.displayName.isEmpty
+                                    ? 'Operator'
+                                    : controller.displayName,
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                controller.namespaceChoice,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(color: Colors.white70),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    _ProfileEditor(controller: controller),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _ProfileEditorState extends State<_ProfileEditor> {
