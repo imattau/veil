@@ -1,4 +1,7 @@
-part of 'package:veil_android/main.dart';
+import 'package:flutter/material.dart';
+
+import '../app_controller.dart';
+import 'widgets.dart';
 class VaultView extends StatelessWidget {
   final VeilAppController controller;
 
@@ -13,7 +16,7 @@ class VaultView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _Panel(
+        Panel(
           title: 'Private Vault',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -54,4 +57,3 @@ class VaultView extends StatelessWidget {
     );
   }
 }
-

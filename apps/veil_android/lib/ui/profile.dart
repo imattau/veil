@@ -1,4 +1,8 @@
-part of 'package:veil_android/main.dart';
+import 'dart:ui';
+
+import 'package:flutter/material.dart';
+
+import '../app_controller.dart';
 class _ProfileEditor extends StatefulWidget {
   final VeilAppController controller;
 

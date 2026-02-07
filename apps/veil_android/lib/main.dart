@@ -1,38 +1,14 @@
-import 'dart:async';
-import 'dart:io';
-import 'dart:math';
-import 'dart:ui';
-import 'dart:typed_data';
-
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_blurhash/flutter_blurhash.dart';
-import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:crypto/crypto.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:mime/mime.dart';
-import 'package:video_player/video_player.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:sqflite/sqflite.dart';
-import 'package:veil_sdk/veil_sdk.dart';
 
-part 'app_controller.dart';
-part 'models.dart';
-part 'ui/onboarding.dart';
-part 'ui/home_feed.dart';
-part 'ui/inspect.dart';
-part 'ui/vault.dart';
-part 'ui/network.dart';
-part 'ui/discovery.dart';
-part 'ui/compose.dart';
-part 'ui/settings.dart';
-part 'ui/profile.dart';
-part 'ui/widgets.dart';
+import 'app_controller.dart';
+import 'ui/compose.dart';
+import 'ui/discovery.dart';
+import 'ui/home_feed.dart';
+import 'ui/network.dart';
+import 'ui/onboarding.dart';
+import 'ui/profile.dart';
+import 'ui/settings.dart';
+import 'ui/vault.dart';
 
 void main() {
   runApp(const VeilAndroidApp());

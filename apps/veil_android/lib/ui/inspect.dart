@@ -1,8 +1,12 @@
-part of 'package:veil_android/main.dart';
-class _InspectSheet extends StatelessWidget {
+import 'dart:ui';
+
+import 'package:flutter/material.dart';
+
+import '../models.dart';
+class InspectSheet extends StatelessWidget {
   final FeedEntry entry;
 
-  const _InspectSheet({required this.entry});
+  const InspectSheet({required this.entry});
 
   @override
   Widget build(BuildContext context) {
@@ -72,4 +76,3 @@ class _InspectRow extends StatelessWidget {
     );
   }
 }
-

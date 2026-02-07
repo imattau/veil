@@ -1,4 +1,11 @@
-part of 'package:veil_android/main.dart';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
+import 'package:video_player/video_player.dart';
+import 'package:veil_sdk/veil_sdk.dart';
 class FeedEntry {
   final String id;
   final String author;
@@ -325,4 +332,3 @@ class _VideoAttachmentPreviewState extends State<VideoAttachmentPreview> {
     );
   }
 }
-

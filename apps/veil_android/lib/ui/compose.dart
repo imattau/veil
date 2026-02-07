@@ -1,4 +1,13 @@
-part of 'package:veil_android/main.dart';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:mime/mime.dart';
+import 'package:veil_sdk/veil_sdk.dart';
+
+import '../models.dart';
 class ComposeScreen extends StatefulWidget {
   final void Function(String text, List<Attachment> attachments) onPublish;
   final String channelLabel;
@@ -259,4 +268,3 @@ class _ComposeScreenState extends State<ComposeScreen> {
     });
   }
 }
-

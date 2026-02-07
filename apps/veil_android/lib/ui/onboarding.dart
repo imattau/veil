@@ -1,4 +1,7 @@
-part of 'package:veil_android/main.dart';
+import 'package:flutter/material.dart';
+
+import '../app_controller.dart';
+import 'widgets.dart';
 class OnboardingScreen extends StatefulWidget {
   final VeilAppController controller;
   final VoidCallback onComplete;
@@ -59,7 +62,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
                         ),
                         const SizedBox(height: 20),
-                        _InputField(
+                        InputField(
                           label: 'Display name',
                           controller: _nameController,
                         ),
@@ -138,4 +141,3 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 }
-

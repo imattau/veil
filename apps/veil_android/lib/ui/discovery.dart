@@ -1,4 +1,8 @@
-part of 'package:veil_android/main.dart';
+import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
+
+import '../app_controller.dart';
+import 'widgets.dart';
 class DiscoveryView extends StatefulWidget {
   final VeilAppController controller;
 
@@ -32,7 +36,7 @@ class _DiscoveryViewState extends State<DiscoveryView> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _Panel(
+        Panel(
           title: 'Suggested Feeds',
           child: Column(
             children: controller.suggestedFeeds
@@ -55,15 +59,15 @@ class _DiscoveryViewState extends State<DiscoveryView> {
           ),
         ),
         const SizedBox(height: 16),
-        _Panel(
+        Panel(
           title: 'Add Peer',
           child: Column(
             children: [
-              _InputField(
+              InputField(
                 label: 'Peer address (ws:// or quic://)',
                 controller: _peerController,
                 onChanged: (_) {},
-                onScan: () => _openScanner(
+                onScan: () => openScanner(
                   context,
                   onResult: controller.handleScanValue,
                 ),
@@ -99,15 +103,15 @@ class _DiscoveryViewState extends State<DiscoveryView> {
           ),
         ),
         const SizedBox(height: 16),
-        _Panel(
+        Panel(
           title: 'Add Subscription',
           child: Column(
             children: [
-              _InputField(
+              InputField(
                 label: 'Channel name (or tag:HEX)',
                 controller: _tagController,
                 onChanged: (_) {},
-                onScan: () => _openScanner(
+                onScan: () => openScanner(
                   context,
                   onResult: controller.handleScanValue,
                 ),
@@ -151,7 +155,7 @@ class _DiscoveryViewState extends State<DiscoveryView> {
   }
 }
 
-Future<void> _openScanner(
+Future<void> openScanner(
   BuildContext context, {
   required void Function(String value) onResult,
 }) async {
@@ -159,7 +163,7 @@ Future<void> _openScanner(
     context: context,
     isScrollControlled: true,
     backgroundColor: const Color(0xFF0B0F17),
-    builder: (context) => _QrScannerSheet(onResult: onResult),
+  builder: (context) => _QrScannerSheet(onResult: onResult),
   );
 }
 
@@ -275,4 +279,3 @@ class _QrScannerSheetState extends State<_QrScannerSheet> {
     );
   }
 }
-

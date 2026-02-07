@@ -1,4 +1,13 @@
-part of 'package:veil_android/main.dart';
+import 'dart:typed_data';
+
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_blurhash/flutter_blurhash.dart';
+
+import '../app_controller.dart';
+import '../models.dart';
+import 'inspect.dart';
+import 'widgets.dart';
 class HomeFeed extends StatelessWidget {
   final VeilAppController controller;
   final bool showProtocolDetails;
@@ -219,10 +228,10 @@ class PostCard extends StatelessWidget {
           ),
           child: Stack(
             children: [
-              _BlurPlaceholder(blurHash: entry.blurHash),
+              BlurPlaceholder(blurHash: entry.blurHash),
               Align(
                 alignment: Alignment.bottomRight,
-                child: _ShardProgressRing(
+                child: ShardProgressRing(
                   have: entry.shardsHave,
                   total: entry.shardsTotal,
                 ),
@@ -417,7 +426,7 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                 const SizedBox(height: 12),
                 Row(
                   children: [
-                    _ShardProgressRing(
+                    ShardProgressRing(
                       have: entry.shardsHave,
                       total: entry.shardsTotal,
                     ),
@@ -517,7 +526,6 @@ void _openInspect(BuildContext context, FeedEntry entry) {
     context: context,
     showDragHandle: true,
     backgroundColor: Colors.transparent,
-    builder: (context) => _InspectSheet(entry: entry),
+    builder: (context) => InspectSheet(entry: entry),
   );
 }
-

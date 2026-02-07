@@ -1,4 +1,8 @@
-part of 'package:veil_android/main.dart';
+import 'dart:ui';
+
+import 'package:flutter/material.dart';
+
+import '../app_controller.dart';
 class SettingsSheet extends StatelessWidget {
   final VeilAppController controller;
   final bool showProtocolDetails;
@@ -108,4 +112,3 @@ class SettingsSheet extends StatelessWidget {
     );
   }
 }
-

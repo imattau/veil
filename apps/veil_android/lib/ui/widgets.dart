@@ -1,9 +1,10 @@
-part of 'package:veil_android/main.dart';
-class _Panel extends StatelessWidget {
+import 'package:flutter/material.dart';
+import 'package:flutter_blurhash/flutter_blurhash.dart';
+class Panel extends StatelessWidget {
   final String title;
   final Widget child;
 
-  const _Panel({required this.title, required this.child});
+  const Panel({required this.title, required this.child});
 
   @override
   Widget build(BuildContext context) {
@@ -47,14 +48,14 @@ class _Panel extends StatelessWidget {
   }
 }
 
-class _InputField extends StatelessWidget {
+class InputField extends StatelessWidget {
   final String label;
   final TextEditingController controller;
   final ValueChanged<String>? onChanged;
   final String? errorText;
   final VoidCallback? onScan;
 
-  const _InputField({
+  const InputField({
     required this.label,
     required this.controller,
     this.onChanged,
@@ -86,16 +87,16 @@ class _InputField extends StatelessWidget {
 }
 
 
-class _BlurPlaceholder extends StatefulWidget {
+class BlurPlaceholder extends StatefulWidget {
   final String? blurHash;
 
-  const _BlurPlaceholder({this.blurHash});
+  const BlurPlaceholder({this.blurHash});
 
   @override
-  State<_BlurPlaceholder> createState() => _BlurPlaceholderState();
+  State<BlurPlaceholder> createState() => BlurPlaceholderState();
 }
 
-class _BlurPlaceholderState extends State<_BlurPlaceholder>
+class BlurPlaceholderState extends State<BlurPlaceholder>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller = AnimationController(
     vsync: this,
@@ -150,11 +151,11 @@ class _BlurPlaceholderState extends State<_BlurPlaceholder>
 }
 
 
-class _ShardProgressRing extends StatelessWidget {
+class ShardProgressRing extends StatelessWidget {
   final int have;
   final int total;
 
-  const _ShardProgressRing({required this.have, required this.total});
+  const ShardProgressRing({required this.have, required this.total});
 
   @override
   Widget build(BuildContext context) {

@@ -1,4 +1,9 @@
-part of 'package:veil_android/main.dart';
+import 'package:flutter/material.dart';
+import 'package:veil_sdk/veil_sdk.dart';
+
+import '../app_controller.dart';
+import 'discovery.dart';
+import 'widgets.dart';
 class NetworkView extends StatefulWidget {
   final VeilAppController controller;
 
@@ -51,7 +56,7 @@ class _NetworkViewState extends State<NetworkView> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _Panel(
+        Panel(
           title: 'Network Status',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -69,7 +74,7 @@ class _NetworkViewState extends State<NetworkView> {
           ),
         ),
         const SizedBox(height: 16),
-        _Panel(
+        Panel(
           title: 'Lane Status',
           child: Column(
             children: [
@@ -91,7 +96,7 @@ class _NetworkViewState extends State<NetworkView> {
           ),
         ),
         const SizedBox(height: 16),
-        _Panel(
+        Panel(
           title: 'Connection',
           child: Column(
             children: [
@@ -120,7 +125,7 @@ class _NetworkViewState extends State<NetworkView> {
                 childrenPadding: const EdgeInsets.only(top: 8),
                 children: [
                   if (!controller.useLocalRelay) ...[
-                    _InputField(
+                    InputField(
                       label: 'WebSocket URL',
                       controller: _wsController,
                       onChanged: (value) {
@@ -129,7 +134,7 @@ class _NetworkViewState extends State<NetworkView> {
                       },
                       errorText: wsError,
                     ),
-                    _InputField(
+                    InputField(
                       label: 'Peer ID',
                       controller: _peerController,
                       onChanged: (value) {
@@ -138,12 +143,12 @@ class _NetworkViewState extends State<NetworkView> {
                       },
                     ),
                   ],
-                  _InputField(
+                  InputField(
                     label: 'Channel',
                     controller: _tagController,
                     onChanged: controller.setChannelLabel,
                     errorText: controller.channelError,
-                    onScan: () => _openScanner(
+                    onScan: () => openScanner(
                       context,
                       onResult: controller.handleScanValue,
                     ),
@@ -184,7 +189,7 @@ class _NetworkViewState extends State<NetworkView> {
           ),
         ),
         const SizedBox(height: 16),
-        _Panel(
+        Panel(
           title: 'Bluetooth Lane',
           child: Column(
             children: [
@@ -195,17 +200,17 @@ class _NetworkViewState extends State<NetworkView> {
                 title: const Text('Enable BLE lane'),
                 subtitle: const Text('Requires a paired BLE device id.'),
               ),
-              _InputField(
+              InputField(
                 label: 'BLE Device ID',
                 controller: _bleDeviceController,
                 onChanged: controller.setBleDeviceId,
               ),
-              _InputField(
+              InputField(
                 label: 'Service UUID',
                 controller: _bleServiceController,
                 onChanged: controller.setBleServiceUuid,
               ),
-              _InputField(
+              InputField(
                 label: 'Characteristic UUID',
                 controller: _bleCharController,
                 onChanged: controller.setBleCharacteristicUuid,
@@ -214,7 +219,7 @@ class _NetworkViewState extends State<NetworkView> {
           ),
         ),
         const SizedBox(height: 16),
-        _Panel(
+        Panel(
           title: 'Recent Activity',
           child: Column(
             children: controller.events
@@ -284,4 +289,3 @@ class _LaneHealthTile extends StatelessWidget {
     );
   }
 }
-
