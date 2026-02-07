@@ -28,6 +28,7 @@ class VeilAppController extends ChangeNotifier {
   String _profileWebsite = '';
   String _profileLocation = '';
   DateTime? _profileLastPublished;
+  bool _profilePublishing = false;
   final PublishQueue _publishQueue = PublishQueue();
   bool _publishInFlight = false;
   int _publishAttempts = 0;
@@ -82,6 +83,7 @@ class VeilAppController extends ChangeNotifier {
   String get profileWebsite => _profileWebsite;
   String get profileLocation => _profileLocation;
   DateTime? get profileLastPublished => _profileLastPublished;
+  bool get profilePublishing => _profilePublishing;
   bool get relayReady => _relayReady;
   bool get connected => _connected;
   String get relayUrl => _relay?.url ?? '';
@@ -217,6 +219,8 @@ class VeilAppController extends ChangeNotifier {
   void publishProfile() {
     if (displayName.trim().isEmpty) return;
     final avatar = _profileAvatar;
+    _profilePublishing = true;
+    notifyListeners();
     () async {
       MediaDescriptorV1? avatarDescriptor;
       if (avatar != null) {
@@ -250,6 +254,7 @@ class VeilAppController extends ChangeNotifier {
       _persistPublishObject(profileObject);
       _events.insert(0, 'Profile update queued');
       _profileLastPublished = DateTime.now();
+      _profilePublishing = false;
       _persistPrefs();
       notifyListeners();
       _drainPublishQueue();

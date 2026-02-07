@@ -135,7 +135,26 @@ class ProfileSheet extends StatelessWidget {
                           ),
                         if (controller.profileLastPublished != null)
                           const SizedBox(height: 12),
-                        if (controller.profileLastPublished != null)
+                        if (controller.profilePublishing)
+                          Row(
+                            children: [
+                              const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Publishing profile…',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(color: Colors.white54),
+                              ),
+                            ],
+                          ),
+                        if (!controller.profilePublishing &&
+                            controller.profileLastPublished != null)
                           Text(
                             'Last published ${controller.profileLastPublished}',
                             style: Theme.of(context)
@@ -307,17 +326,28 @@ class _ProfileEditorState extends State<_ProfileEditor> {
             ),
             const SizedBox(height: 12),
             ElevatedButton.icon(
-              onPressed: () {
-                controller.publishProfile();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Profile update queued'),
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
-              },
-              icon: const Icon(Icons.publish),
-              label: const Text('Publish profile update'),
+              onPressed: controller.profilePublishing
+                  ? null
+                  : () {
+                      controller.publishProfile();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Profile update queued'),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                      Navigator.of(context).pop();
+                    },
+              icon: controller.profilePublishing
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.publish),
+              label: Text(
+                controller.profilePublishing ? 'Publishing…' : 'Publish profile',
+              ),
             ),
           ],
         );
