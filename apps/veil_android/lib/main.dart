@@ -782,6 +782,7 @@ class VeilAppController extends ChangeNotifier {
     notifyListeners();
   }
 
+
   void handleScanValue(String value) {
     final raw = value.trim();
     if (raw.isEmpty) return;
@@ -1732,6 +1733,12 @@ class HomeFeed extends StatelessWidget {
               SnackBar(
                 content: Text('Joined channel #$tag'),
                 behavior: SnackBarBehavior.floating,
+                action: SnackBarAction(
+                  label: 'Open',
+                  onPressed: () {
+                    controller.updateSubscription(tag);
+                  },
+                ),
               ),
             );
           },
@@ -2034,9 +2041,16 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                                   title: attachment.name,
                                 )
                               : attachment.isImage
-                              ? Image.memory(
-                                  attachment.bytes,
-                                  fit: BoxFit.cover,
+                              ? GestureDetector(
+                                  onTap: () => _openImageViewer(
+                                    context,
+                                    attachment.bytes,
+                                    attachment.name,
+                                  ),
+                                  child: Image.memory(
+                                    attachment.bytes,
+                                    fit: BoxFit.cover,
+                                  ),
                                 )
                               : Container(
                                   color: const Color(0xFF0F172A),
@@ -2155,6 +2169,39 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
       ),
     );
   }
+}
+
+void _openImageViewer(BuildContext context, Uint8List bytes, String title) {
+  showDialog(
+    context: context,
+    builder: (context) => Dialog(
+      backgroundColor: Colors.black,
+      insetPadding: const EdgeInsets.all(12),
+      child: Stack(
+        children: [
+          InteractiveViewer(
+            child: Image.memory(bytes, fit: BoxFit.contain),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: IconButton(
+              icon: const Icon(Icons.close, color: Colors.white),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+          ),
+          Positioned(
+            left: 12,
+            bottom: 12,
+            child: Text(
+              title,
+              style: const TextStyle(color: Colors.white70),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 void _openInspect(BuildContext context, FeedEntry entry) {
