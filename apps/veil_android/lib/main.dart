@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
@@ -22,296 +23,765 @@ class VeilAndroidApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const VeilHomePage(),
+      home: const RootShell(),
     );
   }
 }
 
-class VeilHomePage extends StatefulWidget {
-  const VeilHomePage({super.key});
+class RootShell extends StatefulWidget {
+  const RootShell({super.key});
 
   @override
-  State<VeilHomePage> createState() => _VeilHomePageState();
+  State<RootShell> createState() => _RootShellState();
 }
 
-class _VeilHomePageState extends State<VeilHomePage> {
-  final _bridge = const VeilBridge();
-  final _events = <String>[];
-  final _wsController = TextEditingController(text: 'ws://127.0.0.1:9001');
-  final _peerController = TextEditingController(text: 'android-client');
-  final _tagController = TextEditingController(text: '');
-
-  VeilClient? _client;
-  WebSocketLane? _lane;
-  LocalRelay? _relay;
-  bool _useLocalRelay = true;
-  bool _relayReady = false;
-  bool _connected = false;
+class _RootShellState extends State<RootShell> {
+  final _controller = VeilAppController();
+  int _tabIndex = 0;
+  bool _showProtocolDetails = false;
 
   @override
   void initState() {
     super.initState();
-    _startLocalRelay();
+    _controller.init();
   }
 
   @override
   void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _openCompose() {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => ComposeSheet(
+        onPublish: (text) {
+          _controller.publishLocalPost(text);
+          Navigator.of(context).pop();
+        },
+      ),
+    );
+  }
+
+  void _openSettings() {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SettingsSheet(
+        showProtocolDetails: _showProtocolDetails,
+        onToggleDetails: (value) {
+          setState(() => _showProtocolDetails = value);
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        if (!_controller.onboardingComplete) {
+          return OnboardingScreen(
+            controller: _controller,
+            onComplete: () => setState(() {}),
+          );
+        }
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('VEIL'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.settings),
+                onPressed: _openSettings,
+              ),
+            ],
+          ),
+          floatingActionButton: _tabIndex == 3
+              ? null
+              : FloatingActionButton(
+                  onPressed: _openCompose,
+                  child: const Icon(Icons.edit),
+                ),
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _tabIndex,
+            onDestinationSelected: (value) => setState(() => _tabIndex = value),
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.home_outlined),
+                label: 'Home',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.lock_outline),
+                label: 'Vault',
+              ),
+              NavigationDestination(icon: Icon(Icons.public), label: 'Network'),
+              NavigationDestination(
+                icon: Icon(Icons.explore_outlined),
+                label: 'Discover',
+              ),
+            ],
+          ),
+          body: IndexedStack(
+            index: _tabIndex,
+            children: [
+              HomeFeed(
+                controller: _controller,
+                showProtocolDetails: _showProtocolDetails,
+              ),
+              VaultView(controller: _controller),
+              NetworkView(controller: _controller),
+              DiscoveryView(controller: _controller),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class VeilAppController extends ChangeNotifier {
+  final _bridge = const VeilBridge();
+  final List<FeedEntry> _feed = [];
+  final List<String> _events = [];
+  final List<String> _suggestedFeeds = [
+    'Public Square',
+    'Local Builders',
+    'Civic Updates',
+    'Open Media',
+  ];
+
+  String displayName = '';
+  String recoveryPhrase = '';
+  String namespaceChoice = 'Public Square';
+  String peerId = 'android-client';
+  String tagHex = '';
+
+  VeilClient? _client;
+  WebSocketLane? _lane;
+  LocalRelay? _relay;
+  bool _relayReady = false;
+  bool _useLocalRelay = true;
+  bool _connected = false;
+
+  bool get onboardingComplete => displayName.isNotEmpty;
+  bool get relayReady => _relayReady;
+  bool get connected => _connected;
+  String get relayUrl => _relay?.url ?? '';
+  List<FeedEntry> get feed => List.unmodifiable(_feed);
+  List<String> get events => List.unmodifiable(_events);
+  List<String> get suggestedFeeds => List.unmodifiable(_suggestedFeeds);
+
+  void init() {
+    _startLocalRelay();
+  }
+
+  void dispose() {
     _client?.stop();
     _relay?.stop();
-    _wsController.dispose();
-    _peerController.dispose();
-    _tagController.dispose();
     super.dispose();
   }
 
   Future<void> _startLocalRelay() async {
     final relay = LocalRelay();
     await relay.start();
-    setState(() {
-      _relay = relay;
-      _relayReady = true;
-      if (_useLocalRelay) {
-        _wsController.text = relay.url;
-      }
-    });
+    _relay = relay;
+    _relayReady = true;
+    notifyListeners();
   }
 
-  Future<void> _connect() async {
+  void setUseLocalRelay(bool value) {
+    _useLocalRelay = value;
+    notifyListeners();
+  }
+
+  void setDisplayName(String value) {
+    displayName = value.trim();
+    notifyListeners();
+  }
+
+  void setNamespaceChoice(String value) {
+    namespaceChoice = value;
+    notifyListeners();
+  }
+
+  void generateIdentity() {
+    final words = [
+      'ember',
+      'veil',
+      'lumen',
+      'atlas',
+      'cinder',
+      'fjord',
+      'mosaic',
+      'echo',
+      'prism',
+      'ripple',
+      'sable',
+      'nova',
+    ];
+    final rand = Random();
+    recoveryPhrase = List.generate(
+      8,
+      (_) => words[rand.nextInt(words.length)],
+    ).join(' ');
+  }
+
+  Future<void> connect() async {
     _client?.stop();
     final db = await openDatabase('veil_android_cache.db');
     final store = SqfliteShardCacheStore(db: db);
     await store.init();
 
+    final url = _useLocalRelay && _relay != null
+        ? _relay!.url
+        : _wsController.text.trim();
     final lane = WebSocketLane(
-      url: Uri.parse(_wsController.text.trim()),
-      peerId: _peerController.text.trim(),
+      url: Uri.parse(url.isEmpty ? 'ws://127.0.0.1:9001' : url),
+      peerId: peerId,
     );
+
     final client = VeilClient(
       fastLane: lane,
       bridge: _bridge,
       cacheStore: store,
       hooks: VeilClientHooks(
         onShardMeta: (peer, meta) {
-          _pushEvent('Shard from $peer tag=${meta.tagHex}');
+          _events.insert(0, 'Shard from $peer tag=${meta.tagHex}');
+          _notify();
         },
         onPayload: (root, payload) {
-          _pushEvent('Payload $root (${payload.length} bytes)');
+          _events.insert(0, 'Payload $root (${payload.length} bytes)');
+          _markReconstructed(root);
         },
       ),
       options: VeilClientOptions(
         plugins: [
-          AutoFetchPlugin(
-            resolveTagForRoot: (_, __) => _tagController.text.trim(),
-          ),
-          ThreadContextPlugin(
-            resolveTagForRoot: (_, __) => _tagController.text.trim(),
-          ),
+          AutoFetchPlugin(resolveTagForRoot: (_, __) => tagHex),
+          ThreadContextPlugin(resolveTagForRoot: (_, __) => tagHex),
         ],
       ),
     );
 
-    final tag = _tagController.text.trim();
-    if (tag.isNotEmpty) {
-      client.subscribe(tag);
+    tagHex = _tagController.text.trim();
+    if (tagHex.isNotEmpty) {
+      client.subscribe(tagHex);
     }
     client.start();
 
-    setState(() {
-      _lane = lane;
-      _client = client;
-      _connected = true;
-      _events.insert(0, 'Connected to ${_wsController.text.trim()}');
-    });
+    _client = client;
+    _lane = lane;
+    _connected = true;
+    _events.insert(0, 'Connected via ${lane.url}');
+    _notify();
   }
 
-  void _disconnect() {
+  void disconnect() {
     _client?.stop();
-    setState(() {
-      _connected = false;
-      _events.insert(0, 'Disconnected');
-    });
+    _connected = false;
+    _events.insert(0, 'Disconnected');
+    _notify();
   }
 
-  void _toggleLocalRelay(bool value) {
-    setState(() {
-      _useLocalRelay = value;
-      if (_useLocalRelay && _relay != null) {
-        _wsController.text = _relay!.url;
-      }
-    });
-  }
-
-  void _updateSubscription() {
+  void updateSubscription(String value) {
+    tagHex = value.trim();
     final client = _client;
     if (client == null) return;
     for (final sub in client.subscriptions()) {
       client.unsubscribe(sub);
     }
-    final tag = _tagController.text.trim();
-    if (tag.isNotEmpty) {
-      client.subscribe(tag);
-      _pushEvent('Subscribed to $tag');
+    if (tagHex.isNotEmpty) {
+      client.subscribe(tagHex);
+    }
+    _events.insert(0, 'Subscribed to $tagHex');
+    _notify();
+  }
+
+  void publishLocalPost(String text) {
+    if (text.trim().isEmpty) return;
+    final entry = FeedEntry(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      author: displayName,
+      body: text.trim(),
+      reconstructed: true,
+      timestamp: DateTime.now(),
+    );
+    _feed.insert(0, entry);
+    _events.insert(0, 'Local post created');
+    _notify();
+  }
+
+  void addSkeletons() {
+    if (_feed.isNotEmpty) return;
+    for (var i = 0; i < 3; i += 1) {
+      _feed.add(
+        FeedEntry(
+          id: 'ghost-$i',
+          author: '...',
+          body: '...',
+          reconstructed: false,
+          isGhost: true,
+          timestamp: DateTime.now(),
+        ),
+      );
     }
   }
 
-  void _pushEvent(String message) {
-    setState(() {
-      _events.insert(0, message);
-      if (_events.length > 120) {
-        _events.removeRange(120, _events.length);
+  void _markReconstructed(String root) {
+    for (final entry in _feed) {
+      if (entry.id == root && !entry.reconstructed) {
+        entry.reconstructed = true;
+        entry.isGhost = false;
       }
-    });
+    }
+    _notify();
   }
+
+  void _notify() {
+    if (_feed.isEmpty) {
+      addSkeletons();
+    }
+    notifyListeners();
+  }
+}
+
+class FeedEntry {
+  final String id;
+  final String author;
+  final String body;
+  bool reconstructed;
+  bool isGhost;
+  final DateTime timestamp;
+
+  FeedEntry({
+    required this.id,
+    required this.author,
+    required this.body,
+    required this.reconstructed,
+    required this.timestamp,
+    this.isGhost = false,
+  });
+}
+
+class OnboardingScreen extends StatefulWidget {
+  final VeilAppController controller;
+  final VoidCallback onComplete;
+
+  const OnboardingScreen({
+    super.key,
+    required this.controller,
+    required this.onComplete,
+  });
+
+  @override
+  State<OnboardingScreen> createState() => _OnboardingScreenState();
+}
+
+class _OnboardingScreenState extends State<OnboardingScreen> {
+  final _nameController = TextEditingController();
+  String _selected = 'Public Square';
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final controller = widget.controller;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('VEIL Android'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Chip(
-              label: Text(_connected ? 'ONLINE' : 'OFFLINE'),
-              backgroundColor: _connected
-                  ? const Color(0xFF134E4A)
-                  : const Color(0xFF3F2F0B),
-            ),
+      body: Container(
+        padding: const EdgeInsets.all(24),
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF0B0E14), Color(0xFF111827)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: Image.asset(
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 40),
+            Image.asset(
               'assets/veil_header.png',
               height: 140,
               fit: BoxFit.cover,
             ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Image.asset('assets/veil_logo.png', width: 48, height: 48),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('VEIL Android', style: theme.textTheme.headlineSmall),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Self-contained relay + client runtime',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: Colors.white70,
-                      ),
-                    ),
-                  ],
-                ),
+            const SizedBox(height: 24),
+            Text(
+              'Welcome to VEIL',
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Your identity is created automatically. Choose a display name and a starting space.',
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+            ),
+            const SizedBox(height: 24),
+            _InputField(label: 'Display name', controller: _nameController),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _selected,
+              decoration: const InputDecoration(
+                labelText: 'Start in',
+                filled: true,
+                fillColor: Color(0xFF101827),
               ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _Panel(
-            title: 'Connection',
-            child: Column(
-              children: [
-                SwitchListTile(
-                  value: _useLocalRelay,
-                  onChanged: _relayReady ? _toggleLocalRelay : null,
-                  title: const Text('Use local relay'),
-                  subtitle: Text(
-                    _relayReady
-                        ? 'Local relay at ${_relay?.url}'
-                        : 'Starting local relay...',
-                  ),
+              items: const [
+                DropdownMenuItem(
+                  value: 'Public Square',
+                  child: Text('Public Square'),
                 ),
-                _InputField(label: 'WebSocket URL', controller: _wsController),
-                _InputField(label: 'Peer ID', controller: _peerController),
-                _InputField(
-                  label: 'Subscribe Tag (hex)',
-                  controller: _tagController,
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: _connected ? null : _connect,
-                        child: const Text('Start'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _connected ? _disconnect : null,
-                        child: const Text('Stop'),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton(
-                  onPressed: _connected ? _updateSubscription : null,
-                  child: const Text('Update Subscription'),
+                DropdownMenuItem(
+                  value: 'Private Circles',
+                  child: Text('Private Circles'),
                 ),
               ],
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _selected = value);
+                }
+              },
+            ),
+            const Spacer(),
+            ElevatedButton(
+              onPressed: () {
+                controller.setDisplayName(_nameController.text);
+                controller.setNamespaceChoice(_selected);
+                controller.generateIdentity();
+                widget.onComplete();
+              },
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+              ),
+              child: const Text('Continue'),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Recovery phrase stored locally. You can export it later.',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class HomeFeed extends StatelessWidget {
+  final VeilAppController controller;
+  final bool showProtocolDetails;
+
+  const HomeFeed({
+    super.key,
+    required this.controller,
+    required this.showProtocolDetails,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final items = controller.feed;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        HeaderCard(controller: controller),
+        const SizedBox(height: 16),
+        if (items.isEmpty)
+          const Center(child: CircularProgressIndicator())
+        else
+          ...items.map(
+            (entry) => PostCard(
+              entry: entry,
+              showProtocolDetails: showProtocolDetails,
             ),
           ),
-          const SizedBox(height: 16),
-          _Panel(
-            title: 'Status',
+      ],
+    );
+  }
+}
+
+class HeaderCard extends StatelessWidget {
+  final VeilAppController controller;
+
+  const HeaderCard({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B1220),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF1F2937)),
+      ),
+      child: Row(
+        children: [
+          Image.asset('assets/veil_logo.png', width: 48, height: 48),
+          const SizedBox(width: 12),
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _connected ? 'Lane ready: ${_lane?.peerId}' : 'Not connected',
-                  style: theme.textTheme.bodyLarge,
+                  controller.displayName.isEmpty
+                      ? 'Operator'
+                      : controller.displayName,
+                  style: Theme.of(context).textTheme.titleLarge,
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 Text(
-                  _relayReady
-                      ? 'Local relay: ${_relay?.url}'
-                      : 'Local relay: starting...',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: Colors.white70,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Events recorded: ${_events.length}',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: Colors.white70,
-                  ),
+                  controller.namespaceChoice,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 16),
-          _Panel(
-            title: 'Activity',
-            child: Column(
-              children: _events.isEmpty
-                  ? [
-                      const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: Text('No events yet.'),
-                      ),
-                    ]
-                  : _events
-                        .take(40)
-                        .map(
-                          (event) => ListTile(
-                            title: Text(event),
-                            dense: true,
-                            leading: const Icon(Icons.bolt, size: 18),
-                          ),
-                        )
-                        .toList(),
+          Chip(
+            label: Text(controller.connected ? 'LIVE' : 'OFFLINE'),
+            backgroundColor: controller.connected
+                ? const Color(0xFF134E4A)
+                : const Color(0xFF3F2F0B),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class PostCard extends StatelessWidget {
+  final FeedEntry entry;
+  final bool showProtocolDetails;
+
+  const PostCard({
+    super.key,
+    required this.entry,
+    required this.showProtocolDetails,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (entry.isGhost) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Container(
+          height: 120,
+          decoration: BoxDecoration(
+            color: const Color(0xFF0F172A),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF1F2937)),
+          ),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0B1220),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF1F2937)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const CircleAvatar(
+                  radius: 18,
+                  backgroundColor: Color(0xFF1E293B),
+                  child: Icon(Icons.person, size: 18),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    entry.author,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                if (entry.reconstructed)
+                  Row(
+                    children: const [
+                      Icon(Icons.verified, size: 16, color: Color(0xFF34D399)),
+                      SizedBox(width: 4),
+                      Text('Reconstructed'),
+                    ],
+                  ),
+              ],
             ),
+            const SizedBox(height: 12),
+            Text(entry.body),
+            if (showProtocolDetails) ...[
+              const SizedBox(height: 12),
+              Text(
+                'object_root: ${entry.id}',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class VaultView extends StatelessWidget {
+  final VeilAppController controller;
+
+  const VaultView({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: const [
+        _Panel(
+          title: 'Private Vault',
+          child: Text(
+            'Encrypted conversations will appear here. Rotating rendezvous tags keep private circles private.',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class NetworkView extends StatelessWidget {
+  final VeilAppController controller;
+
+  const NetworkView({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _Panel(
+          title: 'Network Health',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(controller.connected ? 'Connected' : 'Offline'),
+              const SizedBox(height: 8),
+              Text('Local relay: ${controller.relayUrl}'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _Panel(
+          title: 'Recent Activity',
+          child: Column(
+            children: controller.events
+                .take(8)
+                .map(
+                  (event) => ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.waves, size: 18),
+                    title: Text(event),
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class DiscoveryView extends StatelessWidget {
+  final VeilAppController controller;
+
+  const DiscoveryView({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _Panel(
+          title: 'Suggested Feeds',
+          child: Column(
+            children: controller.suggestedFeeds
+                .map(
+                  (feed) => ListTile(
+                    dense: true,
+                    title: Text(feed),
+                    subtitle: const Text('Bootstrap recommendation'),
+                    trailing: const Icon(Icons.add_circle_outline),
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class ComposeSheet extends StatelessWidget {
+  final void Function(String text) onPublish;
+
+  const ComposeSheet({super.key, required this.onPublish});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = TextEditingController();
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Compose', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 12),
+          TextField(
+            controller: controller,
+            maxLines: 5,
+            decoration: const InputDecoration(
+              hintText: 'Share an update...',
+              filled: true,
+              fillColor: Color(0xFF101827),
+            ),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton(
+            onPressed: () => onPublish(controller.text),
+            child: const Text('Publish'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class SettingsSheet extends StatelessWidget {
+  final bool showProtocolDetails;
+  final ValueChanged<bool> onToggleDetails;
+
+  const SettingsSheet({
+    super.key,
+    required this.showProtocolDetails,
+    required this.onToggleDetails,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SwitchListTile(
+            value: showProtocolDetails,
+            onChanged: onToggleDetails,
+            title: const Text('Show protocol details'),
+            subtitle: const Text('Reveal object_root and lane metadata.'),
           ),
         ],
       ),
