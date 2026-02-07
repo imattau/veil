@@ -250,6 +250,7 @@ class VeilAppController extends ChangeNotifier {
       hooks: VeilClientHooks(
         onShardMeta: (peer, meta) {
           _events.insert(0, 'Shard from $peer tag=${meta.tagHex}');
+          _updateProgressFromShard(meta);
           _notify();
         },
         onPayload: (root, payload) {
@@ -324,6 +325,8 @@ class VeilAppController extends ChangeNotifier {
           reconstructed: false,
           isGhost: true,
           timestamp: DateTime.now(),
+          shardsHave: 0,
+          shardsTotal: 16,
         ),
       );
     }
@@ -334,9 +337,25 @@ class VeilAppController extends ChangeNotifier {
       if (entry.id == root && !entry.reconstructed) {
         entry.reconstructed = true;
         entry.isGhost = false;
+        entry.shardsHave = entry.shardsTotal;
       }
     }
     _notify();
+  }
+
+  void _updateProgressFromShard(ShardMeta meta) {
+    if (_feed.isEmpty) {
+      addSkeletons();
+    }
+    final ghost = _feed.firstWhere(
+      (entry) => entry.isGhost,
+      orElse: () => _feed.isNotEmpty ? _feed.first : FeedEntry.empty(),
+    );
+    if (ghost.id == 'empty') {
+      return;
+    }
+    ghost.shardsTotal = max(ghost.shardsTotal, meta.n);
+    ghost.shardsHave = min(ghost.shardsTotal, ghost.shardsHave + 1);
   }
 
   void _notify() {
@@ -354,6 +373,8 @@ class FeedEntry {
   bool reconstructed;
   bool isGhost;
   final DateTime timestamp;
+  int shardsHave;
+  int shardsTotal;
 
   FeedEntry({
     required this.id,
@@ -362,7 +383,17 @@ class FeedEntry {
     required this.reconstructed,
     required this.timestamp,
     this.isGhost = false,
+    this.shardsHave = 0,
+    this.shardsTotal = 16,
   });
+
+  factory FeedEntry.empty() => FeedEntry(
+    id: 'empty',
+    author: '',
+    body: '',
+    reconstructed: false,
+    timestamp: DateTime.now(),
+  );
 }
 
 class OnboardingScreen extends StatefulWidget {
@@ -568,11 +599,23 @@ class PostCard extends StatelessWidget {
       return Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: Container(
-          height: 120,
+          height: 160,
           decoration: BoxDecoration(
             color: const Color(0xFF0F172A),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: const Color(0xFF1F2937)),
+          ),
+          child: Stack(
+            children: [
+              const _BlurPlaceholder(),
+              Align(
+                alignment: Alignment.bottomRight,
+                child: _ShardProgressRing(
+                  have: entry.shardsHave,
+                  total: entry.shardsTotal,
+                ),
+              ),
+            ],
           ),
         ),
       );
@@ -615,6 +658,24 @@ class PostCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(entry.body),
+            if (!entry.reconstructed) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  _ShardProgressRing(
+                    have: entry.shardsHave,
+                    total: entry.shardsTotal,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Collecting shards',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+                  ),
+                ],
+              ),
+            ],
             if (showProtocolDetails) ...[
               const SizedBox(height: 12),
               Text(
@@ -840,6 +901,101 @@ class _InputField extends StatelessWidget {
           fillColor: const Color(0xFF101827),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         ),
+      ),
+    );
+  }
+}
+
+class _BlurPlaceholder extends StatefulWidget {
+  const _BlurPlaceholder();
+
+  @override
+  State<_BlurPlaceholder> createState() => _BlurPlaceholderState();
+}
+
+class _BlurPlaceholderState extends State<_BlurPlaceholder>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 2),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final t = _controller.value;
+        return Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            gradient: LinearGradient(
+              colors: [
+                Color.lerp(
+                  const Color(0xFF111827),
+                  const Color(0xFF1E293B),
+                  t,
+                )!,
+                Color.lerp(
+                  const Color(0xFF0B1220),
+                  const Color(0xFF1F2937),
+                  t,
+                )!,
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ShardProgressRing extends StatelessWidget {
+  final int have;
+  final int total;
+
+  const _ShardProgressRing({required this.have, required this.total});
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = total == 0 ? 0.0 : have / total;
+    return Container(
+      margin: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B1220).withOpacity(0.85),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFF1F2937)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 28,
+            height: 28,
+            child: CircularProgressIndicator(
+              value: progress,
+              strokeWidth: 3,
+              color: const Color(0xFF34D399),
+              backgroundColor: const Color(0xFF1F2937),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '$have/$total',
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(color: Colors.white70),
+          ),
+        ],
       ),
     );
   }
