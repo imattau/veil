@@ -35,6 +35,53 @@ VEIL is a transport-agnostic, shard-native overlay for censorship‑resistant pu
 - **Hardened FEC default:** non‑systematic encoding by default to avoid “first‑k” ciphertext exposure.
 - **Traffic shaping:** optional bucket jitter to blur size fingerprints.
 
+## Core schemas (summary)
+
+**ObjectV1 (application unit, pre‑sharding)**
+- Fields: `version`, `namespace`, `epoch`, `flags`, `tag`, `object_root`, `nonce`, `ciphertext`, `padding`, optional `sender_pubkey`, optional `signature`.
+- Encoded as CBOR (recommended) or canonical JSON.
+- Optional signature covers canonical header + ciphertext hash.
+
+**ShardV1 (network unit)**
+- Fixed bucket sizes: 16/32/64 KiB (configurable by profile).
+- Header includes `tag`, `object_root`, `k`, `n`, `index`, plus `epoch`/`namespace`.
+- Payload is opaque random‑looking bytes.
+
+**Tags**
+- Public feed tag: `H("feed" || publisher_pubkey || namespace)` (stable).
+- Rendezvous tag: `H("rv" || recipient_pubkey || epoch || namespace)` (rotating).
+
+See `SPEC.md` for normative details and sizes.
+
+## Web‑of‑Trust (WoT) policy (summary)
+
+VEIL’s WoT is **local resource allocation**, not global truth:
+
+- **Tiers:** Trusted / Known / Unknown / Muted / Blocked.
+- **Inputs:** explicit local follow/mute/block, bounded transitive endorsements, optional behavioral signals.
+- **Use:** forwarding quotas, cache retention caps, and UI ranking.
+- **Safety:** unknowns retain a small budget to avoid ossification.
+
+Recommended v1 defaults:
+- 2‑hop max, strong decay, ≥2 endorsements threshold.
+- Forwarding quotas: 70% Trusted, 25% Known, 5% Unknown.
+- Eviction: rarity‑biased first, then trust tier, then age.
+
+## Transport model (summary)
+
+**Transport adapters** are pluggable lanes that move opaque bytes:
+
+- **send(peer, bytes)** — best‑effort delivery.
+- **recv() -> (peer, bytes)** — inbound payloads + peer identity.
+- **max payload hint** — optional to pick bucket sizes.
+
+Key properties:
+- Lossy delivery is expected; ordering is not required.
+- Lanes are local policy; shards contain no lane metadata.
+- Multiple lanes can be active simultaneously (fast + fallback).
+
+Implemented lanes include QUIC, Tor SOCKS5, WebSocket, and BLE (btleplug backend).
+
 ## Repository layout (top‑level)
 
 - `SPEC.md` — protocol/library spec draft (`ObjectV1`, `ShardV1`)
