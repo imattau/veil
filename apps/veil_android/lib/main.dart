@@ -2368,15 +2368,36 @@ class _NetworkViewState extends State<NetworkView> {
   }
 }
 
-class DiscoveryView extends StatelessWidget {
+class DiscoveryView extends StatefulWidget {
   final VeilAppController controller;
 
   const DiscoveryView({super.key, required this.controller});
 
   @override
+  State<DiscoveryView> createState() => _DiscoveryViewState();
+}
+
+class _DiscoveryViewState extends State<DiscoveryView> {
+  late final TextEditingController _peerController;
+  late final TextEditingController _tagController;
+
+  @override
+  void initState() {
+    super.initState();
+    _peerController = TextEditingController();
+    _tagController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _peerController.dispose();
+    _tagController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final peerController = TextEditingController();
-    final tagController = TextEditingController();
+    final controller = widget.controller;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -2409,7 +2430,7 @@ class DiscoveryView extends StatelessWidget {
             children: [
               _InputField(
                 label: 'Peer address (ws:// or quic://)',
-                controller: peerController,
+                controller: _peerController,
                 onChanged: (_) {},
                 onScan: () => _openScanner(
                   context,
@@ -2421,7 +2442,7 @@ class DiscoveryView extends StatelessWidget {
                   Expanded(
                     child: ElevatedButton(
                       onPressed: () =>
-                          controller.addForwardPeer(peerController.text),
+                          controller.addForwardPeer(_peerController.text),
                       child: const Text('Add Peer'),
                     ),
                   ),
@@ -2453,7 +2474,7 @@ class DiscoveryView extends StatelessWidget {
             children: [
               _InputField(
                 label: 'Channel name (or tag:HEX)',
-                controller: tagController,
+                controller: _tagController,
                 onChanged: (_) {},
                 onScan: () => _openScanner(
                   context,
@@ -2465,7 +2486,7 @@ class DiscoveryView extends StatelessWidget {
                   Expanded(
                     child: ElevatedButton(
                       onPressed: () =>
-                          controller.addSubscription(tagController.text),
+                          controller.addSubscription(_tagController.text),
                       child: const Text('Subscribe'),
                     ),
                   ),
