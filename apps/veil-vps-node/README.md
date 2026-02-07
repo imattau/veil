@@ -24,7 +24,7 @@ docker compose -f apps/veil-vps-node/docker-compose.yml up -d --build
 ```
 
 Notes:
-- Exposes UDP `5000` (QUIC) and TCP `9090` (health/metrics/peers).
+- Exposes UDP `5000` (QUIC). Health endpoints bind to `127.0.0.1` by default.
 - Use `PROXY_DOMAIN` (or proxy-specific env vars) to hint reverse proxy presence.
 
 Enable built-in Caddy reverse proxy (only if you need it):
@@ -67,6 +67,7 @@ Optional:
 - `VEIL_VPS_BLE_MTU` (default `180`)
 - `VEIL_VPS_SNAPSHOT_SECS` (default `60`)
 - `VEIL_VPS_TICK_MS` (default `50`)
+- `VEIL_VPS_HEALTH_BIND` (default `127.0.0.1`)
 - `VEIL_VPS_HEALTH_PORT` (default `9090`, set `0` to disable `/health`, `/metrics`, and `/peers`)
 - `VEIL_VPS_MAX_CACHE_SHARDS` (default `200000`)
 - `VEIL_VPS_BUCKET_JITTER` (default `0`)
@@ -79,3 +80,5 @@ Optional:
 - WebSocket is best-effort outbound; Tor SOCKS5 is outbound-only in this profile.
 - BLE fallback uses btleplug when the `ble-btleplug` feature is enabled.
 - `/peers` supports optional query params: `limit` (max 1000), `prefix` (e.g., `ws:`, `tor:`, `ble:`).
+- When installed via the installer, `/health` and `/metrics` are protected with basic auth
+  using `PROXY_HEALTH_USER` and `PROXY_HEALTH_PASS` from the env file.

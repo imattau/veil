@@ -82,8 +82,8 @@ You can tail systemd logs or stdout for:
 - adapter startup errors
 
 Health check, metrics, peers:
-- Local HTTP health endpoint: `http://127.0.0.1:9090/health`
-- Metrics endpoint: `http://127.0.0.1:9090/metrics`
+- Local HTTP health endpoint: `http://127.0.0.1:9090/health` (bind configurable via `VEIL_VPS_HEALTH_BIND`)
+- Metrics endpoint: `http://127.0.0.1:9090/metrics` (basic auth when behind installer-managed proxy)
 - Peers endpoint: `http://127.0.0.1:9090/peers`
   - Optional query params: `limit` (max 1000), `prefix` (e.g., `ws:`, `tor:`, `ble:`)
 
