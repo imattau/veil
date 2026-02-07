@@ -1,0 +1,287 @@
+part of 'package:veil_android/main.dart';
+class NetworkView extends StatefulWidget {
+  final VeilAppController controller;
+
+  const NetworkView({super.key, required this.controller});
+
+  @override
+  State<NetworkView> createState() => _NetworkViewState();
+}
+
+class _NetworkViewState extends State<NetworkView> {
+  late final TextEditingController _wsController;
+  late final TextEditingController _peerController;
+  late final TextEditingController _tagController;
+  late final TextEditingController _bleDeviceController;
+  late final TextEditingController _bleServiceController;
+  late final TextEditingController _bleCharController;
+
+  @override
+  void initState() {
+    super.initState();
+    final c = widget.controller;
+    _wsController = TextEditingController(text: c.wsUrl);
+    _peerController = TextEditingController(text: c.peerId);
+    _tagController = TextEditingController(
+      text: c.channelLabel.isNotEmpty ? c.channelLabel : c.tagHex,
+    );
+    _bleDeviceController = TextEditingController(text: c.bleDeviceId);
+    _bleServiceController = TextEditingController(text: c.bleServiceUuid);
+    _bleCharController = TextEditingController(text: c.bleCharacteristicUuid);
+  }
+
+  @override
+  void dispose() {
+    _wsController.dispose();
+    _peerController.dispose();
+    _tagController.dispose();
+    _bleDeviceController.dispose();
+    _bleServiceController.dispose();
+    _bleCharController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    final theme = Theme.of(context);
+    final wsError = _wsController.text.isNotEmpty
+        ? controller.wsUrlError
+        : null;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _Panel(
+          title: 'Network Status',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(controller.connected ? 'Connected' : 'Offline'),
+              const SizedBox(height: 8),
+              Text(
+                controller.useLocalRelay
+                    ? 'Using internal relay'
+                    : 'Using external relay',
+              ),
+              const SizedBox(height: 8),
+              Text('Ghost mode: ${controller.ghostMode ? 'On' : 'Off'}'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _Panel(
+          title: 'Lane Status',
+          child: Column(
+            children: [
+              _LaneHealthTile(
+                title: 'WebSocket Lane',
+                icon: controller.connected ? Icons.wifi : Icons.wifi_off,
+                label: 'WS',
+                enabled: controller.connected,
+                snapshot: controller.fastLaneHealth,
+              ),
+              _LaneHealthTile(
+                title: 'Bluetooth Lane',
+                icon: Icons.bluetooth,
+                label: 'BLE',
+                enabled: controller.bleEnabled,
+                snapshot: controller.fallbackLaneHealth,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _Panel(
+          title: 'Connection',
+          child: Column(
+            children: [
+              SwitchListTile(
+                value: controller.useLocalRelay,
+                onChanged: controller.relayReady
+                    ? (value) =>
+                          setState(() => controller.setUseLocalRelay(value))
+                    : null,
+                title: const Text('Use local relay'),
+                subtitle: Text(
+                  controller.relayReady
+                      ? 'Internal relay is ready'
+                      : 'Starting internal relay...',
+                ),
+              ),
+              const SizedBox(height: 8),
+              ExpansionTile(
+                title: const Text('Advanced connection'),
+                subtitle: Text(
+                  controller.useLocalRelay
+                      ? 'Relay and channel settings'
+                      : 'External relay settings',
+                  style: theme.textTheme.bodySmall,
+                ),
+                childrenPadding: const EdgeInsets.only(top: 8),
+                children: [
+                  if (!controller.useLocalRelay) ...[
+                    _InputField(
+                      label: 'WebSocket URL',
+                      controller: _wsController,
+                      onChanged: (value) {
+                        controller.setWsUrl(value);
+                        setState(() {});
+                      },
+                      errorText: wsError,
+                    ),
+                    _InputField(
+                      label: 'Peer ID',
+                      controller: _peerController,
+                      onChanged: (value) {
+                        controller.setPeerId(value);
+                        setState(() {});
+                      },
+                    ),
+                  ],
+                  _InputField(
+                    label: 'Channel',
+                    controller: _tagController,
+                    onChanged: controller.setChannelLabel,
+                    errorText: controller.channelError,
+                    onScan: () => _openScanner(
+                      context,
+                      onResult: controller.handleScanValue,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: controller.connected
+                              ? null
+                              : controller.connect,
+                          child: const Text('Connect'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: controller.connected
+                              ? controller.disconnect
+                              : null,
+                          child: const Text('Disconnect'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: controller.connected
+                        ? () =>
+                              controller.updateSubscription(_tagController.text)
+                        : null,
+                    child: const Text('Update Channel'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _Panel(
+          title: 'Bluetooth Lane',
+          child: Column(
+            children: [
+              SwitchListTile(
+                value: controller.bleEnabled,
+                onChanged: (value) =>
+                    setState(() => controller.setBleEnabled(value)),
+                title: const Text('Enable BLE lane'),
+                subtitle: const Text('Requires a paired BLE device id.'),
+              ),
+              _InputField(
+                label: 'BLE Device ID',
+                controller: _bleDeviceController,
+                onChanged: controller.setBleDeviceId,
+              ),
+              _InputField(
+                label: 'Service UUID',
+                controller: _bleServiceController,
+                onChanged: controller.setBleServiceUuid,
+              ),
+              _InputField(
+                label: 'Characteristic UUID',
+                controller: _bleCharController,
+                onChanged: controller.setBleCharacteristicUuid,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _Panel(
+          title: 'Recent Activity',
+          child: Column(
+            children: controller.events
+                .take(8)
+                .map(
+                  (event) => ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.waves, size: 18),
+                    title: Text(event),
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+
+class _LaneHealthTile extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final String label;
+  final bool enabled;
+  final LaneHealthSnapshot? snapshot;
+
+  const _LaneHealthTile({
+    required this.title,
+    required this.icon,
+    required this.label,
+    required this.enabled,
+    required this.snapshot,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final health = snapshot;
+    final sendOk = health?.outboundSendOk ?? 0;
+    final sendErr = health?.outboundSendErr ?? 0;
+    final inbound = health?.inboundReceived ?? 0;
+    final dropped = health?.inboundDropped ?? 0;
+    final queued = health?.outboundQueued ?? 0;
+    final reconnects = health?.reconnectAttempts ?? 0;
+    final sendTotal = sendOk + sendErr;
+    final okRatio = sendTotal == 0 ? 1.0 : sendOk / sendTotal;
+
+    return ListTile(
+      dense: true,
+      leading: Icon(icon, size: 18),
+      title: Text(title),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(enabled ? 'Healthy' : 'Idle'),
+          const SizedBox(height: 4),
+          Text(
+            'ok ${(okRatio * 100).toStringAsFixed(0)}% · '
+            'queued $queued · in $inbound · drop $dropped · retry $reconnects',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Colors.white60,
+            ),
+          ),
+        ],
+      ),
+      trailing: Text(label),
+    );
+  }
+}
+
