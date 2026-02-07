@@ -1,4 +1,4 @@
-package com.example.veil_android
+package app.veil.android
 
 import io.flutter.embedding.android.FlutterActivity
 
