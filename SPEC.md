@@ -23,6 +23,20 @@ Keywords **MUST**, **SHOULD**, **MAY** are interpreted as in RFC 2119.
 - **Shard**: fixed-size network unit used for forwarding, dedupe, and cache.
 - **Tag**: 32-byte opaque subscription identifier.
 
+### 2.1 Reserved Namespaces
+
+Namespaces are `u16`. The range `0..=31` is reserved for protocol/system use.
+Applications SHOULD use values outside the reserved range unless explicitly
+extending a reserved namespace definition.
+
+Recommended assignments:
+- `0` — system/protocol coordination
+- `1` — public social feed (default)
+- `2` — private messaging / vault
+- `3` — WoT / endorsements
+- `4` — relay/bootstrap coordination
+- `5` — app-level bundles/schemas
+
 ## 3. Tag Derivation
 
 Implementations MUST produce 32-byte tags using a cryptographic hash function (`H`, recommended BLAKE3).

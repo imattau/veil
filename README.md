@@ -51,6 +51,10 @@ VEIL is a transport-agnostic, shard-native overlay for censorship‑resistant pu
 - Public feed tag: `H("feed" || publisher_pubkey || namespace)` (stable).
 - Rendezvous tag: `H("rv" || recipient_pubkey || epoch || namespace)` (rotating).
 
+**Namespaces**
+- `0..=31` reserved for protocol/system use (see `SPEC.md`).
+- Apps should use `>=32` unless intentionally extending a reserved namespace.
+
 See `SPEC.md` for normative details and sizes.
 
 ## Web‑of‑Trust (WoT) policy (summary)

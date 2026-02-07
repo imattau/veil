@@ -26,10 +26,15 @@ Rules:
 
 ## 2) Namespace Guidance (Protocol Header)
 
-Use the `ObjectV1.namespace` field to segregate categories:
+Use the `ObjectV1.namespace` field to segregate categories. The range `0..=31`
+is reserved for protocol/system use:
+- Namespace 0: System/protocol coordination
 - Namespace 1: Public social
 - Namespace 2: Private messaging
-- Namespace 3+: Optional app-specific domains
+- Namespace 3: WoT/endorsements
+- Namespace 4: Relay/bootstrap coordination
+- Namespace 5: App bundle schemas
+- Namespace 32+: Optional app-specific domains
 
 Clients can apply different ingest policies per namespace.
 

@@ -7,4 +7,7 @@ pub mod hash;
 pub mod tags;
 pub mod types;
 
-pub use types::{Epoch, Namespace, ObjectRoot, ShardId, Tag};
+pub use types::{
+    Epoch, Namespace, ObjectRoot, ShardId, Tag, NAMESPACE_APP_BUNDLE, NAMESPACE_PRIVATE_VAULT,
+    NAMESPACE_PUBLIC_FEED, NAMESPACE_RELAY, NAMESPACE_RESERVED_MAX, NAMESPACE_SYSTEM, NAMESPACE_WOT,
+};
