@@ -3,8 +3,8 @@ name: Publish F-Droid Repo
 on:
   workflow_dispatch:
   push:
-    branches:
-      - master
+    tags:
+      - "v*"
 
 jobs:
   fdroid:
