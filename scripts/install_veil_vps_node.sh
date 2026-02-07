@@ -180,11 +180,48 @@ else
   echo "VEIL_VPS_CORE_TAGS=${DEFAULT_CORE_TAGS}" >> "$ENV_FILE"
 fi
 
+set_env_var() {
+  local key="$1"
+  local value="$2"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
+  else
+    echo "${key}=${value}" >> "$ENV_FILE"
+  fi
+}
+
+HOSTNAME_FQDN=$(hostname -f 2>/dev/null || hostname)
+set_env_var "VEIL_VPS_STATE_PATH" "${PREFIX}/data/node_state.cbor"
+set_env_var "VEIL_VPS_NODE_KEY_PATH" "${PREFIX}/data/node_identity.key"
+set_env_var "VEIL_VPS_QUIC_CERT_PATH" "${PREFIX}/data/quic_cert.der"
+set_env_var "VEIL_VPS_QUIC_KEY_PATH" "${PREFIX}/data/quic_key.der"
+set_env_var "VEIL_VPS_QUIC_BIND" "${VEIL_VPS_QUIC_BIND:-0.0.0.0:5000}"
+set_env_var "VEIL_VPS_FAST_PEERS" ""
+set_env_var "VEIL_VPS_CORE_TAGS" "${DEFAULT_CORE_TAGS}"
+set_env_var "VEIL_VPS_PEER_DB_PATH" "${PREFIX}/data/peers.db"
+set_env_var "VEIL_VPS_MAX_DYNAMIC_PEERS" "512"
+set_env_var "VEIL_VPS_WS_URL" ""
+set_env_var "VEIL_VPS_WS_PEER" "${HOSTNAME_FQDN:-veil-vps}"
+set_env_var "VEIL_VPS_TOR_SOCKS_ADDR" ""
+set_env_var "VEIL_VPS_TOR_PEERS" ""
+set_env_var "VEIL_VPS_BLE_ENABLE" "0"
+set_env_var "VEIL_VPS_BLE_PEERS" ""
+set_env_var "VEIL_VPS_BLE_ALLOWLIST" ""
+set_env_var "VEIL_VPS_BLE_MTU" "180"
+set_env_var "VEIL_VPS_MAX_CACHE_SHARDS" "200000"
+set_env_var "VEIL_VPS_BUCKET_JITTER" "0"
+set_env_var "VEIL_VPS_REQUIRED_SIGNED_NAMESPACES" ""
+set_env_var "VEIL_VPS_ADAPTIVE_LANE_SCORING" "1"
+set_env_var "VEIL_VPS_SNAPSHOT_SECS" "60"
+set_env_var "VEIL_VPS_TICK_MS" "50"
+set_env_var "VEIL_VPS_HEALTH_PORT" "${PROXY_HEALTH_PORT}"
+
 if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   install -m 0644 docs/runbooks/veil-vps-node.service "$SERVICE_FILE" || true
   if has_systemd; then
     systemctl daemon-reload || true
     systemctl enable veil-vps-node.service || true
+    systemctl restart veil-vps-node.service || true
   else
     echo "systemd not detected; skipping service enable."
   fi
@@ -378,5 +415,32 @@ if [[ -n "$PROXY_DOMAIN" ]]; then
 else
   echo "PROXY_DOMAIN not set; skipping firewall config."
 fi
+
+configure_tor() {
+  read -r -p "Enable Tor SOCKS5 fallback? [y/N] " confirm
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo "Tor setup skipped."
+    return
+  fi
+  if ! command -v tor >/dev/null 2>&1; then
+    echo "Tor not found. Installing Tor daemon..."
+    PKG_MGR=$(detect_pkg_mgr)
+    if [[ "$PKG_MGR" != "none" ]]; then
+      install_pkgs "$PKG_MGR" tor
+    else
+      echo "No supported package manager found to install Tor."
+      return
+    fi
+  fi
+  if has_systemd; then
+    systemctl enable tor || true
+    systemctl restart tor || true
+  fi
+  set_env_var "VEIL_VPS_TOR_SOCKS_ADDR" "127.0.0.1:9050"
+  set_env_var "VEIL_VPS_TOR_PEERS" ""
+  echo "Tor configured: VEIL_VPS_TOR_SOCKS_ADDR=127.0.0.1:9050"
+}
+
+configure_tor
 
 check_service
