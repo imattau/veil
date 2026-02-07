@@ -63,11 +63,17 @@ class VeilAppController extends ChangeNotifier {
   String bleServiceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   String bleCharacteristicUuid = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
   String quicEndpoint = '';
+  bool _torEnabled = false;
+  String torWsUrl = '';
+  String torSocksHost = '127.0.0.1';
+  int torSocksPort = 9050;
   String quicTrustedCertHex = '';
 
   VeilClient? _client;
   VeilLane? _lane;
   QuicLane? _quicLane;
+  TorLane? _torLane;
+  BleLane? _bleLane;
   VeilLane? _fallbackLane;
   LocalRelay? _relay;
   bool _relayReady = false;
@@ -102,6 +108,10 @@ class VeilAppController extends ChangeNotifier {
   int get maxCacheEntries => _maxCacheEntries;
   int get maxPublishQueue => _maxPublishQueue;
   String get quicEndpointValue => quicEndpoint;
+  bool get torEnabled => _torEnabled;
+  String get torWsUrlValue => torWsUrl;
+  String get torSocksHostValue => torSocksHost;
+  int get torSocksPortValue => torSocksPort;
   String get quicTrustedCertValue => quicTrustedCertHex;
   String? get wsUrlError {
     if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
@@ -123,6 +133,8 @@ class VeilAppController extends ChangeNotifier {
   LaneHealthSnapshot? get fastLaneHealth =>
       _client?.fastLane.healthSnapshot() ?? _lane?.healthSnapshot();
   LaneHealthSnapshot? get quicLaneHealth => _quicLane?.healthSnapshot();
+  LaneHealthSnapshot? get torLaneHealth => _torLane?.healthSnapshot();
+  LaneHealthSnapshot? get bleLaneHealth => _bleLane?.healthSnapshot();
   LaneHealthSnapshot? get fallbackLaneHealth =>
       _client?.fallbackLane?.healthSnapshot() ??
       _fallbackLane?.healthSnapshot();
@@ -140,7 +152,8 @@ class VeilAppController extends ChangeNotifier {
     final fallback = fallbackLaneHealth;
     final fastOk = _laneHealthy(fast);
     final fallbackOk = _laneHealthy(fallback);
-    if (fastOk && (fallbackOk || !_bleEnabled)) {
+    final needsFallback = _bleEnabled || _torEnabled;
+    if (fastOk && (fallbackOk || !needsFallback)) {
       return 'LIVE';
     }
     return 'DEGRADED';
@@ -300,6 +313,10 @@ class VeilAppController extends ChangeNotifier {
     quicEndpoint = prefs.getString('quicEndpoint') ?? quicEndpoint;
     quicTrustedCertHex =
         prefs.getString('quicTrustedCertHex') ?? quicTrustedCertHex;
+    _torEnabled = prefs.getBool('torEnabled') ?? _torEnabled;
+    torWsUrl = prefs.getString('torWsUrl') ?? torWsUrl;
+    torSocksHost = prefs.getString('torSocksHost') ?? torSocksHost;
+    torSocksPort = prefs.getInt('torSocksPort') ?? torSocksPort;
     _ghostMode = prefs.getBool('ghostMode') ?? _ghostMode;
     _bleEnabled = prefs.getBool('bleEnabled') ?? _bleEnabled;
     _requireSignedPublic =
@@ -346,6 +363,10 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setString('bleCharacteristicUuid', bleCharacteristicUuid);
     await prefs.setString('quicEndpoint', quicEndpoint);
     await prefs.setString('quicTrustedCertHex', quicTrustedCertHex);
+    await prefs.setBool('torEnabled', _torEnabled);
+    await prefs.setString('torWsUrl', torWsUrl);
+    await prefs.setString('torSocksHost', torSocksHost);
+    await prefs.setInt('torSocksPort', torSocksPort);
     await prefs.setBool('ghostMode', _ghostMode);
     await prefs.setBool('bleEnabled', _bleEnabled);
     await prefs.setBool('requireSignedPublic', _requireSignedPublic);
@@ -697,6 +718,32 @@ class VeilAppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setTorEnabled(bool value) {
+    _torEnabled = value;
+    _persistPrefs();
+    notifyListeners();
+  }
+
+  void setTorWsUrl(String value) {
+    torWsUrl = value.trim();
+    _persistPrefs();
+    notifyListeners();
+  }
+
+  void setTorSocksHost(String value) {
+    torSocksHost = value.trim();
+    _persistPrefs();
+    notifyListeners();
+  }
+
+  void setTorSocksPort(String value) {
+    final parsed = int.tryParse(value.trim());
+    if (parsed == null) return;
+    torSocksPort = parsed;
+    _persistPrefs();
+    notifyListeners();
+  }
+
   void setQuicTrustedCert(String value) {
     quicTrustedCertHex = value.trim();
     _persistPrefs();
@@ -806,10 +853,31 @@ class VeilAppController extends ChangeNotifier {
         _events.insert(0, 'BLE init failed: $err');
       }
     }
+    _bleLane = bleLane;
+
+    TorLane? torLane;
+    if (_torEnabled && torWsUrl.isNotEmpty && await TorLane.isSupported()) {
+      torLane = TorLane(
+        url: torWsUrl,
+        socksHost: torSocksHost,
+        socksPort: torSocksPort,
+      );
+    }
+    _torLane = torLane;
 
     final primaryLane = _quicLane ?? wsLane;
-    final fastLane = _ghostMode && bleLane != null ? bleLane : primaryLane;
-    final fallbackLane = _ghostMode ? primaryLane : bleLane;
+    final VeilLane fastLane;
+    final VeilLane? fallbackLane;
+    if (_ghostMode && torLane != null) {
+      fastLane = torLane;
+      fallbackLane = primaryLane;
+    } else if (_ghostMode && bleLane != null) {
+      fastLane = bleLane;
+      fallbackLane = primaryLane;
+    } else {
+      fastLane = primaryLane;
+      fallbackLane = torLane ?? bleLane;
+    }
 
     final client = VeilClient(
       fastLane: fastLane,

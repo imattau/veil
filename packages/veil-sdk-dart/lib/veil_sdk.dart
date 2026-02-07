@@ -12,6 +12,7 @@ export "src/lanes/websocket_lane.dart";
 export "src/lanes/ble_lane.dart";
 export "src/lanes/multi_lane.dart";
 export "src/lanes/quic_lane.dart";
+export "src/lanes/tor_lane.dart";
 export "src/models/blob_manifest.dart";
 export "src/models/app_schemas.dart";
 export "src/models/shard_request.dart";

@@ -22,6 +22,9 @@ class _NetworkViewState extends State<NetworkView> {
   late final TextEditingController _bleDeviceController;
   late final TextEditingController _bleServiceController;
   late final TextEditingController _bleCharController;
+  late final TextEditingController _torWsController;
+  late final TextEditingController _torHostController;
+  late final TextEditingController _torPortController;
   late final TextEditingController _quicController;
   late final TextEditingController _quicCertController;
 
@@ -38,6 +41,9 @@ class _NetworkViewState extends State<NetworkView> {
     _bleDeviceController = TextEditingController(text: c.bleDeviceId);
     _bleServiceController = TextEditingController(text: c.bleServiceUuid);
     _bleCharController = TextEditingController(text: c.bleCharacteristicUuid);
+    _torWsController = TextEditingController(text: c.torWsUrlValue);
+    _torHostController = TextEditingController(text: c.torSocksHostValue);
+    _torPortController = TextEditingController(text: '${c.torSocksPortValue}');
     _quicController = TextEditingController(text: c.quicEndpointValue);
     _quicCertController = TextEditingController(text: c.quicTrustedCertValue);
   }
@@ -51,6 +57,9 @@ class _NetworkViewState extends State<NetworkView> {
     _bleDeviceController.dispose();
     _bleServiceController.dispose();
     _bleCharController.dispose();
+    _torWsController.dispose();
+    _torHostController.dispose();
+    _torPortController.dispose();
     _quicController.dispose();
     _quicCertController.dispose();
     super.dispose();
@@ -100,7 +109,14 @@ class _NetworkViewState extends State<NetworkView> {
                 icon: Icons.bluetooth,
                 label: 'BLE',
                 enabled: controller.bleEnabled,
-                snapshot: controller.fallbackLaneHealth,
+                snapshot: controller.bleLaneHealth,
+              ),
+              _LaneHealthTile(
+                title: 'Tor Lane',
+                icon: Icons.shield,
+                label: 'Tor',
+                enabled: controller.torEnabled,
+                snapshot: controller.torLaneHealth,
               ),
               _LaneHealthTile(
                 title: 'QUIC Lane',
@@ -293,6 +309,37 @@ class _NetworkViewState extends State<NetworkView> {
                 label: 'Characteristic UUID',
                 controller: _bleCharController,
                 onChanged: controller.setBleCharacteristicUuid,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Panel(
+          title: 'Tor Lane',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SwitchListTile(
+                value: controller.torEnabled,
+                onChanged: (value) =>
+                    setState(() => controller.setTorEnabled(value)),
+                title: const Text('Enable Tor lane'),
+                subtitle: const Text('Requires Orbot running on this device.'),
+              ),
+              InputField(
+                label: 'Tor WebSocket URL (wss://.../ws)',
+                controller: _torWsController,
+                onChanged: controller.setTorWsUrl,
+              ),
+              InputField(
+                label: 'Tor SOCKS host',
+                controller: _torHostController,
+                onChanged: controller.setTorSocksHost,
+              ),
+              InputField(
+                label: 'Tor SOCKS port',
+                controller: _torPortController,
+                onChanged: controller.setTorSocksPort,
               ),
             ],
           ),
