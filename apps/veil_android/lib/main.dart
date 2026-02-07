@@ -3379,112 +3379,128 @@ class ProfileSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: Container(
-            color: Theme.of(context).colorScheme.surface.withOpacity(0.9),
-            child: DraggableScrollableSheet(
-              initialChildSize: 0.7,
-              minChildSize: 0.45,
-              maxChildSize: 0.95,
-              expand: false,
-              builder: (context, scrollController) {
-                return ListView(
-                  controller: scrollController,
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    Row(
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        return SafeArea(
+          child: ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: Container(
+                color: Theme.of(context).colorScheme.surface.withOpacity(0.9),
+                child: DraggableScrollableSheet(
+                  initialChildSize: 0.7,
+                  minChildSize: 0.45,
+                  maxChildSize: 0.95,
+                  expand: false,
+                  builder: (context, scrollController) {
+                    return ListView(
+                      controller: scrollController,
+                      padding: const EdgeInsets.all(16),
                       children: [
-                        CircleAvatar(
-                          radius: 30,
-                          backgroundColor: const Color(0xFF1E293B),
-                          backgroundImage:
-                              controller.profileAvatar?.isImage == true
-                                  ? MemoryImage(controller.profileAvatar!.bytes)
+                        Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 30,
+                              backgroundColor: const Color(0xFF1E293B),
+                              backgroundImage:
+                                  controller.profileAvatar?.isImage == true
+                                      ? MemoryImage(
+                                          controller.profileAvatar!.bytes,
+                                        )
+                                      : null,
+                              child: controller.profileAvatar == null
+                                  ? const Icon(Icons.person, size: 28)
                                   : null,
-                          child: controller.profileAvatar == null
-                              ? const Icon(Icons.person, size: 28)
-                              : null,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                controller.displayName.isEmpty
-                                    ? 'Operator'
-                                    : controller.displayName,
-                                style: Theme.of(context).textTheme.titleLarge,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    controller.displayName.isEmpty
+                                        ? 'Operator'
+                                        : controller.displayName,
+                                    style:
+                                        Theme.of(context).textTheme.titleLarge,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    controller.namespaceChoice,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(color: Colors.white70),
+                                  ),
+                                ],
                               ),
-                              const SizedBox(height: 4),
+                            ),
+                            IconButton(
+                              tooltip: 'Edit profile',
+                              icon: const Icon(Icons.edit),
+                              onPressed: onEdit,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        if (controller.profileBio.isNotEmpty)
+                          Text(
+                            controller.profileBio,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        if (controller.profileBio.isNotEmpty)
+                          const SizedBox(height: 12),
+                        if (controller.profileWebsite.isNotEmpty)
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.link,
+                                size: 18,
+                                color: Colors.white70,
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  controller.profileWebsite,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(color: Colors.white70),
+                                ),
+                              ),
+                            ],
+                          ),
+                        if (controller.profileWebsite.isNotEmpty)
+                          const SizedBox(height: 8),
+                        if (controller.profileLocation.isNotEmpty)
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.place,
+                                size: 18,
+                                color: Colors.white70,
+                              ),
+                              const SizedBox(width: 6),
                               Text(
-                                controller.namespaceChoice,
+                                controller.profileLocation,
                                 style: Theme.of(context)
                                     .textTheme
-                                    .bodyMedium
+                                    .bodySmall
                                     ?.copyWith(color: Colors.white70),
                               ),
                             ],
                           ),
-                        ),
-                        IconButton(
-                          tooltip: 'Edit profile',
-                          icon: const Icon(Icons.edit),
-                          onPressed: onEdit,
-                        ),
                       ],
-                    ),
-                    const SizedBox(height: 16),
-                    if (controller.profileBio.isNotEmpty)
-                      Text(
-                        controller.profileBio,
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    if (controller.profileBio.isNotEmpty)
-                      const SizedBox(height: 12),
-                    if (controller.profileWebsite.isNotEmpty)
-                      Row(
-                        children: [
-                          const Icon(Icons.link, size: 18, color: Colors.white70),
-                          const SizedBox(width: 6),
-                          Flexible(
-                            child: Text(
-                              controller.profileWebsite,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.copyWith(color: Colors.white70),
-                            ),
-                          ),
-                        ],
-                      ),
-                    if (controller.profileWebsite.isNotEmpty)
-                      const SizedBox(height: 8),
-                    if (controller.profileLocation.isNotEmpty)
-                      Row(
-                        children: [
-                          const Icon(Icons.place, size: 18, color: Colors.white70),
-                          const SizedBox(width: 6),
-                          Text(
-                            controller.profileLocation,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(color: Colors.white70),
-                          ),
-                        ],
-                      ),
-                  ],
-                );
-              },
+                    );
+                  },
+                ),
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -3558,90 +3574,103 @@ class _ProfileEditorState extends State<_ProfileEditor> {
 
   @override
   Widget build(BuildContext context) {
-    final controller = widget.controller;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
+    return AnimatedBuilder(
+      animation: widget.controller,
+      builder: (context, _) {
+        final controller = widget.controller;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            CircleAvatar(
-              radius: 28,
-              backgroundColor: const Color(0xFF1E293B),
-              backgroundImage: controller.profileAvatar?.isImage == true
-                  ? MemoryImage(controller.profileAvatar!.bytes)
-                  : null,
-              child: controller.profileAvatar == null
-                  ? const Icon(Icons.person, size: 28)
-                  : null,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    controller.displayName.isEmpty
-                        ? 'Unnamed'
-                        : controller.displayName,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 4),
-                  Wrap(
-                    spacing: 8,
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: const Color(0xFF1E293B),
+                  backgroundImage: controller.profileAvatar?.isImage == true
+                      ? MemoryImage(controller.profileAvatar!.bytes)
+                      : null,
+                  child: controller.profileAvatar == null
+                      ? const Icon(Icons.person, size: 28)
+                      : null,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      OutlinedButton.icon(
-                        onPressed: controller.pickProfileAvatar,
-                        icon: const Icon(Icons.image_outlined),
-                        label: const Text('Avatar'),
+                      Text(
+                        controller.displayName.isEmpty
+                            ? 'Unnamed'
+                            : controller.displayName,
+                        style: Theme.of(context).textTheme.titleMedium,
                       ),
-                      if (controller.profileAvatar != null)
-                        TextButton(
-                          onPressed: controller.clearProfileAvatar,
-                          child: const Text('Remove'),
-                        ),
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: controller.pickProfileAvatar,
+                            icon: const Icon(Icons.image_outlined),
+                            label: const Text('Avatar'),
+                          ),
+                          if (controller.profileAvatar != null)
+                            TextButton(
+                              onPressed: controller.clearProfileAvatar,
+                              child: const Text('Remove'),
+                            ),
+                        ],
+                      ),
                     ],
                   ),
-                ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _bioController,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Bio',
+                hintText: 'Tell people who you are',
               ),
+              onChanged: (value) => controller.updateProfileDetails(bio: value),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _websiteController,
+              decoration: const InputDecoration(
+                labelText: 'Website',
+                hintText: 'https://',
+              ),
+              onChanged: (value) =>
+                  controller.updateProfileDetails(website: value),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _locationController,
+              decoration: const InputDecoration(
+                labelText: 'Location',
+              ),
+              onChanged: (value) =>
+                  controller.updateProfileDetails(location: value),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: () {
+                controller.publishProfile();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Profile update queued'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              },
+              icon: const Icon(Icons.publish),
+              label: const Text('Publish profile update'),
             ),
           ],
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _bioController,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            labelText: 'Bio',
-            hintText: 'Tell people who you are',
-          ),
-          onChanged: (value) => controller.updateProfileDetails(bio: value),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _websiteController,
-          decoration: const InputDecoration(
-            labelText: 'Website',
-            hintText: 'https://',
-          ),
-          onChanged: (value) =>
-              controller.updateProfileDetails(website: value),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          controller: _locationController,
-          decoration: const InputDecoration(
-            labelText: 'Location',
-          ),
-          onChanged: (value) =>
-              controller.updateProfileDetails(location: value),
-        ),
-        const SizedBox(height: 12),
-        ElevatedButton.icon(
-          onPressed: controller.publishProfile,
-          icon: const Icon(Icons.publish),
-          label: const Text('Publish profile update'),
-        ),
-      ],
+        );
+      },
     );
   }
 }
