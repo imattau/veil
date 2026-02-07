@@ -1,5 +1,7 @@
+#![allow(unexpected_cfgs)]
+
 mod frb_generated; /* AUTO INJECTED BY flutter_rust_bridge. This line may not be accurate, and you can change it according to your needs. */
-#[allow(unexpected_cfgs)]
+#[allow(unused_imports)]
 use flutter_rust_bridge::frb;
 
 #[frb]
@@ -195,7 +197,7 @@ pub struct QuicRecv {
 
 fn decode_hex_vec(input: &str) -> Result<Vec<u8>, String> {
     let bytes = input.as_bytes();
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err("expected even-length hex string".to_string());
     }
     let mut out = Vec::with_capacity(bytes.len() / 2);
@@ -347,17 +349,15 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
 }
 
 #[no_mangle]
-pub extern "C" fn veil_quic_free_string(ptr: *mut c_char) {
+pub unsafe extern "C" fn veil_quic_free_string(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
     }
-    unsafe {
-        let _ = CString::from_raw(ptr);
-    }
+    let _ = CString::from_raw(ptr);
 }
 
 #[no_mangle]
-pub extern "C" fn veil_quic_send(
+pub unsafe extern "C" fn veil_quic_send(
     handle: u64,
     peer: *const c_char,
     data: *const u8,
@@ -370,7 +370,7 @@ pub extern "C" fn veil_quic_send(
         Ok(p) => p,
         Err(_) => return -2,
     };
-    let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    let bytes = std::slice::from_raw_parts(data, len);
     let mut map = match QUIC_HANDLES.lock() {
         Ok(map) => map,
         Err(_) => return -3,
@@ -418,18 +418,16 @@ pub extern "C" fn veil_quic_recv(handle: u64) -> *mut QuicRecv {
 }
 
 #[no_mangle]
-pub extern "C" fn veil_quic_free_recv(ptr: *mut QuicRecv) {
+pub unsafe extern "C" fn veil_quic_free_recv(ptr: *mut QuicRecv) {
     if ptr.is_null() {
         return;
     }
-    unsafe {
-        let recv = Box::from_raw(ptr);
-        if !recv.peer.is_null() {
-            let _ = CString::from_raw(recv.peer);
-        }
-        if !recv.data.is_null() && recv.len > 0 {
-            let _ = Vec::from_raw_parts(recv.data, recv.len, recv.len);
-        }
+    let recv = Box::from_raw(ptr);
+    if !recv.peer.is_null() {
+        let _ = CString::from_raw(recv.peer);
+    }
+    if !recv.data.is_null() && recv.len > 0 {
+        let _ = Vec::from_raw_parts(recv.data, recv.len, recv.len);
     }
 }
 
