@@ -37,6 +37,7 @@ export {
   encodeMediaDescriptor,
   encodeSocialPost,
   extractReferences,
+  extractMentions,
   splitIntoFileChunks,
 } from "./app_schemas";
 export type { AppEnvelope, FileChunkV1, MediaDescriptorV1, SocialPostV1 } from "./app_schemas";

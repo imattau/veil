@@ -12,6 +12,7 @@ export type SocialPostV1 = {
   type: "post";
   version: 1;
   body: string;
+  mentions?: string[];
   parent_root?: string;
   thread_root?: string;
   attachments?: MediaDescriptorV1[];
@@ -83,6 +84,7 @@ export function encodeSocialPost(post: SocialPostV1): Uint8Array {
     version: post.version,
     payload: sortObject({
       body: post.body,
+      mentions: post.mentions,
       parent_root: post.parent_root,
       thread_root: post.thread_root,
       attachments: post.attachments,
@@ -237,6 +239,15 @@ export function extractReferences(envelope: AppEnvelope): {
   }
 
   return { parentRoots, threadRoots, chunkRoots, chunkTagHexes };
+}
+
+export function extractMentions(envelope: AppEnvelope): string[] {
+  if (envelope.type !== "post" || !isRecord(envelope.payload)) {
+    return [];
+  }
+  const mentions = envelope.payload.mentions;
+  if (!Array.isArray(mentions)) return [];
+  return mentions.filter((entry): entry is string => typeof entry === "string");
 }
 
 export function encodeCanonicalMap(map: Record<string, unknown>): Uint8Array {

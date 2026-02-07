@@ -18,6 +18,7 @@ class AppEnvelope {
 
 class SocialPostV1 {
   final String body;
+  final List<String>? mentions;
   final String? parentRoot;
   final String? threadRoot;
   final List<MediaDescriptorV1>? attachments;
@@ -25,6 +26,7 @@ class SocialPostV1 {
 
   const SocialPostV1({
     required this.body,
+    this.mentions,
     this.parentRoot,
     this.threadRoot,
     this.attachments,
@@ -105,6 +107,7 @@ Uint8List encodeSocialPost(SocialPostV1 post) {
       version: 1,
       payload: _sortMap({
         "body": post.body,
+        if (post.mentions != null) "mentions": post.mentions,
         if (post.parentRoot != null) "parent_root": post.parentRoot,
         if (post.threadRoot != null) "thread_root": post.threadRoot,
         if (post.attachments != null)

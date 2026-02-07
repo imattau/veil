@@ -306,6 +306,7 @@ class VeilAppController extends ChangeNotifier {
   final _ble = FlutterReactiveBle();
   final _secureStorage = const FlutterSecureStorage();
   final _linkPreviewService = LinkPreviewService();
+  static final RegExp _mentionPattern = RegExp(r'@([0-9a-fA-F]{64})');
   final _publisher = const VeilPublisher();
   final PublishQueue _publishQueue = PublishQueue();
   bool _publishInFlight = false;
@@ -907,6 +908,7 @@ class VeilAppController extends ChangeNotifier {
 
   void publishLocalPost(String text, {List<Attachment> attachments = const []}) {
     if (text.trim().isEmpty) return;
+    final mentions = _extractMentions(text);
     final previews = _linkPreviewService.extractCached(text);
     final shardTotal = attachments.isEmpty
         ? 1
@@ -925,7 +927,7 @@ class VeilAppController extends ChangeNotifier {
     _feed.insert(0, entry);
     _events.insert(0, 'Local post created');
     _notify();
-    _enqueuePublishObjects(text, attachments);
+    _enqueuePublishObjects(text, attachments, mentions);
     _linkPreviewService.prefetch(text).then((_) {
       final updated = _linkPreviewService.extractCached(text);
       for (final item in _feed) {
@@ -939,10 +941,16 @@ class VeilAppController extends ChangeNotifier {
     });
   }
 
-  void _enqueuePublishObjects(String text, List<Attachment> attachments) {
+  void _enqueuePublishObjects(
+    String text,
+    List<Attachment> attachments,
+    List<String> mentions,
+  ) {
     final bytes = attachments.map((a) => a.bytes).toList();
     final mimes = attachments.map((a) => a.mime).toList();
-    _publisher.buildPostWithAttachments(text, bytes, mimes).then((batch) {
+    _publisher
+        .buildPostWithAttachments(text, bytes, mimes, mentions)
+        .then((batch) {
       _publishQueue.enqueue(batch.rootObject);
       _publishQueue.enqueueAll(batch.relatedObjects);
       _persistPublishObject(batch.rootObject);
@@ -956,6 +964,18 @@ class VeilAppController extends ChangeNotifier {
       notifyListeners();
       _drainPublishQueue();
     });
+  }
+
+  List<String> _extractMentions(String text) {
+    final matches = _mentionPattern.allMatches(text);
+    final mentions = <String>{};
+    for (final match in matches) {
+      final value = match.group(1);
+      if (value != null && value.length == 64) {
+        mentions.add(value.toLowerCase());
+      }
+    }
+    return mentions.toList();
   }
 
   Future<void> _drainPublishQueue() async {

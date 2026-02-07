@@ -39,6 +39,7 @@ Clients can apply different ingest policies per namespace.
 ```
 SocialPostV1 {
   body: string
+  mentions?: bytes32[]          // mentioned pubkeys (hex or raw bytes in app layer)
   parent_root?: bytes32
   thread_root?: bytes32
   attachments?: MediaDescriptorV1[]

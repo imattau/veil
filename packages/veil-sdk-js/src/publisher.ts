@@ -29,6 +29,7 @@ export function buildObject(bytes: Uint8Array): PublishObject {
 export function buildSocialPost(
   body: string,
   options: {
+    mentions?: string[];
     parentRoot?: string;
     threadRoot?: string;
     attachments?: MediaDescriptorV1[];
@@ -39,6 +40,7 @@ export function buildSocialPost(
     type: "post",
     version: 1,
     body,
+    mentions: options.mentions,
     parent_root: options.parentRoot,
     thread_root: options.threadRoot,
     attachments: options.attachments,
@@ -59,6 +61,7 @@ export function buildPostWithAttachments(
   body: string,
   attachments: Uint8Array[],
   mimeTypes: string[],
+  mentions?: string[],
 ): PublishBatch {
   const relatedObjects: PublishObject[] = [];
   const descriptors: MediaDescriptorV1[] = [];
@@ -81,7 +84,7 @@ export function buildPostWithAttachments(
   const descriptorObjects = descriptors.map((desc) => buildMediaDescriptor(desc));
   relatedObjects.push(...descriptorObjects);
 
-  const post = buildSocialPost(body, { attachments: descriptors });
+  const post = buildSocialPost(body, { attachments: descriptors, mentions });
   return { rootObject: post, relatedObjects };
 }
 

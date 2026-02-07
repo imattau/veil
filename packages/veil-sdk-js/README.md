@@ -131,6 +131,7 @@ const bytes = encodeSocialPost({
   type: "post",
   version: 1,
   body: "hello",
+  mentions: ["<pubkey_hex>"],
   thread_root: threadRootHex,
   attachments: [mediaDescriptor],
 });

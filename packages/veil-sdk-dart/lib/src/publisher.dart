@@ -30,11 +30,13 @@ class VeilPublisher {
   Future<PublishObject> buildSocialPost(String body,
       {String? parentRoot,
       String? threadRoot,
+      List<String>? mentions,
       List<MediaDescriptorV1>? attachments,
       Map<String, dynamic>? extensions}) async {
     final bytes = encodeSocialPost(
       SocialPostV1(
         body: body,
+        mentions: mentions,
         parentRoot: parentRoot,
         threadRoot: threadRoot,
         attachments: attachments,
@@ -62,6 +64,7 @@ class VeilPublisher {
     String body,
     List<Uint8List> attachments,
     List<String> mimeTypes,
+    List<String>? mentions,
   ) async {
     final related = <PublishObject>[];
     final descriptors = <MediaDescriptorV1>[];
@@ -90,7 +93,11 @@ class VeilPublisher {
     }
     related.addAll(descriptorObjects);
 
-    final post = await buildSocialPost(body, attachments: descriptors);
+    final post = await buildSocialPost(
+      body,
+      attachments: descriptors,
+      mentions: mentions,
+    );
     return PublishBatch(rootObject: post, relatedObjects: related);
   }
 }
