@@ -2750,27 +2750,11 @@ class _ComposeScreenState extends State<ComposeScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              Row(
-                children: [
-                  ElevatedButton.icon(
-                    onPressed: _pickImage,
-                    icon: const Icon(Icons.image_outlined),
-                    label: const Text('Attach image'),
-                  ),
-                  const SizedBox(width: 12),
-                  OutlinedButton.icon(
-                    onPressed: _pickFile,
-                    icon: const Icon(Icons.attach_file),
-                    label: const Text('Attach file'),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    '${_attachments.length} attached',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Colors.white70,
-                    ),
-                  ),
-                ],
+              Text(
+                '${_attachments.length} attached',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Colors.white70,
+                ),
               ),
               if (_attachments.isNotEmpty) ...[
                 const SizedBox(height: 12),
