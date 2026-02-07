@@ -194,7 +194,13 @@ class _RootShellState extends State<RootShell> {
       showDragHandle: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => ProfileSheet(controller: _controller),
+      builder: (context) => ProfileSheet(
+        controller: _controller,
+        onEdit: () {
+          Navigator.of(context).pop();
+          _openSettings();
+        },
+      ),
     );
   }
 
@@ -3328,8 +3334,9 @@ class _ProfileEditor extends StatefulWidget {
 
 class ProfileSheet extends StatelessWidget {
   final VeilAppController controller;
+  final VoidCallback onEdit;
 
-  const ProfileSheet({super.key, required this.controller});
+  const ProfileSheet({super.key, required this.controller, required this.onEdit});
 
   @override
   Widget build(BuildContext context) {
@@ -3385,10 +3392,53 @@ class ProfileSheet extends StatelessWidget {
                             ],
                           ),
                         ),
+                        IconButton(
+                          tooltip: 'Edit profile',
+                          icon: const Icon(Icons.edit),
+                          onPressed: onEdit,
+                        ),
                       ],
                     ),
                     const SizedBox(height: 16),
-                    _ProfileEditor(controller: controller),
+                    if (controller.profileBio.isNotEmpty)
+                      Text(
+                        controller.profileBio,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    if (controller.profileBio.isNotEmpty)
+                      const SizedBox(height: 12),
+                    if (controller.profileWebsite.isNotEmpty)
+                      Row(
+                        children: [
+                          const Icon(Icons.link, size: 18, color: Colors.white70),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              controller.profileWebsite,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(color: Colors.white70),
+                            ),
+                          ),
+                        ],
+                      ),
+                    if (controller.profileWebsite.isNotEmpty)
+                      const SizedBox(height: 8),
+                    if (controller.profileLocation.isNotEmpty)
+                      Row(
+                        children: [
+                          const Icon(Icons.place, size: 18, color: Colors.white70),
+                          const SizedBox(width: 6),
+                          Text(
+                            controller.profileLocation,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: Colors.white70),
+                          ),
+                        ],
+                      ),
                   ],
                 );
               },
