@@ -6,7 +6,6 @@ use flutter_rust_bridge::frb;
 
 #[frb]
 pub mod api {
-    use flutter_rust_bridge::frb;
     use veil_codec::object::{
         decode_object_cbor, OBJECT_FLAG_ACK_REQUESTED, OBJECT_FLAG_BATCHED, OBJECT_FLAG_PUBLIC,
         OBJECT_FLAG_SIGNED,
@@ -348,6 +347,9 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
     }
 }
 
+/// # Safety
+/// `ptr` must be a pointer returned by `veil_quic_fetch_peer_cert` and must be
+/// freed exactly once.
 #[no_mangle]
 pub unsafe extern "C" fn veil_quic_free_string(ptr: *mut c_char) {
     if ptr.is_null() {
@@ -356,6 +358,9 @@ pub unsafe extern "C" fn veil_quic_free_string(ptr: *mut c_char) {
     let _ = CString::from_raw(ptr);
 }
 
+/// # Safety
+/// `peer` must be a valid NUL-terminated C string and `data` must point to a
+/// buffer of at least `len` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn veil_quic_send(
     handle: u64,
@@ -417,6 +422,9 @@ pub extern "C" fn veil_quic_recv(handle: u64) -> *mut QuicRecv {
     Box::into_raw(Box::new(recv))
 }
 
+/// # Safety
+/// `ptr` must be a pointer returned by `veil_quic_recv` and must be freed
+/// exactly once.
 #[no_mangle]
 pub unsafe extern "C" fn veil_quic_free_recv(ptr: *mut QuicRecv) {
     if ptr.is_null() {
