@@ -34,6 +34,24 @@ class SocialPostV1 {
   });
 }
 
+class ProfileV1 {
+  final String displayName;
+  final String? bio;
+  final MediaDescriptorV1? avatar;
+  final String? website;
+  final String? location;
+  final Map<String, dynamic>? extensions;
+
+  const ProfileV1({
+    required this.displayName,
+    this.bio,
+    this.avatar,
+    this.website,
+    this.location,
+    this.extensions,
+  });
+}
+
 class MediaDescriptorV1 {
   final String mime;
   final int size;
@@ -124,6 +142,23 @@ Uint8List encodeMediaDescriptor(MediaDescriptorV1 media) {
       type: "media_desc",
       version: 1,
       payload: _sortMap(_mediaToMap(media)),
+    ),
+  );
+}
+
+Uint8List encodeProfile(ProfileV1 profile) {
+  return encodeAppEnvelope(
+    AppEnvelope(
+      type: "profile",
+      version: 1,
+      payload: _sortMap({
+        "display_name": profile.displayName,
+        if (profile.bio != null) "bio": profile.bio,
+        if (profile.avatar != null) "avatar": _mediaToMap(profile.avatar!),
+        if (profile.website != null) "website": profile.website,
+        if (profile.location != null) "location": profile.location,
+        if (profile.extensions != null) "extensions": _sortMap(profile.extensions!),
+      }),
     ),
   );
 }
@@ -245,6 +280,21 @@ AppReferences extractReferences(AppEnvelope envelope) {
     }
     final tagHex = payload["chunk_tag_hex"];
     if (tagHex is String) chunkTagHexes.add(tagHex);
+  }
+
+  if (envelope.type == "profile") {
+    final payload = envelope.payload;
+    final avatar = payload["avatar"];
+    if (avatar is Map<String, dynamic>) {
+      final roots = avatar["chunk_roots"];
+      if (roots is List) {
+        for (final root in roots) {
+          if (root is String) chunkRoots.add(root);
+        }
+      }
+      final tagHex = avatar["chunk_tag_hex"];
+      if (tagHex is String) chunkTagHexes.add(tagHex);
+    }
   }
 
   return AppReferences(

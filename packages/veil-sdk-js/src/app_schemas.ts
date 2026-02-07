@@ -19,6 +19,17 @@ export type SocialPostV1 = {
   extensions?: Record<string, unknown>;
 };
 
+export type ProfileV1 = {
+  type: "profile";
+  version: 1;
+  display_name: string;
+  bio?: string;
+  avatar?: MediaDescriptorV1;
+  website?: string;
+  location?: string;
+  extensions?: Record<string, unknown>;
+};
+
 export type MediaDescriptorV1 = {
   type: "media_desc";
   version: 1;
@@ -105,6 +116,21 @@ export function encodeMediaDescriptor(media: MediaDescriptorV1): Uint8Array {
       chunk_tag_hex: media.chunk_tag_hex,
       blurhash: media.blurhash,
       extensions: media.extensions,
+    }) as Record<string, unknown>,
+  });
+}
+
+export function encodeProfile(profile: ProfileV1): Uint8Array {
+  return encodeAppEnvelope({
+    type: profile.type,
+    version: profile.version,
+    payload: sortObject({
+      display_name: profile.display_name,
+      bio: profile.bio,
+      avatar: profile.avatar,
+      website: profile.website,
+      location: profile.location,
+      extensions: profile.extensions,
     }) as Record<string, unknown>,
   });
 }
@@ -203,6 +229,19 @@ export function extractReferences(envelope: AppEnvelope): {
           if (typeof tagHex === "string") chunkTagHexes.push(tagHex);
         }
       }
+    }
+  }
+  if (envelope.type === "profile" && isRecord(envelope.payload)) {
+    const avatar = envelope.payload.avatar;
+    if (isRecord(avatar)) {
+      const roots = avatar.chunk_roots;
+      if (Array.isArray(roots)) {
+        for (const root of roots) {
+          if (typeof root === "string") chunkRoots.push(root);
+        }
+      }
+      const tagHex = avatar.chunk_tag_hex;
+      if (typeof tagHex === "string") chunkTagHexes.push(tagHex);
     }
   }
   if (envelope.type === "media_desc" && isRecord(envelope.payload)) {

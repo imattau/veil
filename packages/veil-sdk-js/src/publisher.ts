@@ -3,9 +3,11 @@ import { blake3 } from "@noble/hashes/blake3";
 import {
   encodeFileChunk,
   encodeMediaDescriptor,
+  encodeProfile,
   encodeSocialPost,
   splitIntoFileChunks,
   type MediaDescriptorV1,
+  type ProfileV1,
 } from "./app_schemas";
 
 export type PublishObject = {
@@ -51,6 +53,10 @@ export function buildSocialPost(
 
 export function buildMediaDescriptor(media: MediaDescriptorV1): PublishObject {
   return buildObject(encodeMediaDescriptor(media));
+}
+
+export function buildProfile(profile: ProfileV1): PublishObject {
+  return buildObject(encodeProfile(profile));
 }
 
 export function buildFileChunks(bytes: Uint8Array): PublishObject[] {

@@ -195,6 +195,7 @@ class _RootShellState extends State<RootShell> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => SettingsSheet(
+        controller: _controller,
         showProtocolDetails: _showProtocolDetails,
         onToggleDetails: (value) {
           setState(() => _showProtocolDetails = value);
@@ -305,9 +306,14 @@ class VeilAppController extends ChangeNotifier {
   final _bridge = const VeilBridge();
   final _ble = FlutterReactiveBle();
   final _secureStorage = const FlutterSecureStorage();
+  final _picker = ImagePicker();
   final _linkPreviewService = LinkPreviewService();
   static final RegExp _mentionPattern = RegExp(r'@([0-9a-fA-F]{64})');
   final _publisher = const VeilPublisher();
+  Attachment? _profileAvatar;
+  String _profileBio = '';
+  String _profileWebsite = '';
+  String _profileLocation = '';
   final PublishQueue _publishQueue = PublishQueue();
   bool _publishInFlight = false;
   int _publishAttempts = 0;
@@ -357,6 +363,10 @@ class VeilAppController extends ChangeNotifier {
   int _epochRemainingSeconds = 0;
 
   bool get onboardingComplete => displayName.isNotEmpty;
+  Attachment? get profileAvatar => _profileAvatar;
+  String get profileBio => _profileBio;
+  String get profileWebsite => _profileWebsite;
+  String get profileLocation => _profileLocation;
   bool get relayReady => _relayReady;
   bool get connected => _connected;
   String get relayUrl => _relay?.url ?? '';
@@ -452,6 +462,83 @@ class VeilAppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void updateProfileDetails({
+    String? bio,
+    String? website,
+    String? location,
+  }) {
+    if (bio != null) _profileBio = bio;
+    if (website != null) _profileWebsite = website;
+    if (location != null) _profileLocation = location;
+    _persistPrefs();
+    notifyListeners();
+  }
+
+  Future<void> pickProfileAvatar() async {
+    final image = await _picker.pickImage(source: ImageSource.gallery);
+    if (image == null) return;
+    final bytes = await image.readAsBytes();
+    final mime = image.mimeType ?? lookupMimeType(image.name) ?? 'image/*';
+    _profileAvatar = Attachment(
+      name: image.name,
+      mime: mime,
+      bytes: bytes,
+      hashHex: sha256.convert(bytes).toString(),
+      size: bytes.length,
+      isImage: true,
+      isVideo: false,
+      chunkCount: splitIntoFileChunks(bytes).length,
+    );
+    _persistPrefs();
+    notifyListeners();
+  }
+
+  void clearProfileAvatar() {
+    _profileAvatar = null;
+    _persistPrefs();
+    notifyListeners();
+  }
+
+  void publishProfile() {
+    if (displayName.trim().isEmpty) return;
+    final avatar = _profileAvatar;
+    () async {
+      MediaDescriptorV1? avatarDescriptor;
+      if (avatar != null) {
+        final chunkObjects = await _publisher.buildFileChunks(avatar.bytes);
+        for (final chunk in chunkObjects) {
+          _publishQueue.enqueue(chunk);
+          _persistPublishObject(chunk);
+        }
+        final roots = chunkObjects.map((obj) => obj.objectRootHex).toList();
+        if (roots.isNotEmpty) {
+          avatarDescriptor = MediaDescriptorV1(
+            mime: avatar.mime,
+            size: avatar.size,
+            hashHex: avatar.hashHex,
+            chunkRoots: roots,
+          );
+        }
+      }
+
+      final profileBytes = encodeProfile(
+        ProfileV1(
+          displayName: displayName,
+          bio: _profileBio.isEmpty ? null : _profileBio,
+          avatar: avatarDescriptor,
+          website: _profileWebsite.isEmpty ? null : _profileWebsite,
+          location: _profileLocation.isEmpty ? null : _profileLocation,
+        ),
+      );
+      final profileObject = await _publisher.buildObject(profileBytes);
+      _publishQueue.enqueue(profileObject);
+      _persistPublishObject(profileObject);
+      _events.insert(0, 'Profile update queued');
+      notifyListeners();
+      _drainPublishQueue();
+    }();
+  }
+
   void setNamespaceChoice(String value) {
     namespaceChoice = value;
     _persistPrefs();
@@ -492,6 +579,9 @@ class VeilAppController extends ChangeNotifier {
     _maxCacheEntries = prefs.getInt('maxCacheEntries') ?? _maxCacheEntries;
     _maxPublishQueue = prefs.getInt('maxPublishQueue') ?? _maxPublishQueue;
     _publishQueue.updateMaxSize(_maxPublishQueue);
+    _profileBio = prefs.getString('profileBio') ?? _profileBio;
+    _profileWebsite = prefs.getString('profileWebsite') ?? _profileWebsite;
+    _profileLocation = prefs.getString('profileLocation') ?? _profileLocation;
     _extraTags
       ..clear()
       ..addAll(prefs.getStringList('extraTags') ?? const []);
@@ -525,6 +615,9 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setInt('clockSkewSeconds', _clockSkewSeconds);
     await prefs.setInt('maxCacheEntries', _maxCacheEntries);
     await prefs.setInt('maxPublishQueue', _maxPublishQueue);
+    await prefs.setString('profileBio', _profileBio);
+    await prefs.setString('profileWebsite', _profileWebsite);
+    await prefs.setString('profileLocation', _profileLocation);
     await prefs.setStringList('extraTags', _extraTags);
     await prefs.setStringList('forwardPeers', _forwardPeers);
     await prefs.setStringList('trustedFeeds', _trustedFeeds.toList());
@@ -2977,6 +3070,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
 }
 
 class SettingsSheet extends StatelessWidget {
+  final VeilAppController controller;
   final bool showProtocolDetails;
   final ValueChanged<bool> onToggleDetails;
   final bool ghostMode;
@@ -2992,6 +3086,7 @@ class SettingsSheet extends StatelessWidget {
 
   const SettingsSheet({
     super.key,
+    required this.controller,
     required this.showProtocolDetails,
     required this.onToggleDetails,
     required this.ghostMode,
@@ -3025,6 +3120,25 @@ class SettingsSheet extends StatelessWidget {
                   controller: scrollController,
                   padding: const EdgeInsets.all(16),
                   children: [
+                    const SizedBox(height: 8),
+                    Text(
+                      'PROFILE',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        letterSpacing: 2,
+                        color: Colors.white70,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _ProfileEditor(controller: controller),
+                    const SizedBox(height: 16),
+                    Text(
+                      'SETTINGS',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        letterSpacing: 2,
+                        color: Colors.white70,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     SwitchListTile(
                       value: showProtocolDetails,
                       onChanged: onToggleDetails,
@@ -3165,6 +3279,128 @@ class _InputField extends StatelessWidget {
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
+    );
+  }
+}
+
+class _ProfileEditor extends StatefulWidget {
+  final VeilAppController controller;
+
+  const _ProfileEditor({required this.controller});
+
+  @override
+  State<_ProfileEditor> createState() => _ProfileEditorState();
+}
+
+class _ProfileEditorState extends State<_ProfileEditor> {
+  late final TextEditingController _bioController;
+  late final TextEditingController _websiteController;
+  late final TextEditingController _locationController;
+
+  @override
+  void initState() {
+    super.initState();
+    _bioController = TextEditingController(text: widget.controller.profileBio);
+    _websiteController =
+        TextEditingController(text: widget.controller.profileWebsite);
+    _locationController =
+        TextEditingController(text: widget.controller.profileLocation);
+  }
+
+  @override
+  void dispose() {
+    _bioController.dispose();
+    _websiteController.dispose();
+    _locationController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            CircleAvatar(
+              radius: 28,
+              backgroundColor: const Color(0xFF1E293B),
+              backgroundImage: controller.profileAvatar?.isImage == true
+                  ? MemoryImage(controller.profileAvatar!.bytes)
+                  : null,
+              child: controller.profileAvatar == null
+                  ? const Icon(Icons.person, size: 28)
+                  : null,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    controller.displayName.isEmpty
+                        ? 'Unnamed'
+                        : controller.displayName,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: controller.pickProfileAvatar,
+                        icon: const Icon(Icons.image_outlined),
+                        label: const Text('Avatar'),
+                      ),
+                      if (controller.profileAvatar != null)
+                        TextButton(
+                          onPressed: controller.clearProfileAvatar,
+                          child: const Text('Remove'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _bioController,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Bio',
+            hintText: 'Tell people who you are',
+          ),
+          onChanged: (value) => controller.updateProfileDetails(bio: value),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _websiteController,
+          decoration: const InputDecoration(
+            labelText: 'Website',
+            hintText: 'https://',
+          ),
+          onChanged: (value) =>
+              controller.updateProfileDetails(website: value),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _locationController,
+          decoration: const InputDecoration(
+            labelText: 'Location',
+          ),
+          onChanged: (value) =>
+              controller.updateProfileDetails(location: value),
+        ),
+        const SizedBox(height: 12),
+        ElevatedButton.icon(
+          onPressed: controller.publishProfile,
+          icon: const Icon(Icons.publish),
+          label: const Text('Publish profile update'),
+        ),
+      ],
     );
   }
 }

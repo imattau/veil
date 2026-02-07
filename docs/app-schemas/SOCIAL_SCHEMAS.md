@@ -47,6 +47,18 @@ SocialPostV1 {
 }
 ```
 
+### Profile Payload (envelope type = "profile", version = 1)
+```
+ProfileV1 {
+  display_name: string
+  bio?: string
+  avatar?: MediaDescriptorV1
+  website?: string
+  location?: string
+  extensions?: map
+}
+```
+
 ### MediaDescriptor Payload (envelope type = "media_desc", version = 1)
 ```
 MediaDescriptorV1 {

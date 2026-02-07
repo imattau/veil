@@ -51,6 +51,11 @@ class VeilPublisher {
     return buildObject(bytes);
   }
 
+  Future<PublishObject> buildProfile(ProfileV1 profile) async {
+    final bytes = encodeProfile(profile);
+    return buildObject(bytes);
+  }
+
   Future<List<PublishObject>> buildFileChunks(Uint8List bytes) async {
     final chunks = splitIntoFileChunks(bytes);
     final out = <PublishObject>[];
