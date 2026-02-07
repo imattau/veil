@@ -18,12 +18,38 @@ configureTagBackend("pure-js");
 ## Minimal snippet
 
 ```ts
-import { VeilClient, WebSocketLaneAdapter } from "@veil/sdk-js";
+import {
+  VeilClient,
+  WebSocketLaneAdapter,
+  createAutoFetchPlugin,
+  createThreadContextPlugin,
+} from "@veil/sdk-js";
 
 const fast = new WebSocketLaneAdapter({ url: "wss://relay.example/ws", peerId: "fast" });
 const fallback = new WebSocketLaneAdapter({ url: "wss://relay.example/ws2", peerId: "fallback" });
 
-const client = new VeilClient(fast, fallback, {
+const client = new VeilClient(
+  fast,
+  fallback,
+  {
+    onShard(peer, bytes) {
+      console.log("shard", peer, bytes.length);
+    },
+  },
+  {
+    plugins: [
+      createAutoFetchPlugin({
+        resolveTagForRoot: (root) => rootTagIndex.get(root) ?? null,
+      }),
+      createThreadContextPlugin({
+        resolveTagForRoot: (root) => rootTagIndex.get(root) ?? null,
+      }),
+    ],
+  },
+);
+
+// When your app reconstructs an object:
+// client.notifyObject(objectRootHex, objectBytes);
   onShard(peer, bytes) {
     console.log("shard", peer, bytes.length);
   },

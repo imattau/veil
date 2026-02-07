@@ -5,6 +5,10 @@ import {
   deriveChannelNamespace,
   InMemoryLaneAdapter,
   VeilClient,
+  createAutoFetchPlugin,
+  createThreadContextPlugin,
+  encodeSocialPost,
+  type MediaDescriptorV1,
 } from "@veil/sdk-js";
 
 import {
@@ -96,10 +100,41 @@ export function App() {
           if (!envelope) {
             return;
           }
+          if (envelope.bundle.kind === "post") {
+            const attachments: MediaDescriptorV1[] = envelope.bundle.mediaRoots.map(
+              (root) => ({
+                type: "media_desc",
+                version: 1,
+                mime: "application/octet-stream",
+                size: 0,
+                hash_hex: "",
+                chunk_roots: [root],
+              }),
+            );
+            const postBytes = encodeSocialPost({
+              type: "post",
+              version: 1,
+              body: envelope.bundle.text,
+              parent_root: envelope.bundle.replyToRoot,
+              thread_root: envelope.bundle.replyToRoot,
+              attachments,
+            });
+            clientRef.current?.notifyObject(envelope.root, postBytes);
+          }
           setModel((prev) => applyFeedEnvelope(prev, envelope));
         },
       },
-      { pollIntervalMs: 250 },
+      {
+        pollIntervalMs: 250,
+        plugins: [
+          createAutoFetchPlugin({
+            resolveTagForRoot: () => feedTag || null,
+          }),
+          createThreadContextPlugin({
+            resolveTagForRoot: () => feedTag || null,
+          }),
+        ],
+      },
     );
     client.subscribe(feedTag);
     client.setForwardPeers([]);

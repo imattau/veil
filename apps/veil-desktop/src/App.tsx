@@ -3,6 +3,8 @@ import {
   InMemoryLaneAdapter,
   VeilClient,
   WebSocketLaneAdapter,
+  createAutoFetchPlugin,
+  createThreadContextPlugin,
   type LaneHealthSnapshot,
 } from "@veil/sdk-js";
 
@@ -90,6 +92,14 @@ export default function App() {
       {
         pollIntervalMs: 50,
         adaptiveLaneScoring: true,
+        plugins: [
+          createAutoFetchPlugin({
+            resolveTagForRoot: () => (tagHex ? tagHex : null),
+          }),
+          createThreadContextPlugin({
+            resolveTagForRoot: () => (tagHex ? tagHex : null),
+          }),
+        ],
       },
     );
 

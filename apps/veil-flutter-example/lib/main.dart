@@ -53,11 +53,24 @@ class _VeilHomePageState extends State<VeilHomePage> {
       cacheStore: store,
       hooks: VeilClientHooks(
         onShardMeta: (peer, meta) {
-          setState(() => _events.insert(0, 'Shard from $peer tag=${meta.tagHex}'));
+          setState(
+            () => _events.insert(0, 'Shard from $peer tag=${meta.tagHex}'),
+          );
         },
         onPayload: (root, payload) {
-          setState(() => _events.insert(0, 'Payload for $root (${payload.length} bytes)'));
+          setState(
+            () => _events.insert(
+              0,
+              'Payload for $root (${payload.length} bytes)',
+            ),
+          );
         },
+      ),
+      options: VeilClientOptions(
+        plugins: [
+          AutoFetchPlugin(resolveTagForRoot: (root, _) => ''),
+          ThreadContextPlugin(resolveTagForRoot: (root, _) => ''),
+        ],
       ),
     );
     client.subscribe('');
