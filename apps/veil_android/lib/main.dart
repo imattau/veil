@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blurhash/flutter_blurhash.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
@@ -143,6 +144,11 @@ class _RootShellState extends State<RootShell> {
       showDragHandle: true,
       isScrollControlled: true,
       builder: (context) => ComposeSheet(
+        channelLabel: _controller.channelLabel.isNotEmpty
+            ? _controller.channelLabel
+            : _controller.tagHex.isNotEmpty
+                ? 'Custom tag'
+                : 'General',
         onPublish: (text) {
           _controller.publishLocalPost(text);
           Navigator.of(context).pop();
@@ -243,6 +249,7 @@ class _RootShellState extends State<RootShell> {
 class VeilAppController extends ChangeNotifier {
   final _bridge = const VeilBridge();
   final _ble = FlutterReactiveBle();
+  SharedPreferences? _prefs;
   final List<FeedEntry> _feed = [];
   final List<String> _events = [];
   final List<String> _suggestedFeeds = [
@@ -260,6 +267,8 @@ class VeilAppController extends ChangeNotifier {
   String wsUrl = 'ws://127.0.0.1:9001';
   String tagHex = '';
   String channelLabel = '';
+  static const String _channelPublisherKey =
+      '0000000000000000000000000000000000000000000000000000000000000000';
   final List<String> _extraTags = [];
   final List<String> _forwardPeers = [];
   String bleDeviceId = '';
@@ -305,9 +314,13 @@ class VeilAppController extends ChangeNotifier {
   List<String> get forwardPeers => List.unmodifiable(_forwardPeers);
 
   void init() {
-    _startLocalRelay();
-    _startEpochTimer();
-    connect();
+    () async {
+      _prefs = await SharedPreferences.getInstance();
+      await _loadPrefs();
+      _startLocalRelay();
+      _startEpochTimer();
+      connect();
+    }();
   }
 
   void dispose() {
@@ -328,16 +341,19 @@ class VeilAppController extends ChangeNotifier {
 
   void setUseLocalRelay(bool value) {
     _useLocalRelay = value;
+    _persistPrefs();
     notifyListeners();
   }
 
   void setDisplayName(String value) {
     displayName = value.trim();
+    _persistPrefs();
     notifyListeners();
   }
 
   void setNamespaceChoice(String value) {
     namespaceChoice = value;
+    _persistPrefs();
     notifyListeners();
   }
 
@@ -348,51 +364,135 @@ class VeilAppController extends ChangeNotifier {
       _trustedFeeds.add(feed);
     }
     _events.insert(0, 'Trusted feeds: ${_trustedFeeds.length}');
+    _persistPrefs();
     notifyListeners();
+  }
+
+  Future<void> _loadPrefs() async {
+    final prefs = _prefs;
+    if (prefs == null) return;
+    displayName = prefs.getString('displayName') ?? displayName;
+    namespaceChoice = prefs.getString('namespaceChoice') ?? namespaceChoice;
+    peerId = prefs.getString('peerId') ?? peerId;
+    wsUrl = prefs.getString('wsUrl') ?? wsUrl;
+    tagHex = prefs.getString('tagHex') ?? tagHex;
+    channelLabel = prefs.getString('channelLabel') ?? channelLabel;
+    bleDeviceId = prefs.getString('bleDeviceId') ?? bleDeviceId;
+    bleServiceUuid = prefs.getString('bleServiceUuid') ?? bleServiceUuid;
+    bleCharacteristicUuid =
+        prefs.getString('bleCharacteristicUuid') ?? bleCharacteristicUuid;
+    _useLocalRelay = prefs.getBool('useLocalRelay') ?? _useLocalRelay;
+    _ghostMode = prefs.getBool('ghostMode') ?? _ghostMode;
+    _bleEnabled = prefs.getBool('bleEnabled') ?? _bleEnabled;
+    _requireSignedPublic =
+        prefs.getBool('requireSignedPublic') ?? _requireSignedPublic;
+    _clockSkewSeconds =
+        prefs.getInt('clockSkewSeconds') ?? _clockSkewSeconds;
+    _extraTags
+      ..clear()
+      ..addAll(prefs.getStringList('extraTags') ?? const []);
+    _forwardPeers
+      ..clear()
+      ..addAll(prefs.getStringList('forwardPeers') ?? const []);
+    _trustedFeeds
+      ..clear()
+      ..addAll(prefs.getStringList('trustedFeeds') ?? const []);
+    notifyListeners();
+  }
+
+  Future<void> _persistPrefs() async {
+    final prefs = _prefs;
+    if (prefs == null) return;
+    await prefs.setString('displayName', displayName);
+    await prefs.setString('namespaceChoice', namespaceChoice);
+    await prefs.setString('peerId', peerId);
+    await prefs.setString('wsUrl', wsUrl);
+    await prefs.setString('tagHex', tagHex);
+    await prefs.setString('channelLabel', channelLabel);
+    await prefs.setString('bleDeviceId', bleDeviceId);
+    await prefs.setString('bleServiceUuid', bleServiceUuid);
+    await prefs.setString('bleCharacteristicUuid', bleCharacteristicUuid);
+    await prefs.setBool('useLocalRelay', _useLocalRelay);
+    await prefs.setBool('ghostMode', _ghostMode);
+    await prefs.setBool('bleEnabled', _bleEnabled);
+    await prefs.setBool('requireSignedPublic', _requireSignedPublic);
+    await prefs.setInt('clockSkewSeconds', _clockSkewSeconds);
+    await prefs.setStringList('extraTags', _extraTags);
+    await prefs.setStringList('forwardPeers', _forwardPeers);
+    await prefs.setStringList('trustedFeeds', _trustedFeeds.toList());
   }
 
   void setWsUrl(String value) {
     wsUrl = value.trim();
+    _persistPrefs();
     notifyListeners();
   }
 
   void setPeerId(String value) {
     peerId = value.trim();
+    _persistPrefs();
     notifyListeners();
   }
 
   void setTagHex(String value) {
     tagHex = value.trim();
+    _persistPrefs();
     notifyListeners();
   }
 
-  String _deriveTagHexForLabel(String label) {
+  String _normalizeChannelLabel(String label) {
     final trimmed = label.trim();
     if (trimmed.isEmpty) return '';
-    final slug = trimmed.toLowerCase().replaceAll(RegExp(r'\\s+'), '-');
-    return deriveChannelFeedTagHex('veil', slug);
+    return trimmed.toLowerCase().replaceAll(RegExp(r'\\s+'), '-');
+  }
+
+  int _deriveChannelNamespace(int baseNamespace, String channelId) {
+    final normalized = _normalizeChannelLabel(channelId);
+    if (normalized.isEmpty) {
+      return baseNamespace;
+    }
+    var hash = 2166136261;
+    for (final unit in normalized.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 16777619) & 0xffffffff;
+    }
+    final hash16 = hash & 0xffff;
+    return (baseNamespace + hash16) & 0xffff;
+  }
+
+  Future<String> _deriveTagHexForLabel(String label) async {
+    final normalized = _normalizeChannelLabel(label);
+    if (normalized.isEmpty) return '';
+    final namespace = _deriveChannelNamespace(1, normalized);
+    return _bridge.deriveFeedTagHex(_channelPublisherKey, namespace);
   }
 
   void setChannelLabel(String value) {
     channelLabel = value;
-    final derived = _deriveTagHexForLabel(value);
-    if (derived.isNotEmpty) {
-      tagHex = derived;
-    }
+    () async {
+      final derived = await _deriveTagHexForLabel(value);
+      if (derived.isNotEmpty) {
+        tagHex = derived;
+        _persistPrefs();
+        notifyListeners();
+      }
+    }();
+    _persistPrefs();
     notifyListeners();
   }
 
-  void addSubscription(String value) {
+  Future<void> addSubscription(String value) async {
     final cleaned = value.trim();
     if (cleaned.isEmpty) return;
     final derived = cleaned.startsWith('tag:')
         ? cleaned.substring(4)
-        : _deriveTagHexForLabel(cleaned);
+        : await _deriveTagHexForLabel(cleaned);
     if (derived.isEmpty) return;
     if (!_extraTags.contains(derived) && derived != tagHex) {
       _extraTags.add(derived);
       _client?.subscribe(derived);
       _events.insert(0, 'Joined channel $cleaned');
+      _persistPrefs();
       notifyListeners();
     }
   }
@@ -401,6 +501,7 @@ class VeilAppController extends ChangeNotifier {
     _extraTags.remove(value);
     _client?.unsubscribe(value);
     _events.insert(0, 'Unsubscribed from $value');
+    _persistPrefs();
     notifyListeners();
   }
 
@@ -438,6 +539,7 @@ class VeilAppController extends ChangeNotifier {
       _forwardPeers.add(cleaned);
       _client?.setForwardPeers(_forwardPeers);
       _events.insert(0, 'Added peer $cleaned');
+      _persistPrefs();
       notifyListeners();
     }
   }
@@ -446,18 +548,21 @@ class VeilAppController extends ChangeNotifier {
     _forwardPeers.remove(value);
     _client?.setForwardPeers(_forwardPeers);
     _events.insert(0, 'Removed peer $value');
+    _persistPrefs();
     notifyListeners();
   }
 
   void setGhostMode(bool value) {
     _ghostMode = value;
     _events.insert(0, value ? 'Ghost mode enabled' : 'Ghost mode disabled');
+    _persistPrefs();
     notifyListeners();
   }
 
   void setBleEnabled(bool value) {
     _bleEnabled = value;
     _events.insert(0, value ? 'BLE lane enabled' : 'BLE lane disabled');
+    _persistPrefs();
     notifyListeners();
   }
 
@@ -467,6 +572,7 @@ class VeilAppController extends ChangeNotifier {
       0,
       value ? 'Signed public namespaces required' : 'Signed namespace optional',
     );
+    _persistPrefs();
     notifyListeners();
   }
 
@@ -475,21 +581,25 @@ class VeilAppController extends ChangeNotifier {
     _clockSkewSeconds = parsed.clamp(-3600, 3600);
     _events.insert(0, 'Clock skew set to $_clockSkewSeconds sec');
     _startEpochTimer();
+    _persistPrefs();
     notifyListeners();
   }
 
   void setBleDeviceId(String value) {
     bleDeviceId = value.trim();
+    _persistPrefs();
     notifyListeners();
   }
 
   void setBleServiceUuid(String value) {
     bleServiceUuid = value.trim();
+    _persistPrefs();
     notifyListeners();
   }
 
   void setBleCharacteristicUuid(String value) {
     bleCharacteristicUuid = value.trim();
+    _persistPrefs();
     notifyListeners();
   }
 
@@ -604,9 +714,9 @@ class VeilAppController extends ChangeNotifier {
     _notify();
   }
 
-  void updateSubscription(String value) {
+  Future<void> updateSubscription(String value) async {
     channelLabel = value.trim();
-    tagHex = _deriveTagHexForLabel(channelLabel);
+    tagHex = await _deriveTagHexForLabel(channelLabel);
     final client = _client;
     if (client == null) return;
     for (final sub in client.subscriptions()) {
@@ -1689,8 +1799,13 @@ class _LaneHealthTile extends StatelessWidget {
 
 class ComposeSheet extends StatefulWidget {
   final void Function(String text) onPublish;
+  final String channelLabel;
 
-  const ComposeSheet({super.key, required this.onPublish});
+  const ComposeSheet({
+    super.key,
+    required this.onPublish,
+    required this.channelLabel,
+  });
 
   @override
   State<ComposeSheet> createState() => _ComposeSheetState();
@@ -1720,6 +1835,19 @@ class _ComposeSheetState extends State<ComposeSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Compose', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(Icons.tag, size: 16, color: Color(0xFF60A5FA)),
+                const SizedBox(width: 6),
+                Text(
+                  'Posting to ${widget.channelLabel}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Colors.white70,
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 12),
             TextField(
               controller: _controller,

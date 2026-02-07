@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_blurhash: ^0.8.0
   mobile_scanner: ^5.1.1
+  shared_preferences: ^2.2.3
   veil_sdk:
     path: ../../packages/veil-sdk-dart
 
