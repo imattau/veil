@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
+
 class SettingsSheet extends StatelessWidget {
   final VeilAppController controller;
   final bool showProtocolDetails;
@@ -59,7 +60,9 @@ class SettingsSheet extends StatelessWidget {
                       value: showProtocolDetails,
                       onChanged: onToggleDetails,
                       title: const Text('Show protocol details'),
-                      subtitle: const Text('Reveal object_root and lane metadata.'),
+                      subtitle: const Text(
+                        'Reveal object_root and lane metadata.',
+                      ),
                     ),
                     SwitchListTile(
                       value: ghostMode,
@@ -71,13 +74,16 @@ class SettingsSheet extends StatelessWidget {
                       value: requireSignedPublic,
                       onChanged: onToggleRequireSigned,
                       title: const Text('Require signed public posts'),
-                      subtitle: const Text('Drop unsigned objects in public namespaces.'),
+                      subtitle: const Text(
+                        'Drop unsigned objects in public namespaces.',
+                      ),
                     ),
                     TextFormField(
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
                         labelText: 'Clock skew seconds',
-                        helperText: 'Adjust for device clock drift (max +/-3600).',
+                        helperText:
+                            'Adjust for device clock drift (max +/-3600).',
                       ),
                       initialValue: clockSkewSeconds.toString(),
                       onFieldSubmitted: onClockSkewChanged,
@@ -102,6 +108,27 @@ class SettingsSheet extends StatelessWidget {
                       initialValue: maxPublishQueue.toString(),
                       onFieldSubmitted: onMaxPublishQueueChanged,
                     ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Trust & Safety',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    _TrustList(
+                      title: 'Following',
+                      items: controller.followedUsers,
+                      onRemove: controller.unfollowUser,
+                    ),
+                    _TrustList(
+                      title: 'Muted',
+                      items: controller.mutedUsers,
+                      onRemove: controller.unmuteUser,
+                    ),
+                    _TrustList(
+                      title: 'Blocked',
+                      items: controller.blockedUsers,
+                      onRemove: controller.unblockUser,
+                    ),
                   ],
                 );
               },
@@ -109,6 +136,44 @@ class SettingsSheet extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _TrustList extends StatelessWidget {
+  final String title;
+  final List<String> items;
+  final ValueChanged<String> onRemove;
+
+  const _TrustList({
+    required this.title,
+    required this.items,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) {
+      return ListTile(
+        dense: true,
+        title: Text(title),
+        subtitle: const Text('No entries yet.'),
+      );
+    }
+    return ExpansionTile(
+      title: Text(title),
+      children: items
+          .map(
+            (item) => ListTile(
+              dense: true,
+              title: Text(item),
+              trailing: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => onRemove(item),
+              ),
+            ),
+          )
+          .toList(),
     );
   }
 }

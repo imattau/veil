@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:veil_sdk/veil_sdk.dart';
+
 class FeedEntry {
   final String id;
   final String author;
+  final String authorKey;
   final String body;
   final String? blurHash;
   final List<Attachment> attachments;
@@ -23,6 +25,7 @@ class FeedEntry {
   FeedEntry({
     required this.id,
     required this.author,
+    required this.authorKey,
     required this.body,
     this.blurHash,
     this.attachments = const [],
@@ -39,6 +42,7 @@ class FeedEntry {
   factory FeedEntry.empty() => FeedEntry(
     id: 'empty',
     author: '',
+    authorKey: '',
     body: '',
     reconstructed: false,
     timestamp: DateTime.now(),
@@ -93,7 +97,8 @@ class LinkPreviewCard extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: InkWell(
-        onTap: () => launchUrl(preview.url, mode: LaunchMode.externalApplication),
+        onTap: () =>
+            launchUrl(preview.url, mode: LaunchMode.externalApplication),
         child: Container(
           decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -138,19 +143,16 @@ class LinkPreviewCard extends StatelessWidget {
                           preview.description!,
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodySmall
+                          style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: Colors.white70),
                         ),
                       ],
                       const SizedBox(height: 6),
                       Text(
                         preview.url.host,
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodySmall
-                            ?.copyWith(color: Colors.white54),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: Colors.white54),
                       ),
                     ],
                   ),
@@ -185,7 +187,9 @@ class _VideoAttachmentPreviewState extends State<VideoAttachmentPreview> {
   }
 
   Future<void> _init() async {
-    final temp = await File('${Directory.systemTemp.path}/${DateTime.now().millisecondsSinceEpoch}.mp4').create();
+    final temp = await File(
+      '${Directory.systemTemp.path}/${DateTime.now().millisecondsSinceEpoch}.mp4',
+    ).create();
     await temp.writeAsBytes(widget.bytes, flush: true);
     final controller = VideoPlayerController.file(temp);
     await controller.initialize();

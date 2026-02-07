@@ -46,6 +46,7 @@ class VeilAppController extends ChangeNotifier {
     'Open Media',
   ];
   final Set<String> _trustedFeeds = {};
+  final LocalWotPolicy _wotPolicy = LocalWotPolicy();
 
   String displayName = '';
   String recoveryPhrase = '';
@@ -139,9 +140,14 @@ class VeilAppController extends ChangeNotifier {
       _client?.fallbackLane?.healthSnapshot() ??
       _fallbackLane?.healthSnapshot();
   List<FeedEntry> get feed => List.unmodifiable(_feed);
+  List<FeedEntry> get visibleFeed =>
+      List.unmodifiable(_feed.where((entry) => !isBlocked(entry.authorKey)));
   List<String> get events => List.unmodifiable(_events);
   List<String> get suggestedFeeds => List.unmodifiable(_suggestedFeeds);
   Set<String> get trustedFeeds => Set.unmodifiable(_trustedFeeds);
+  List<String> get followedUsers => _wotPolicy.trusted;
+  List<String> get mutedUsers => _wotPolicy.muted;
+  List<String> get blockedUsers => _wotPolicy.blocked;
   List<String> get extraTags => List.unmodifiable(_extraTags);
   List<String> get forwardPeers => List.unmodifiable(_forwardPeers);
   List<String> get wsEndpoints => List.unmodifiable(_wsEndpoints);
@@ -343,6 +349,18 @@ class VeilAppController extends ChangeNotifier {
     _trustedFeeds
       ..clear()
       ..addAll(prefs.getStringList('trustedFeeds') ?? const []);
+    final followed = prefs.getStringList('followedUsers') ?? const [];
+    final muted = prefs.getStringList('mutedUsers') ?? const [];
+    final blocked = prefs.getStringList('blockedUsers') ?? const [];
+    for (final id in followed) {
+      _wotPolicy.trust(id);
+    }
+    for (final id in muted) {
+      _wotPolicy.mute(id);
+    }
+    for (final id in blocked) {
+      _wotPolicy.block(id);
+    }
     recoveryPhrase =
         await _secureStorage.read(key: 'recoveryPhrase') ?? recoveryPhrase;
     notifyListeners();
@@ -385,6 +403,9 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setStringList('extraTags', _extraTags);
     await prefs.setStringList('forwardPeers', _forwardPeers);
     await prefs.setStringList('trustedFeeds', _trustedFeeds.toList());
+    await prefs.setStringList('followedUsers', _wotPolicy.trusted);
+    await prefs.setStringList('mutedUsers', _wotPolicy.muted);
+    await prefs.setStringList('blockedUsers', _wotPolicy.blocked);
   }
 
   Future<void> _openDb() async {
@@ -969,6 +990,7 @@ class VeilAppController extends ChangeNotifier {
     final entry = FeedEntry(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       author: displayName,
+      authorKey: displayName.isEmpty ? 'self' : displayName.toLowerCase(),
       body: text.trim(),
       attachments: attachments,
       linkPreviews: previews,
@@ -1072,6 +1094,7 @@ class VeilAppController extends ChangeNotifier {
         FeedEntry(
           id: 'ghost-$i',
           author: '...',
+          authorKey: '',
           body: '...',
           blurHash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj',
           reconstructed: false,
@@ -1127,6 +1150,60 @@ class VeilAppController extends ChangeNotifier {
       addSkeletons();
     }
     notifyListeners();
+  }
+
+  TrustTier trustTierFor(String authorKey) {
+    if (authorKey.isEmpty) return TrustTier.unknown;
+    return _wotPolicy.classify(authorKey);
+  }
+
+  bool isBlocked(String authorKey) =>
+      authorKey.isNotEmpty &&
+      _wotPolicy.classify(authorKey) == TrustTier.blocked;
+
+  void followUser(String authorKey) {
+    if (authorKey.isEmpty) return;
+    _wotPolicy.trust(authorKey);
+    _persistPrefs();
+    _events.insert(0, 'Followed $authorKey');
+    _notify();
+  }
+
+  void muteUser(String authorKey) {
+    if (authorKey.isEmpty) return;
+    _wotPolicy.mute(authorKey);
+    _persistPrefs();
+    _events.insert(0, 'Muted $authorKey');
+    _notify();
+  }
+
+  void blockUser(String authorKey) {
+    if (authorKey.isEmpty) return;
+    _wotPolicy.block(authorKey);
+    _persistPrefs();
+    _events.insert(0, 'Blocked $authorKey');
+    _notify();
+  }
+
+  void unmuteUser(String authorKey) {
+    if (authorKey.isEmpty) return;
+    _wotPolicy.unmute(authorKey);
+    _persistPrefs();
+    _notify();
+  }
+
+  void unblockUser(String authorKey) {
+    if (authorKey.isEmpty) return;
+    _wotPolicy.unblock(authorKey);
+    _persistPrefs();
+    _notify();
+  }
+
+  void unfollowUser(String authorKey) {
+    if (authorKey.isEmpty) return;
+    _wotPolicy.untrust(authorKey);
+    _persistPrefs();
+    _notify();
   }
 
   void _startEpochTimer() {

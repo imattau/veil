@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blurhash/flutter_blurhash.dart';
+import 'package:veil_sdk/veil_sdk.dart';
 
 import '../app_controller.dart';
 import '../helpers/hashtags.dart';
@@ -9,6 +10,7 @@ import '../helpers/media_viewer.dart';
 import '../models.dart';
 import 'inspect.dart';
 import 'widgets.dart';
+
 class HomeFeed extends StatelessWidget {
   final VeilAppController controller;
   final bool showProtocolDetails;
@@ -21,7 +23,7 @@ class HomeFeed extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final items = controller.feed;
+    final items = controller.visibleFeed;
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: items.isEmpty ? 1 : items.length,
@@ -31,6 +33,7 @@ class HomeFeed extends StatelessWidget {
         }
         final entry = items[index];
         return PostCard(
+          controller: controller,
           entry: entry,
           showProtocolDetails: showProtocolDetails,
           onTapHashtag: (tag) async {
@@ -56,12 +59,14 @@ class HomeFeed extends StatelessWidget {
 }
 
 class PostCard extends StatelessWidget {
+  final VeilAppController controller;
   final FeedEntry entry;
   final bool showProtocolDetails;
   final ValueChanged<String> onTapHashtag;
 
   const PostCard({
     super.key,
+    required this.controller,
     required this.entry,
     required this.showProtocolDetails,
     required this.onTapHashtag,
@@ -106,6 +111,7 @@ class PostCard extends StatelessWidget {
       );
     }
     return _PostCardAnimated(
+      controller: controller,
       entry: entry,
       showProtocolDetails: showProtocolDetails,
       onTapHashtag: onTapHashtag,
@@ -113,12 +119,81 @@ class PostCard extends StatelessWidget {
   }
 }
 
+class _TrustActions extends StatelessWidget {
+  final VeilAppController controller;
+  final String authorKey;
+
+  const _TrustActions({required this.controller, required this.authorKey});
+
+  @override
+  Widget build(BuildContext context) {
+    final tier = controller.trustTierFor(authorKey);
+    final isTrusted = tier == TrustTier.trusted;
+    final isMuted = tier == TrustTier.muted;
+    final isBlocked = tier == TrustTier.blocked;
+    return Row(
+      children: [
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          icon: Icon(
+            isTrusted ? Icons.favorite : Icons.favorite_border,
+            color: isTrusted ? Colors.greenAccent : Colors.white70,
+            size: 18,
+          ),
+          onPressed: () {
+            if (isTrusted) {
+              controller.unfollowUser(authorKey);
+            } else {
+              controller.followUser(authorKey);
+            }
+          },
+          tooltip: isTrusted ? 'Unfollow' : 'Follow',
+        ),
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          icon: Icon(
+            isMuted ? Icons.volume_off : Icons.volume_up,
+            color: isMuted ? Colors.amber : Colors.white70,
+            size: 18,
+          ),
+          onPressed: () {
+            if (isMuted) {
+              controller.unmuteUser(authorKey);
+            } else {
+              controller.muteUser(authorKey);
+            }
+          },
+          tooltip: isMuted ? 'Unmute' : 'Mute',
+        ),
+        IconButton(
+          visualDensity: VisualDensity.compact,
+          icon: Icon(
+            isBlocked ? Icons.block : Icons.block_outlined,
+            color: isBlocked ? Colors.redAccent : Colors.white70,
+            size: 18,
+          ),
+          onPressed: () {
+            if (isBlocked) {
+              controller.unblockUser(authorKey);
+            } else {
+              controller.blockUser(authorKey);
+            }
+          },
+          tooltip: isBlocked ? 'Unblock' : 'Block',
+        ),
+      ],
+    );
+  }
+}
+
 class _PostCardAnimated extends StatefulWidget {
+  final VeilAppController controller;
   final FeedEntry entry;
   final bool showProtocolDetails;
   final ValueChanged<String> onTapHashtag;
 
   const _PostCardAnimated({
+    required this.controller,
     required this.entry,
     required this.showProtocolDetails,
     required this.onTapHashtag,
@@ -151,6 +226,7 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
   @override
   Widget build(BuildContext context) {
     final entry = widget.entry;
+    final controller = widget.controller;
     return FadeTransition(
       opacity: CurvedAnimation(parent: _controller, curve: Curves.easeOut),
       child: Padding(
@@ -190,10 +266,19 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                   ),
+                  if (entry.authorKey.isNotEmpty)
+                    _TrustActions(
+                      controller: controller,
+                      authorKey: entry.authorKey,
+                    ),
                   if (entry.reconstructed)
                     Row(
                       children: const [
-                        Icon(Icons.verified, size: 16, color: Color(0xFF34D399)),
+                        Icon(
+                          Icons.verified,
+                          size: 16,
+                          color: Color(0xFF34D399),
+                        ),
                         SizedBox(width: 4),
                         Text('Reconstructed'),
                       ],
@@ -246,9 +331,9 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
                                         textAlign: TextAlign.center,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall,
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
                                       ),
                                       const SizedBox(height: 6),
                                       Text(
@@ -299,9 +384,7 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                       'Collecting shards',
                       style: Theme.of(
                         context,
-                      ).textTheme.bodySmall?.copyWith(
-                        color: Colors.white70,
-                      ),
+                      ).textTheme.bodySmall?.copyWith(color: Colors.white70),
                     ),
                   ],
                 ),
@@ -319,9 +402,7 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                         'Requesting missing shard',
                         style: Theme.of(
                           context,
-                        ).textTheme.bodySmall?.copyWith(
-                          color: Colors.white70,
-                        ),
+                        ).textTheme.bodySmall?.copyWith(color: Colors.white70),
                       ),
                     ],
                   ),
@@ -331,9 +412,9 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                 const SizedBox(height: 8),
                 Text(
                   'protocol details available in Inspect',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Colors.white70,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.white70),
                 ),
               ],
               Align(
