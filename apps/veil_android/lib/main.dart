@@ -263,11 +263,11 @@ class _RootShellState extends State<RootShell> {
         return Scaffold(
           appBar: AppBar(
             titleSpacing: 12,
-            title: GestureDetector(
-              onTap: _openProfile,
-              child: Row(
-                children: [
-                  _controller.profileAvatar?.isImage == true
+            title: Row(
+              children: [
+                GestureDetector(
+                  onTap: _openProfile,
+                  child: _controller.profileAvatar?.isImage == true
                       ? CircleAvatar(
                           radius: 16,
                           backgroundImage:
@@ -278,8 +278,11 @@ class _RootShellState extends State<RootShell> {
                           width: 28,
                           height: 28,
                         ),
-                  const SizedBox(width: 10),
-                  Expanded(
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: _openProfile,
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -301,8 +304,8 @@ class _RootShellState extends State<RootShell> {
                       ],
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
             actions: [
               Chip(
