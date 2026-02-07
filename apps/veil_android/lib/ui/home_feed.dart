@@ -1,10 +1,11 @@
 import 'dart:typed_data';
 
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_blurhash/flutter_blurhash.dart';
 
 import '../app_controller.dart';
+import '../helpers/hashtags.dart';
+import '../helpers/media_viewer.dart';
 import '../models.dart';
 import 'inspect.dart';
 import 'widgets.dart';
@@ -144,51 +145,6 @@ class HeaderCard extends StatelessWidget {
       ),
     );
   }
-}
-
-final RegExp _hashtagPattern = RegExp(
-  r'(#[A-Za-z0-9_][A-Za-z0-9_-]{0,49})',
-);
-
-Widget _buildPostBody(
-  BuildContext context,
-  String text,
-  ValueChanged<String> onTapHashtag,
-) {
-  final matches = _hashtagPattern.allMatches(text).toList();
-  if (matches.isEmpty) {
-    return Text(text);
-  }
-  final spans = <InlineSpan>[];
-  var cursor = 0;
-  for (final match in matches) {
-    if (match.start > cursor) {
-      spans.add(TextSpan(text: text.substring(cursor, match.start)));
-    }
-    final tag = match.group(0) ?? '';
-    spans.add(
-      TextSpan(
-        text: tag,
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: const Color(0xFF7DD3FC),
-              fontWeight: FontWeight.w600,
-            ),
-        recognizer: TapGestureRecognizer()
-          ..onTap = () {
-            final cleaned = tag.substring(1);
-            if (cleaned.isEmpty) return;
-            onTapHashtag(cleaned);
-          },
-      ),
-    );
-    cursor = match.end;
-  }
-  if (cursor < text.length) {
-    spans.add(TextSpan(text: text.substring(cursor)));
-  }
-  return Text.rich(
-    TextSpan(style: Theme.of(context).textTheme.bodyMedium, children: spans),
-  );
 }
 
 class PostCard extends StatelessWidget {
@@ -337,7 +293,7 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                 ],
               ),
               const SizedBox(height: 12),
-              _buildPostBody(context, entry.body, widget.onTapHashtag),
+              buildHashtagText(context, entry.body, widget.onTapHashtag),
               if (entry.attachments.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 SizedBox(
@@ -359,7 +315,7 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                                 )
                               : attachment.isImage
                               ? GestureDetector(
-                                  onTap: () => _openImageViewer(
+                                  onTap: () => openImageViewer(
                                     context,
                                     attachment.bytes,
                                     attachment.name,
@@ -486,39 +442,6 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
       ),
     );
   }
-}
-
-void _openImageViewer(BuildContext context, Uint8List bytes, String title) {
-  showDialog(
-    context: context,
-    builder: (context) => Dialog(
-      backgroundColor: Colors.black,
-      insetPadding: const EdgeInsets.all(12),
-      child: Stack(
-        children: [
-          InteractiveViewer(
-            child: Image.memory(bytes, fit: BoxFit.contain),
-          ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: IconButton(
-              icon: const Icon(Icons.close, color: Colors.white),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-          ),
-          Positioned(
-            left: 12,
-            bottom: 12,
-            child: Text(
-              title,
-              style: const TextStyle(color: Colors.white70),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
 }
 
 void _openInspect(BuildContext context, FeedEntry entry) {

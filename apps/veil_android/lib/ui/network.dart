@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
 import '../app_controller.dart';
-import 'discovery.dart';
+import '../helpers/scan_helpers.dart';
 import 'widgets.dart';
+
 class NetworkView extends StatefulWidget {
   final VeilAppController controller;
 

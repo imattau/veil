@@ -7,7 +7,6 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:mime/mime.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,6 +14,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
 import 'models.dart';
+import 'services/link_preview_service.dart';
 class VeilAppController extends ChangeNotifier {
   final _bridge = const VeilBridge();
   final _ble = FlutterReactiveBle();
