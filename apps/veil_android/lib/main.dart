@@ -1103,8 +1103,7 @@ class FeedEntry {
     required this.body,
     this.blurHash,
     this.attachments = const [],
-    List<LinkPreview>? linkPreviews,
-    this.linkPreviews = linkPreviews ?? <LinkPreview>[],
+    List<LinkPreview> linkPreviews = const [],
     required this.reconstructed,
     required this.timestamp,
     this.isGhost = false,
@@ -1112,7 +1111,7 @@ class FeedEntry {
     this.shardsTotal = 16,
     this.requestingMissing = false,
     this.fadedIn = false,
-  });
+  }) : linkPreviews = linkPreviews;
 
   factory FeedEntry.empty() => FeedEntry(
     id: 'empty',
@@ -1205,8 +1204,8 @@ class LinkPreviewService {
     String? image;
 
     final metaTag = RegExp(r'<meta[^>]+>', caseSensitive: false);
-    final attr = RegExp(r'(property|name)=[\"\\\']([^\"\\\']+)[\"\\\']');
-    final content = RegExp(r'content=[\"\\\']([^\"\\\']+)[\"\\\']');
+    final attr = RegExp("(property|name)=[\"']([^\"']+)[\"']");
+    final content = RegExp("content=[\"']([^\"']+)[\"']");
     for (final match in metaTag.allMatches(html)) {
       final tag = match.group(0) ?? '';
       final attrMatch = attr.firstMatch(tag);
