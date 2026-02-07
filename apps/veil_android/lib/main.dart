@@ -184,6 +184,37 @@ class _VeilHomePageState extends State<VeilHomePage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: Image.asset(
+              'assets/veil_header.png',
+              height: 140,
+              fit: BoxFit.cover,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Image.asset('assets/veil_logo.png', width: 48, height: 48),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('VEIL Android', style: theme.textTheme.headlineSmall),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Self-contained relay + client runtime',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
           _Panel(
             title: 'Connection',
             child: Column(
