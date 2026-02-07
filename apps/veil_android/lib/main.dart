@@ -198,9 +198,19 @@ class _RootShellState extends State<RootShell> {
         controller: _controller,
         onEdit: () {
           Navigator.of(context).pop();
-          _openSettings();
+          _openProfileEdit();
         },
       ),
+    );
+  }
+
+  void _openProfileEdit() {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => ProfileEditSheet(controller: _controller),
     );
   }
 
@@ -3161,24 +3171,6 @@ class SettingsSheet extends StatelessWidget {
                   padding: const EdgeInsets.all(16),
                   children: [
                     const SizedBox(height: 8),
-                    Text(
-                      'PROFILE',
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        letterSpacing: 2,
-                        color: Colors.white70,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _ProfileEditor(controller: controller),
-                    const SizedBox(height: 16),
-                    Text(
-                      'SETTINGS',
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        letterSpacing: 2,
-                        color: Colors.white70,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
                     SwitchListTile(
                       value: showProtocolDetails,
                       onChanged: onToggleDetails,
@@ -3439,6 +3431,50 @@ class ProfileSheet extends StatelessWidget {
                           ),
                         ],
                       ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ProfileEditSheet extends StatelessWidget {
+  final VeilAppController controller;
+
+  const ProfileEditSheet({super.key, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Container(
+            color: Theme.of(context).colorScheme.surface.withOpacity(0.9),
+            child: DraggableScrollableSheet(
+              initialChildSize: 0.8,
+              minChildSize: 0.5,
+              maxChildSize: 0.95,
+              expand: false,
+              builder: (context, scrollController) {
+                return ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    Text(
+                      'EDIT PROFILE',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        letterSpacing: 2,
+                        color: Colors.white70,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _ProfileEditor(controller: controller),
                   ],
                 );
               },
