@@ -21,6 +21,7 @@ class _NetworkViewState extends State<NetworkView> {
   late final TextEditingController _bleDeviceController;
   late final TextEditingController _bleServiceController;
   late final TextEditingController _bleCharController;
+  late final TextEditingController _quicController;
 
   @override
   void initState() {
@@ -34,6 +35,7 @@ class _NetworkViewState extends State<NetworkView> {
     _bleDeviceController = TextEditingController(text: c.bleDeviceId);
     _bleServiceController = TextEditingController(text: c.bleServiceUuid);
     _bleCharController = TextEditingController(text: c.bleCharacteristicUuid);
+    _quicController = TextEditingController(text: c.quicEndpointValue);
   }
 
   @override
@@ -44,6 +46,7 @@ class _NetworkViewState extends State<NetworkView> {
     _bleDeviceController.dispose();
     _bleServiceController.dispose();
     _bleCharController.dispose();
+    _quicController.dispose();
     super.dispose();
   }
 
@@ -215,6 +218,38 @@ class _NetworkViewState extends State<NetworkView> {
                 label: 'Characteristic UUID',
                 controller: _bleCharController,
                 onChanged: controller.setBleCharacteristicUuid,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Panel(
+          title: 'QUIC Lane (preview)',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'QUIC is not wired on mobile yet. This is a placeholder for upcoming transport support.',
+                style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+              ),
+              const SizedBox(height: 12),
+              InputField(
+                label: 'QUIC endpoint (quic://host:port)',
+                controller: _quicController,
+                onChanged: controller.setQuicEndpoint,
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: const [
+                  Icon(Icons.info_outline, size: 16, color: Colors.white60),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Placeholder lane. No packets are sent yet.',
+                      style: TextStyle(color: Colors.white60, fontSize: 12),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),

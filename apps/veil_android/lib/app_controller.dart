@@ -60,6 +60,7 @@ class VeilAppController extends ChangeNotifier {
   String bleDeviceId = '';
   String bleServiceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   String bleCharacteristicUuid = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+  String quicEndpoint = '';
 
   VeilClient? _client;
   WebSocketLane? _lane;
@@ -96,6 +97,7 @@ class VeilAppController extends ChangeNotifier {
   int get clockSkewSeconds => _clockSkewSeconds;
   int get maxCacheEntries => _maxCacheEntries;
   int get maxPublishQueue => _maxPublishQueue;
+  String get quicEndpointValue => quicEndpoint;
   String? get wsUrlError {
     if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
       return 'Use ws:// or wss://';
@@ -291,6 +293,7 @@ class VeilAppController extends ChangeNotifier {
     bleServiceUuid = prefs.getString('bleServiceUuid') ?? bleServiceUuid;
     bleCharacteristicUuid =
         prefs.getString('bleCharacteristicUuid') ?? bleCharacteristicUuid;
+    quicEndpoint = prefs.getString('quicEndpoint') ?? quicEndpoint;
     _useLocalRelay = prefs.getBool('useLocalRelay') ?? _useLocalRelay;
     _ghostMode = prefs.getBool('ghostMode') ?? _ghostMode;
     _bleEnabled = prefs.getBool('bleEnabled') ?? _bleEnabled;
@@ -335,6 +338,7 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setString('bleDeviceId', bleDeviceId);
     await prefs.setString('bleServiceUuid', bleServiceUuid);
     await prefs.setString('bleCharacteristicUuid', bleCharacteristicUuid);
+    await prefs.setString('quicEndpoint', quicEndpoint);
     await prefs.setBool('useLocalRelay', _useLocalRelay);
     await prefs.setBool('ghostMode', _ghostMode);
     await prefs.setBool('bleEnabled', _bleEnabled);
@@ -600,6 +604,12 @@ class VeilAppController extends ChangeNotifier {
 
   void setBleCharacteristicUuid(String value) {
     bleCharacteristicUuid = value.trim();
+    _persistPrefs();
+    notifyListeners();
+  }
+
+  void setQuicEndpoint(String value) {
+    quicEndpoint = value.trim();
     _persistPrefs();
     notifyListeners();
   }
