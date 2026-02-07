@@ -33,6 +33,9 @@ Enable built-in Caddy reverse proxy (only if you need it):
 docker compose -f apps/veil-vps-node/docker-compose.yml --profile proxy up -d --build
 ```
 
+When running with the proxy profile, the VPS node serves a landing page at
+`http://<your-domain>/` with a VEIL overview and a QR code for app onboarding.
+
 Copy the compose env template:
 
 ```bash

@@ -3,7 +3,21 @@
 }
 
 :80 {
-    reverse_proxy /ws/* veil-vps-node:8080
-    reverse_proxy /health veil-vps-node:9090
-    reverse_proxy /metrics veil-vps-node:9090
+    root * /srv
+
+    handle_path /ws/* {
+        reverse_proxy veil-vps-node:8080
+    }
+
+    handle /health {
+        reverse_proxy veil-vps-node:9090
+    }
+
+    handle /metrics {
+        reverse_proxy veil-vps-node:9090
+    }
+
+    handle {
+        file_server
+    }
 }

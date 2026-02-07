@@ -9,6 +9,8 @@ WorkingDirectory=/opt/veil-vps-node
 ExecStart=/opt/veil-vps-node/veil-vps-node
 Restart=always
 RestartSec=2
+User=veil-vps
+Group=veil-vps
 
 # Environment file with VEIL_VPS_* settings
 EnvironmentFile=/opt/veil-vps-node/veil-vps-node.env

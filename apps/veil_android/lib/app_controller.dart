@@ -521,6 +521,11 @@ class VeilAppController extends ChangeNotifier {
   void handleScanValue(String value) {
     final raw = value.trim();
     if (raw.isEmpty) return;
+    if (_importVpsProfile(raw)) {
+      _events.insert(0, 'Imported VPS profile');
+      _notify();
+      return;
+    }
     final lower = raw.toLowerCase();
     if (lower.startsWith('peer:')) {
       addForwardPeer(raw.substring(5));
@@ -543,6 +548,59 @@ class VeilAppController extends ChangeNotifier {
     }
     _events.insert(0, 'Scan not recognized: $raw');
     notifyListeners();
+  }
+
+  bool _importVpsProfile(String raw) {
+    final lower = raw.toLowerCase();
+    if (!lower.startsWith('veil://') &&
+        !lower.startsWith('veil:vps:') &&
+        !lower.startsWith('vps:')) {
+      return false;
+    }
+
+    Uri? uri;
+    if (lower.startsWith('veil://')) {
+      uri = Uri.tryParse(raw);
+    } else if (lower.startsWith('vps:')) {
+      uri = Uri.tryParse('veil://${raw.substring(4)}');
+    } else if (lower.startsWith('veil:vps:')) {
+      uri = Uri.tryParse('veil://${raw.substring(9)}');
+    }
+    if (uri == null) return false;
+    final host = uri.host.toLowerCase();
+    if (host.isNotEmpty && host != 'vps') {
+      return false;
+    }
+    final wsEndpoints = uri.queryParametersAll['ws'] ?? const [];
+    final peers = uri.queryParametersAll['peer'] ?? const [];
+    final tags = uri.queryParametersAll['tag'] ?? const [];
+    final quic = uri.queryParameters['quic'];
+    final cert = uri.queryParameters['cert'];
+
+    for (final ws in wsEndpoints) {
+      addWsEndpoint(ws);
+      if (wsUrl.isEmpty) {
+        wsUrl = ws;
+      }
+    }
+    if (quic != null && quic.isNotEmpty) {
+      setQuicEndpoint(quic);
+    }
+    if (cert != null && cert.isNotEmpty) {
+      setQuicTrustedCert(cert);
+    }
+    for (final peer in peers) {
+      addForwardPeer(peer);
+    }
+    for (final tag in tags) {
+      addSubscription(tag);
+    }
+    _persistPrefs();
+    notifyListeners();
+    return wsEndpoints.isNotEmpty ||
+        peers.isNotEmpty ||
+        tags.isNotEmpty ||
+        (quic != null && quic.isNotEmpty);
   }
 
   void addForwardPeer(String value) {

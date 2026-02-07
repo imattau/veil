@@ -146,6 +146,26 @@ class _NetworkViewState extends State<NetworkView> {
                     },
                     errorText: wsError,
                   ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Icon(Icons.qr_code_scanner, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Scan a veil://vps profile to auto-import endpoints.',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => openScanner(
+                          context,
+                          onResult: controller.handleScanValue,
+                        ),
+                        child: const Text('Scan'),
+                      ),
+                    ],
+                  ),
                   InputField(
                     label: 'Add WebSocket endpoint',
                     controller: _wsAddController,
