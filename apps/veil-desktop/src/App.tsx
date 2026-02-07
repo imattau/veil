@@ -43,6 +43,9 @@ export default function App() {
     setLogs([...logBuffer.current]);
   };
 
+  const lastEvent = logs[0]?.message ?? "No activity yet";
+  const totalEvents = logs.length;
+
   useEffect(() => {
     return () => {
       clientRef.current?.stop();
@@ -140,6 +143,9 @@ export default function App() {
           <div>
             <p className="eyebrow">VEIL Desktop</p>
             <h1>Edge Client Console</h1>
+            <p className="subtitle">
+              Multi-lane relay + cache monitor for local operators.
+            </p>
           </div>
           <div className={`status ${connected ? "ok" : "idle"}`}>
             {connected ? "CONNECTED" : "IDLE"}
@@ -168,10 +174,10 @@ export default function App() {
             <input value={tagHex} onChange={(e) => setTagHex(e.target.value)} />
           </label>
           <div className="buttons">
-            <button onClick={connect} disabled={connected}>
+            <button className="primary" onClick={connect} disabled={connected}>
               Start
             </button>
-            <button onClick={disconnect} disabled={!connected}>
+            <button className="ghost" onClick={disconnect} disabled={!connected}>
               Stop
             </button>
             <button onClick={updateSubscription} disabled={!connected}>
@@ -181,10 +187,27 @@ export default function App() {
         </section>
 
         <section className="section">
+          <h2>Subscriptions</h2>
+          <div className="pill-row">
+            {clientRef.current?.listSubscriptions()?.length ? (
+              clientRef.current
+                ?.listSubscriptions()
+                .map((sub) => (
+                  <span className="pill" key={sub}>
+                    {sub.slice(0, 10)}...
+                  </span>
+                ))
+            ) : (
+              <span className="muted">None yet</span>
+            )}
+          </div>
+        </section>
+
+        <section className="section">
           <h2>Lane Health</h2>
           <div className="health-grid">
             <div>
-              <p>Fast Lane Score</p>
+              <p>Fast Score</p>
               <strong>{laneHealth?.fast.score.toFixed(2) ?? "-"}</strong>
             </div>
             <div>
@@ -213,9 +236,21 @@ export default function App() {
       </aside>
 
       <main className="feed">
-        <header>
-          <h2>Shard Activity</h2>
-          <p>{connected ? "Live updates" : "Waiting for connection"}</p>
+        <header className="feed-header">
+          <div>
+            <h2>Shard Activity</h2>
+            <p>{connected ? "Live updates" : "Waiting for connection"}</p>
+          </div>
+          <div className="kpi">
+            <div>
+              <p>Total Events</p>
+              <strong>{totalEvents}</strong>
+            </div>
+            <div>
+              <p>Latest</p>
+              <span>{lastEvent}</span>
+            </div>
+          </div>
         </header>
         <div className="log">
           {logs.length === 0 ? (
