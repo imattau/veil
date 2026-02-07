@@ -1,0 +1,81 @@
+name: Publish F-Droid Repo
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+jobs:
+  fdroid:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "stable"
+
+      - name: Install Android SDK build tools
+        uses: android-actions/setup-android@v3
+
+      - name: Decode Android keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_B64 != '' }}
+        run: |
+          echo "${ANDROID_KEYSTORE_B64}" | base64 -d > apps/veil_android/android/app/veil_keystore.jks
+          cat > apps/veil_android/android/key.properties <<EOF
+          storeFile=veil_keystore.jks
+          storePassword=${ANDROID_KEYSTORE_PASSWORD}
+          keyPassword=${ANDROID_KEY_PASSWORD}
+          keyAlias=${ANDROID_KEY_ALIAS}
+          EOF
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Build release APK
+        working-directory: apps/veil_android
+        run: |
+          flutter pub get
+          flutter build apk --release
+
+      - name: Install fdroidserver
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install fdroidserver
+
+      - name: Decode F-Droid keystore
+        run: |
+          mkdir -p fdroid
+          echo "${FDROID_KEYSTORE_B64}" | base64 -d > fdroid/keystore.jks
+        env:
+          FDROID_KEYSTORE_B64: ${{ secrets.FDROID_KEYSTORE_B64 }}
+
+      - name: Build F-Droid repo
+        run: |
+          export FDROID_REPO_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/repo"
+          export FDROID_KEYSTORE_PASS="${{ secrets.FDROID_KEYSTORE_PASS }}"
+          export FDROID_KEY_ALIAS="${{ secrets.FDROID_KEY_ALIAS }}"
+          export FDROID_KEY_PASS="${{ secrets.FDROID_KEY_PASS }}"
+          ./scripts/fdroid/build_repo.sh
+
+      - name: Publish to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./fdroid
+          publish_branch: gh-pages
+          force_orphan: true
