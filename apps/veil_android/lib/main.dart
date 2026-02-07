@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blurhash/flutter_blurhash.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:veil_sdk/veil_sdk.dart';
@@ -19,7 +21,7 @@ class VeilAndroidApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = ColorScheme.fromSeed(
+    final colorSchemeDark = ColorScheme.fromSeed(
       seedColor: const Color(0xFFFB7C31),
       brightness: Brightness.dark,
       primary: const Color(0xFFFFA45C),
@@ -27,17 +29,39 @@ class VeilAndroidApp extends StatelessWidget {
       surface: const Color(0xFF0B111B),
       surfaceContainerHighest: const Color(0xFF101827),
     );
+    final colorSchemeLight = ColorScheme.fromSeed(
+      seedColor: const Color(0xFFFB7C31),
+      brightness: Brightness.light,
+      primary: const Color(0xFFEF6C00),
+      secondary: const Color(0xFF0E9F6E),
+      surface: const Color(0xFFF8FAFC),
+      surfaceContainerHighest: const Color(0xFFE2E8F0),
+    );
     return MaterialApp(
       title: 'VEIL Android',
-      theme: ThemeData(
-        colorScheme: colorScheme,
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFF0B0F17),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF0B0F17),
-          elevation: 0,
-        ),
-        textTheme: ThemeData.dark().textTheme.copyWith(
+      themeMode: ThemeMode.system,
+      theme: _buildTheme(colorSchemeLight, Brightness.light),
+      darkTheme: _buildTheme(colorSchemeDark, Brightness.dark),
+      home: const RootShell(),
+    );
+  }
+}
+
+ThemeData _buildTheme(ColorScheme scheme, Brightness brightness) {
+  final isDark = brightness == Brightness.dark;
+  final background = isDark ? const Color(0xFF0B0F17) : const Color(0xFFF8FAFC);
+  final onSurface = isDark ? Colors.white : const Color(0xFF0F172A);
+  final border = isDark ? const Color(0xFF1F2937) : const Color(0xFFE2E8F0);
+  return ThemeData(
+    colorScheme: scheme,
+    useMaterial3: true,
+    scaffoldBackgroundColor: background,
+    appBarTheme: AppBarTheme(
+      backgroundColor: background,
+      elevation: 0,
+      foregroundColor: onSurface,
+    ),
+    textTheme: (isDark ? ThemeData.dark() : ThemeData.light()).textTheme.copyWith(
           headlineMedium: const TextStyle(
             fontSize: 28,
             fontWeight: FontWeight.w700,
@@ -56,62 +80,59 @@ class VeilAndroidApp extends StatelessWidget {
             height: 1.35,
           ),
         ),
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: const Color(0xFF111827),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: const BorderSide(color: Color(0xFF1F2937)),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: const BorderSide(color: Color(0xFF1F2937)),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide(color: colorScheme.primary, width: 1.2),
-          ),
-          labelStyle: const TextStyle(color: Color(0xFF9CA3AF)),
-          hintStyle: const TextStyle(color: Color(0xFF6B7280)),
-        ),
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: colorScheme.primary,
-            foregroundColor: const Color(0xFF0B0F17),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
-          ),
-        ),
-        outlinedButtonTheme: OutlinedButtonThemeData(
-          style: OutlinedButton.styleFrom(
-            side: const BorderSide(color: Color(0xFF1F2937)),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
-          ),
-        ),
-        chipTheme: ChipThemeData(
-          backgroundColor: const Color(0xFF0F172A),
-          side: const BorderSide(color: Color(0xFF1F2937)),
-          labelStyle: const TextStyle(color: Colors.white),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(999),
-          ),
-        ),
-        navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: const Color(0xFF0B0F17),
-          indicatorColor: const Color(0xFF1F2937),
-          labelTextStyle: WidgetStateProperty.all(
-            const TextStyle(fontWeight: FontWeight.w600),
-          ),
-        ),
+    inputDecorationTheme: InputDecorationTheme(
+      filled: true,
+      fillColor: isDark ? const Color(0xFF111827) : const Color(0xFFF1F5F9),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: border),
       ),
-      home: const RootShell(),
-    );
-  }
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: scheme.primary, width: 1.2),
+      ),
+      labelStyle: TextStyle(color: isDark ? const Color(0xFF9CA3AF) : const Color(0xFF475569)),
+      hintStyle: TextStyle(color: isDark ? const Color(0xFF6B7280) : const Color(0xFF64748B)),
+    ),
+    elevatedButtonTheme: ElevatedButtonThemeData(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: scheme.primary,
+        foregroundColor: isDark ? const Color(0xFF0B0F17) : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        side: const BorderSide(color: Color(0xFF1F2937)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+      ),
+    ),
+    chipTheme: ChipThemeData(
+      backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFE2E8F0),
+      side: const BorderSide(color: Color(0xFF1F2937)),
+      labelStyle: TextStyle(color: onSurface),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(999),
+      ),
+    ),
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: background,
+      indicatorColor: isDark ? const Color(0xFF1F2937) : const Color(0xFFE2E8F0),
+      labelTextStyle: WidgetStateProperty.all(
+        const TextStyle(fontWeight: FontWeight.w600),
+      ),
+    ),
+  );
 }
 
 class RootShell extends StatefulWidget {
@@ -125,11 +146,12 @@ class _RootShellState extends State<RootShell> {
   final _controller = VeilAppController();
   int _tabIndex = 0;
   bool _showProtocolDetails = false;
+  late final Future<void> _initFuture;
 
   @override
   void initState() {
     super.initState();
-    _controller.init();
+    _initFuture = _controller.init();
   }
 
   @override
@@ -139,20 +161,20 @@ class _RootShellState extends State<RootShell> {
   }
 
   void _openCompose() {
-    showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (context) => ComposeSheet(
-        channelLabel: _controller.channelLabel.isNotEmpty
-            ? _controller.channelLabel
-            : _controller.tagHex.isNotEmpty
-                ? 'Custom tag'
-                : 'General',
-        onPublish: (text) {
-          _controller.publishLocalPost(text);
-          Navigator.of(context).pop();
-        },
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        fullscreenDialog: true,
+        builder: (context) => ComposeScreen(
+          channelLabel: _controller.channelLabel.isNotEmpty
+              ? _controller.channelLabel
+              : _controller.tagHex.isNotEmpty
+                  ? 'Custom tag'
+                  : 'General',
+          onPublish: (text) {
+            _controller.publishLocalPost(text);
+            Navigator.of(context).pop();
+          },
+        ),
       ),
     );
   }
@@ -161,6 +183,8 @@ class _RootShellState extends State<RootShell> {
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       builder: (context) => SettingsSheet(
         showProtocolDetails: _showProtocolDetails,
         onToggleDetails: (value) {
@@ -184,62 +208,76 @@ class _RootShellState extends State<RootShell> {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, _) {
-        if (!_controller.onboardingComplete) {
-          return OnboardingScreen(
-            controller: _controller,
-            onComplete: () => setState(() {}),
+    return FutureBuilder<void>(
+      future: _initFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
           );
         }
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('VEIL'),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.settings),
-                onPressed: _openSettings,
-              ),
-            ],
-          ),
-          floatingActionButton: _tabIndex == 3
-              ? null
-              : FloatingActionButton(
-                  onPressed: _openCompose,
-                  child: const Icon(Icons.edit),
-                ),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _tabIndex,
-            onDestinationSelected: (value) => setState(() => _tabIndex = value),
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.home_outlined),
-                label: 'Home',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.lock_outline),
-                label: 'Vault',
-              ),
-              NavigationDestination(icon: Icon(Icons.public), label: 'Network'),
-              NavigationDestination(
-                icon: Icon(Icons.explore_outlined),
-                label: 'Discover',
-              ),
-            ],
-          ),
-          body: IndexedStack(
-            index: _tabIndex,
-            children: [
-              HomeFeed(
+        return AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) {
+            if (!_controller.onboardingComplete) {
+              return OnboardingScreen(
                 controller: _controller,
-                showProtocolDetails: _showProtocolDetails,
+                onComplete: () => setState(() {}),
+              );
+            }
+            return Scaffold(
+              appBar: AppBar(
+                title: const Text('VEIL'),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.settings),
+                    onPressed: _openSettings,
+                  ),
+                ],
               ),
-              VaultView(controller: _controller),
-              NetworkView(controller: _controller),
-              DiscoveryView(controller: _controller),
-            ],
-          ),
+              floatingActionButton: _tabIndex == 3
+                  ? null
+                  : FloatingActionButton(
+                      onPressed: _openCompose,
+                      child: const Icon(Icons.edit),
+                    ),
+              bottomNavigationBar: NavigationBar(
+                selectedIndex: _tabIndex,
+                onDestinationSelected: (value) =>
+                    setState(() => _tabIndex = value),
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.home_outlined),
+                    label: 'Home',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.lock_outline),
+                    label: 'Vault',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.public),
+                    label: 'Network',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.explore_outlined),
+                    label: 'Discover',
+                  ),
+                ],
+              ),
+              body: IndexedStack(
+                index: _tabIndex,
+                children: [
+                  HomeFeed(
+                    controller: _controller,
+                    showProtocolDetails: _showProtocolDetails,
+                  ),
+                  VaultView(controller: _controller),
+                  NetworkView(controller: _controller),
+                  DiscoveryView(controller: _controller),
+                ],
+              ),
+            );
+          },
         );
       },
     );
@@ -249,6 +287,7 @@ class _RootShellState extends State<RootShell> {
 class VeilAppController extends ChangeNotifier {
   final _bridge = const VeilBridge();
   final _ble = FlutterReactiveBle();
+  final _secureStorage = const FlutterSecureStorage();
   SharedPreferences? _prefs;
   final List<FeedEntry> _feed = [];
   final List<String> _events = [];
@@ -302,6 +341,22 @@ class VeilAppController extends ChangeNotifier {
   bool get epochOverlapActive => _epochOverlapActive;
   bool get requireSignedPublic => _requireSignedPublic;
   int get clockSkewSeconds => _clockSkewSeconds;
+  String? get wsUrlError {
+    if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+      return 'Use ws:// or wss://';
+    }
+    return null;
+  }
+
+  String? get channelError {
+    if (channelLabel.isEmpty) return null;
+    final isHex = RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(channelLabel);
+    final isTag = channelLabel.toLowerCase().startsWith('tag:');
+    if (isHex || isTag) {
+      return null;
+    }
+    return 'Use a label or tag:HEX';
+  }
   LaneHealthSnapshot? get fastLaneHealth =>
       _client?.fastLane.healthSnapshot() ?? _lane?.healthSnapshot();
   LaneHealthSnapshot? get fallbackLaneHealth =>
@@ -313,14 +368,29 @@ class VeilAppController extends ChangeNotifier {
   List<String> get extraTags => List.unmodifiable(_extraTags);
   List<String> get forwardPeers => List.unmodifiable(_forwardPeers);
 
-  void init() {
-    () async {
-      _prefs = await SharedPreferences.getInstance();
-      await _loadPrefs();
-      _startLocalRelay();
-      _startEpochTimer();
-      connect();
-    }();
+  String get connectionStatus {
+    if (!_connected) return 'OFFLINE';
+    final fast = fastLaneHealth;
+    final fallback = fallbackLaneHealth;
+    final fastOk = _laneHealthy(fast);
+    final fallbackOk = _laneHealthy(fallback);
+    if (fastOk && (fallbackOk || !_bleEnabled)) {
+      return 'LIVE';
+    }
+    return 'DEGRADED';
+  }
+
+  bool _laneHealthy(LaneHealthSnapshot? snapshot) {
+    if (snapshot == null) return false;
+    return snapshot.outboundSendErr < 3 || snapshot.outboundSendOk > 0;
+  }
+
+  Future<void> init() async {
+    _prefs = await SharedPreferences.getInstance();
+    await _loadPrefs();
+    _startLocalRelay();
+    _startEpochTimer();
+    connect();
   }
 
   void dispose() {
@@ -397,6 +467,8 @@ class VeilAppController extends ChangeNotifier {
     _trustedFeeds
       ..clear()
       ..addAll(prefs.getStringList('trustedFeeds') ?? const []);
+    recoveryPhrase =
+        await _secureStorage.read(key: 'recoveryPhrase') ?? recoveryPhrase;
     notifyListeners();
   }
 
@@ -618,11 +690,12 @@ class VeilAppController extends ChangeNotifier {
       'sable',
       'nova',
     ];
-    final rand = Random();
+    final rand = Random.secure();
     recoveryPhrase = List.generate(
       8,
       (_) => words[rand.nextInt(words.length)],
     ).join(' ');
+    _secureStorage.write(key: 'recoveryPhrase', value: recoveryPhrase);
   }
 
   Future<void> connect() async {
@@ -769,6 +842,7 @@ class VeilAppController extends ChangeNotifier {
         entry.isGhost = false;
         entry.shardsHave = entry.shardsTotal;
         entry.requestingMissing = false;
+        entry.fadedIn = false;
       }
     }
     _notify();
@@ -844,6 +918,7 @@ class FeedEntry {
   int shardsHave;
   int shardsTotal;
   bool requestingMissing;
+  bool fadedIn;
 
   FeedEntry({
     required this.id,
@@ -856,6 +931,7 @@ class FeedEntry {
     this.shardsHave = 0,
     this.shardsTotal = 16,
     this.requestingMissing = false,
+    this.fadedIn = false,
   });
 
   factory FeedEntry.empty() => FeedEntry(
@@ -937,7 +1013,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           decoration: const InputDecoration(
                             labelText: 'Start in',
                             filled: true,
-                            fillColor: Color(0xFF101827),
                           ),
                           items: const [
                             DropdownMenuItem(
@@ -1021,21 +1096,25 @@ class HomeFeed extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = controller.feed;
-    return ListView(
+    return ListView.builder(
       padding: const EdgeInsets.all(16),
-      children: [
-        HeaderCard(controller: controller),
-        const SizedBox(height: 16),
-        if (items.isEmpty)
-          const Center(child: CircularProgressIndicator())
-        else
-          ...items.map(
-            (entry) => PostCard(
-              entry: entry,
-              showProtocolDetails: showProtocolDetails,
-            ),
-          ),
-      ],
+      itemCount: items.isEmpty ? 2 : items.length + 2,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return HeaderCard(controller: controller);
+        }
+        if (index == 1) {
+          return const SizedBox(height: 16);
+        }
+        if (items.isEmpty) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final entry = items[index - 2];
+        return PostCard(
+          entry: entry,
+          showProtocolDetails: showProtocolDetails,
+        );
+      },
     );
   }
 }
@@ -1090,10 +1169,12 @@ class HeaderCard extends StatelessWidget {
             ),
           ),
           Chip(
-            label: Text(controller.connected ? 'LIVE' : 'OFFLINE'),
-            backgroundColor: controller.connected
+            label: Text(controller.connectionStatus),
+            backgroundColor: controller.connectionStatus == 'LIVE'
                 ? const Color(0xFF134E4A)
-                : const Color(0xFF3F2F0B),
+                : controller.connectionStatus == 'DEGRADED'
+                    ? const Color(0xFF3F2F0B)
+                    : const Color(0xFF3B1D1D),
           ),
         ],
       ),
@@ -1149,127 +1230,258 @@ class PostCard extends StatelessWidget {
         ),
       );
     }
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF0B1220), Color(0xFF0F172A)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFF1F2937)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.25),
-              blurRadius: 14,
-              offset: const Offset(0, 8),
+    return _PostCardAnimated(
+      entry: entry,
+      showProtocolDetails: showProtocolDetails,
+    );
+  }
+}
+
+class _PostCardAnimated extends StatefulWidget {
+  final FeedEntry entry;
+  final bool showProtocolDetails;
+
+  const _PostCardAnimated({
+    required this.entry,
+    required this.showProtocolDetails,
+  });
+
+  @override
+  State<_PostCardAnimated> createState() => _PostCardAnimatedState();
+}
+
+class _PostCardAnimatedState extends State<_PostCardAnimated>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 400),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.forward();
+    widget.entry.fadedIn = true;
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final entry = widget.entry;
+    return FadeTransition(
+      opacity: CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF0B1220), Color(0xFF0F172A)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const CircleAvatar(
-                  radius: 18,
-                  backgroundColor: Color(0xFF1E293B),
-                  child: Icon(Icons.person, size: 18),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    entry.author,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                if (entry.reconstructed)
-                  Row(
-                    children: const [
-                      Icon(Icons.verified, size: 16, color: Color(0xFF34D399)),
-                      SizedBox(width: 4),
-                      Text('Reconstructed'),
-                    ],
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(entry.body),
-            if (entry.blurHash != null) ...[
-              const SizedBox(height: 12),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: SizedBox(
-                  height: 180,
-                  width: double.infinity,
-                  child: BlurHash(
-                    hash: entry.blurHash!,
-                    duration: const Duration(milliseconds: 300),
-                  ),
-                ),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF1F2937)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.25),
+                blurRadius: 14,
+                offset: const Offset(0, 8),
               ),
             ],
-            if (!entry.reconstructed) ...[
-              const SizedBox(height: 12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Row(
                 children: [
-                  _ShardProgressRing(
-                    have: entry.shardsHave,
-                    total: entry.shardsTotal,
+                  const CircleAvatar(
+                    radius: 18,
+                    backgroundColor: Color(0xFF1E293B),
+                    child: Icon(Icons.person, size: 18),
                   ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Collecting shards',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      entry.author,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                   ),
+                  if (entry.reconstructed)
+                    Row(
+                      children: const [
+                        Icon(Icons.verified, size: 16, color: Color(0xFF34D399)),
+                        SizedBox(width: 4),
+                        Text('Reconstructed'),
+                      ],
+                    ),
                 ],
               ),
-              if (entry.requestingMissing) ...[
-                const SizedBox(height: 8),
+              const SizedBox(height: 12),
+              Text(entry.body),
+              if (entry.blurHash != null) ...[
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: SizedBox(
+                    height: 180,
+                    width: double.infinity,
+                    child: BlurHash(
+                      hash: entry.blurHash!,
+                      duration: const Duration(milliseconds: 300),
+                    ),
+                  ),
+                ),
+              ],
+              if (!entry.reconstructed) ...[
+                const SizedBox(height: 12),
                 Row(
                   children: [
-                    const Icon(Icons.radar, size: 16, color: Color(0xFF38BDF8)),
-                    const SizedBox(width: 6),
+                    _ShardProgressRing(
+                      have: entry.shardsHave,
+                      total: entry.shardsTotal,
+                    ),
+                    const SizedBox(width: 8),
                     Text(
-                      'Requesting missing shard',
+                      'Collecting shards',
                       style: Theme.of(
                         context,
-                      ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+                      ).textTheme.bodySmall?.copyWith(
+                        color: Colors.white70,
+                      ),
                     ),
                   ],
                 ),
+                if (entry.requestingMissing) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.radar,
+                        size: 16,
+                        color: Color(0xFF38BDF8),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Requesting missing shard',
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(
+                          color: Colors.white70,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
-            ],
-            if (showProtocolDetails) ...[
-              const SizedBox(height: 12),
-              Text(
-                'object_root: ${entry.id}',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: Colors.white60),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'signature: ${entry.reconstructed ? 'unknown' : 'pending'}',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: Colors.white60),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'lane: ws',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+              if (widget.showProtocolDetails) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'protocol details available in Inspect',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Colors.white70,
+                  ),
+                ),
+              ],
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () => _openInspect(context, entry),
+                  icon: const Icon(Icons.info_outline, size: 18),
+                  label: const Text('Inspect'),
+                ),
               ),
             ],
-          ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+void _openInspect(BuildContext context, FeedEntry entry) {
+  showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) => _InspectSheet(entry: entry),
+  );
+}
+
+class _InspectSheet extends StatelessWidget {
+  final FeedEntry entry;
+
+  const _InspectSheet({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface.withOpacity(0.85),
+            ),
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              shrinkWrap: true,
+              children: [
+                Text('Inspect Post', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 12),
+                _InspectRow(label: 'object_root', value: entry.id),
+                _InspectRow(
+                  label: 'status',
+                  value: entry.reconstructed ? 'reconstructed' : 'pending',
+                ),
+                _InspectRow(
+                  label: 'shards',
+                  value: '${entry.shardsHave}/${entry.shardsTotal}',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _InspectRow extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _InspectRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 110,
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Colors.white70,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1376,6 +1588,10 @@ class _NetworkViewState extends State<NetworkView> {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
+    final theme = Theme.of(context);
+    final wsError = _wsController.text.isNotEmpty
+        ? controller.wsUrlError
+        : null;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -1436,51 +1652,77 @@ class _NetworkViewState extends State<NetworkView> {
                       : 'Starting internal relay...',
                 ),
               ),
-              if (!controller.useLocalRelay) ...[
-                _InputField(
-                  label: 'WebSocket URL',
-                  controller: _wsController,
-                  onChanged: controller.setWsUrl,
+              const SizedBox(height: 8),
+              ExpansionTile(
+                title: const Text('Advanced connection'),
+                subtitle: Text(
+                  controller.useLocalRelay
+                      ? 'Relay and channel settings'
+                      : 'External relay settings',
+                  style: theme.textTheme.bodySmall,
                 ),
-                _InputField(
-                  label: 'Peer ID',
-                  controller: _peerController,
-                  onChanged: controller.setPeerId,
-                ),
-              ],
-              _InputField(
-                label: 'Channel',
-                controller: _tagController,
-                onChanged: controller.setChannelLabel,
-              ),
-              const SizedBox(height: 12),
-              Row(
+                childrenPadding: const EdgeInsets.only(top: 8),
                 children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: controller.connected
-                          ? null
-                          : controller.connect,
-                      child: const Text('Connect'),
+                  if (!controller.useLocalRelay) ...[
+                    _InputField(
+                      label: 'WebSocket URL',
+                      controller: _wsController,
+                      onChanged: (value) {
+                        controller.setWsUrl(value);
+                        setState(() {});
+                      },
+                      errorText: wsError,
+                    ),
+                    _InputField(
+                      label: 'Peer ID',
+                      controller: _peerController,
+                      onChanged: (value) {
+                        controller.setPeerId(value);
+                        setState(() {});
+                      },
+                    ),
+                  ],
+                  _InputField(
+                    label: 'Channel',
+                    controller: _tagController,
+                    onChanged: controller.setChannelLabel,
+                    errorText: controller.channelError,
+                    onScan: () => _openScanner(
+                      context,
+                      onResult: controller.handleScanValue,
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: controller.connected
-                          ? controller.disconnect
-                          : null,
-                      child: const Text('Disconnect'),
-                    ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: controller.connected
+                              ? null
+                              : controller.connect,
+                          child: const Text('Connect'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: controller.connected
+                              ? controller.disconnect
+                              : null,
+                          child: const Text('Disconnect'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: controller.connected
+                        ? () =>
+                              controller.updateSubscription(_tagController.text)
+                        : null,
+                    child: const Text('Update Channel'),
                   ),
                 ],
-              ),
-              const SizedBox(height: 8),
-              OutlinedButton(
-                onPressed: controller.connected
-                    ? () => controller.updateSubscription(_tagController.text)
-                    : null,
-                child: const Text('Update Subscription'),
               ),
             ],
           ),
@@ -1579,6 +1821,10 @@ class DiscoveryView extends StatelessWidget {
                 label: 'Peer address (ws:// or quic://)',
                 controller: peerController,
                 onChanged: (_) {},
+                onScan: () => _openScanner(
+                  context,
+                  onResult: controller.handleScanValue,
+                ),
               ),
               Row(
                 children: [
@@ -1589,15 +1835,6 @@ class DiscoveryView extends StatelessWidget {
                       child: const Text('Add Peer'),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  OutlinedButton.icon(
-                    onPressed: () => _openScanner(
-                      context,
-                      onResult: controller.handleScanValue,
-                    ),
-                    icon: const Icon(Icons.qr_code_scanner),
-                    label: const Text('Scan'),
-                  ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -1606,9 +1843,13 @@ class DiscoveryView extends StatelessWidget {
                   dense: true,
                   leading: const Icon(Icons.router, size: 18),
                   title: Text(peer),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => controller.removeForwardPeer(peer),
+                  trailing: SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => controller.removeForwardPeer(peer),
+                    ),
                   ),
                 ),
               ),
@@ -1624,6 +1865,10 @@ class DiscoveryView extends StatelessWidget {
                 label: 'Channel name (or tag:HEX)',
                 controller: tagController,
                 onChanged: (_) {},
+                onScan: () => _openScanner(
+                  context,
+                  onResult: controller.handleScanValue,
+                ),
               ),
               Row(
                 children: [
@@ -1634,26 +1879,25 @@ class DiscoveryView extends StatelessWidget {
                       child: const Text('Subscribe'),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  OutlinedButton.icon(
-                    onPressed: () => _openScanner(
-                      context,
-                      onResult: controller.handleScanValue,
-                    ),
-                    icon: const Icon(Icons.qr_code_scanner),
-                    label: const Text('Scan'),
-                  ),
                 ],
               ),
               const SizedBox(height: 8),
               ...controller.extraTags.map(
-                (tag) => ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.tag, size: 18),
-                  title: Text(tag),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => controller.removeSubscription(tag),
+                (tag) => Dismissible(
+                  key: ValueKey(tag),
+                  direction: DismissDirection.endToStart,
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.only(right: 16),
+                    color: const Color(0xFF7F1D1D),
+                    child: const Icon(Icons.delete, color: Colors.white),
+                  ),
+                  onDismissed: (_) => controller.removeSubscription(tag),
+                  child: ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.tag, size: 18),
+                    title: Text(tag),
+                    trailing: const Icon(Icons.chevron_right),
                   ),
                 ),
               ),
@@ -1688,12 +1932,20 @@ class _QrScannerSheet extends StatefulWidget {
 
 class _QrScannerSheetState extends State<_QrScannerSheet> {
   bool _handled = false;
+  bool _torchOn = false;
+  final MobileScannerController _scannerController = MobileScannerController();
 
   void _handle(String value) {
     if (_handled) return;
     _handled = true;
     widget.onResult(value);
     Navigator.of(context).pop();
+  }
+
+  @override
+  void dispose() {
+    _scannerController.dispose();
+    super.dispose();
   }
 
   @override
@@ -1721,16 +1973,51 @@ class _QrScannerSheetState extends State<_QrScannerSheet> {
             Expanded(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: MobileScanner(
-                  onDetect: (capture) {
-                    for (final barcode in capture.barcodes) {
-                      final raw = barcode.rawValue;
-                      if (raw != null && raw.trim().isNotEmpty) {
-                        _handle(raw.trim());
-                        break;
-                      }
-                    }
-                  },
+                child: Stack(
+                  children: [
+                    MobileScanner(
+                      controller: _scannerController,
+                      onDetect: (capture) {
+                        for (final barcode in capture.barcodes) {
+                          final raw = barcode.rawValue;
+                          if (raw != null && raw.trim().isNotEmpty) {
+                            _handle(raw.trim());
+                            break;
+                          }
+                        }
+                      },
+                    ),
+                    Align(
+                      alignment: Alignment.center,
+                      child: Container(
+                        width: 220,
+                        height: 220,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: const Color(0xFF60A5FA),
+                            width: 2,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      right: 12,
+                      top: 12,
+                      child: IconButton(
+                        icon: Icon(
+                          _torchOn ? Icons.flash_on : Icons.flash_off,
+                          color: Colors.white,
+                        ),
+                        onPressed: () async {
+                          await _scannerController.toggleTorch();
+                          if (mounted) {
+                            setState(() => _torchOn = !_torchOn);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1797,21 +2084,21 @@ class _LaneHealthTile extends StatelessWidget {
   }
 }
 
-class ComposeSheet extends StatefulWidget {
+class ComposeScreen extends StatefulWidget {
   final void Function(String text) onPublish;
   final String channelLabel;
 
-  const ComposeSheet({
+  const ComposeScreen({
     super.key,
     required this.onPublish,
     required this.channelLabel,
   });
 
   @override
-  State<ComposeSheet> createState() => _ComposeSheetState();
+  State<ComposeScreen> createState() => _ComposeScreenState();
 }
 
-class _ComposeSheetState extends State<ComposeSheet> {
+class _ComposeScreenState extends State<ComposeScreen> {
   final _controller = TextEditingController();
 
   @override
@@ -1822,49 +2109,50 @@ class _ComposeSheetState extends State<ComposeSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: EdgeInsets.only(
-          left: 16,
-          right: 16,
-          top: 16,
-          bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Compose', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                const Icon(Icons.tag, size: 16, color: Color(0xFF60A5FA)),
-                const SizedBox(width: 6),
-                Text(
-                  'Posting to ${widget.channelLabel}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Colors.white70,
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Compose'),
+        actions: [
+          TextButton(
+            onPressed: () => widget.onPublish(_controller.text),
+            child: const Text('Publish'),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 16,
+            bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.tag, size: 16, color: Color(0xFF60A5FA)),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Posting to ${widget.channelLabel}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Colors.white70,
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _controller,
-              maxLines: 5,
-              autofocus: true,
-              decoration: const InputDecoration(
-                hintText: 'Share an update...',
-                filled: true,
-                fillColor: Color(0xFF101827),
+                ],
               ),
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton(
-              onPressed: () => widget.onPublish(_controller.text),
-              child: const Text('Publish'),
-            ),
-          ],
+              const SizedBox(height: 12),
+              TextField(
+                controller: _controller,
+                maxLines: 8,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: 'Share an update...',
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1896,38 +2184,55 @@ class SettingsSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SafeArea(
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        shrinkWrap: true,
-        children: [
-          SwitchListTile(
-            value: showProtocolDetails,
-            onChanged: onToggleDetails,
-            title: const Text('Show protocol details'),
-            subtitle: const Text('Reveal object_root and lane metadata.'),
-          ),
-          SwitchListTile(
-            value: ghostMode,
-            onChanged: onToggleGhostMode,
-            title: const Text('Ghost mode'),
-            subtitle: const Text('Prefer privacy lanes (preview).'),
-          ),
-          SwitchListTile(
-            value: requireSignedPublic,
-            onChanged: onToggleRequireSigned,
-            title: const Text('Require signed public posts'),
-            subtitle: const Text('Drop unsigned objects in public namespaces.'),
-          ),
-          TextFormField(
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'Clock skew seconds',
-              helperText: 'Adjust for device clock drift (max +/-3600).',
+      child: ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: Container(
+            color: Theme.of(context).colorScheme.surface.withOpacity(0.85),
+            child: DraggableScrollableSheet(
+              initialChildSize: 0.65,
+              minChildSize: 0.4,
+              maxChildSize: 0.95,
+              expand: false,
+              builder: (context, scrollController) {
+                return ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    SwitchListTile(
+                      value: showProtocolDetails,
+                      onChanged: onToggleDetails,
+                      title: const Text('Show protocol details'),
+                      subtitle: const Text('Reveal object_root and lane metadata.'),
+                    ),
+                    SwitchListTile(
+                      value: ghostMode,
+                      onChanged: onToggleGhostMode,
+                      title: const Text('Ghost mode'),
+                      subtitle: const Text('Prefer privacy lanes (preview).'),
+                    ),
+                    SwitchListTile(
+                      value: requireSignedPublic,
+                      onChanged: onToggleRequireSigned,
+                      title: const Text('Require signed public posts'),
+                      subtitle: const Text('Drop unsigned objects in public namespaces.'),
+                    ),
+                    TextFormField(
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Clock skew seconds',
+                        helperText: 'Adjust for device clock drift (max +/-3600).',
+                      ),
+                      initialValue: clockSkewSeconds.toString(),
+                      onFieldSubmitted: onClockSkewChanged,
+                    ),
+                  ],
+                );
+              },
             ),
-            initialValue: clockSkewSeconds.toString(),
-            onFieldSubmitted: onClockSkewChanged,
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1985,11 +2290,15 @@ class _InputField extends StatelessWidget {
   final String label;
   final TextEditingController controller;
   final ValueChanged<String>? onChanged;
+  final String? errorText;
+  final VoidCallback? onScan;
 
   const _InputField({
     required this.label,
     required this.controller,
     this.onChanged,
+    this.errorText,
+    this.onScan,
   });
 
   @override
@@ -2001,8 +2310,13 @@ class _InputField extends StatelessWidget {
         onChanged: onChanged,
         decoration: InputDecoration(
           labelText: label,
-          filled: true,
-          fillColor: const Color(0xFF101827),
+          errorText: errorText,
+          suffixIcon: onScan == null
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.qr_code_scanner),
+                  onPressed: onScan,
+                ),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),

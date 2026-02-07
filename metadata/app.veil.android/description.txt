@@ -1,0 +1,10 @@
+VEIL is a transport-agnostic, shard-native overlay for censorship-resistant public feeds and privacy-preserving delivery. This app is an Android client that connects to the VEIL network, reconstructs posts from shards, and helps relay content for subscribed channels.
+
+Features:
+- Local relay mode for private testing
+- Multi-lane support (WebSocket + Bluetooth/BLE)
+- Shard reconstruction with progressive UI states
+- Local privacy controls and Web-of-Trust inspired prioritization
+- Optional protocol inspection tools
+
+The app does not rely on proprietary services. All network and storage functions are implemented with open-source dependencies.

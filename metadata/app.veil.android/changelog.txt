@@ -1,0 +1,3 @@
+- Initial public Android client release for VEIL.
+- Local relay mode, channel subscriptions, and discovery tools.
+- Multi-lane status, ghost mode, and privacy controls.

@@ -37,6 +37,7 @@ dependencies:
   flutter_blurhash: ^0.8.0
   mobile_scanner: ^5.1.1
   shared_preferences: ^2.2.3
+  flutter_secure_storage: ^9.0.0
   veil_sdk:
     path: ../../packages/veil-sdk-dart
 
