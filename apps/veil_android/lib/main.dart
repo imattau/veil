@@ -74,6 +74,10 @@ class _RootShellState extends State<RootShell> {
         onToggleDetails: (value) {
           setState(() => _showProtocolDetails = value);
         },
+        ghostMode: _controller.ghostMode,
+        onToggleGhostMode: (value) {
+          setState(() => _controller.setGhostMode(value));
+        },
       ),
     );
   }
@@ -165,22 +169,29 @@ class VeilAppController extends ChangeNotifier {
   bool _relayReady = false;
   bool _useLocalRelay = true;
   bool _connected = false;
+  bool _ghostMode = false;
+  Timer? _epochTimer;
+  int _epochRemainingSeconds = 0;
 
   bool get onboardingComplete => displayName.isNotEmpty;
   bool get relayReady => _relayReady;
   bool get connected => _connected;
   String get relayUrl => _relay?.url ?? '';
+  bool get ghostMode => _ghostMode;
+  int get epochRemainingSeconds => _epochRemainingSeconds;
   List<FeedEntry> get feed => List.unmodifiable(_feed);
   List<String> get events => List.unmodifiable(_events);
   List<String> get suggestedFeeds => List.unmodifiable(_suggestedFeeds);
 
   void init() {
     _startLocalRelay();
+    _startEpochTimer();
   }
 
   void dispose() {
     _client?.stop();
     _relay?.stop();
+    _epochTimer?.cancel();
     super.dispose();
   }
 
@@ -204,6 +215,12 @@ class VeilAppController extends ChangeNotifier {
 
   void setNamespaceChoice(String value) {
     namespaceChoice = value;
+    notifyListeners();
+  }
+
+  void setGhostMode(bool value) {
+    _ghostMode = value;
+    _events.insert(0, value ? 'Ghost mode enabled' : 'Ghost mode disabled');
     notifyListeners();
   }
 
@@ -363,6 +380,20 @@ class VeilAppController extends ChangeNotifier {
       addSkeletons();
     }
     notifyListeners();
+  }
+
+  void _startEpochTimer() {
+    void update() {
+      const epochSeconds = 86400;
+      final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final offset = nowSeconds % epochSeconds;
+      _epochRemainingSeconds = epochSeconds - offset;
+      notifyListeners();
+    }
+
+    update();
+    _epochTimer?.cancel();
+    _epochTimer = Timer.periodic(const Duration(seconds: 1), (_) => update());
   }
 }
 
@@ -684,6 +715,20 @@ class PostCard extends StatelessWidget {
                   context,
                 ).textTheme.bodySmall?.copyWith(color: Colors.white60),
               ),
+              const SizedBox(height: 6),
+              Text(
+                'signature: ${entry.reconstructed ? 'unknown' : 'pending'}',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'lane: ws',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+              ),
             ],
           ],
         ),
@@ -699,13 +744,29 @@ class VaultView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final remaining = controller.epochRemainingSeconds;
+    final hours = (remaining ~/ 3600).toString().padLeft(2, '0');
+    final minutes = ((remaining % 3600) ~/ 60).toString().padLeft(2, '0');
+    final seconds = (remaining % 60).toString().padLeft(2, '0');
     return ListView(
       padding: const EdgeInsets.all(16),
-      children: const [
+      children: [
         _Panel(
           title: 'Private Vault',
-          child: Text(
-            'Encrypted conversations will appear here. Rotating rendezvous tags keep private circles private.',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Encrypted conversations will appear here. Rotating rendezvous tags keep private circles private.',
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Next rotation in $hours:$minutes:$seconds',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+              ),
+            ],
           ),
         ),
       ],
@@ -731,6 +792,33 @@ class NetworkView extends StatelessWidget {
               Text(controller.connected ? 'Connected' : 'Offline'),
               const SizedBox(height: 8),
               Text('Local relay: ${controller.relayUrl}'),
+              const SizedBox(height: 8),
+              Text('Ghost mode: ${controller.ghostMode ? 'On' : 'Off'}'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _Panel(
+          title: 'Lane Status',
+          child: Column(
+            children: [
+              ListTile(
+                dense: true,
+                leading: Icon(
+                  controller.connected ? Icons.wifi : Icons.wifi_off,
+                  size: 18,
+                ),
+                title: const Text('WebSocket Lane'),
+                subtitle: Text(controller.connected ? 'Healthy' : 'Idle'),
+                trailing: const Text('WS'),
+              ),
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.lock_outline, size: 18),
+                title: const Text('Privacy Lane'),
+                subtitle: Text(controller.ghostMode ? 'Forced' : 'Auto'),
+                trailing: const Text('TOR/BLE'),
+              ),
             ],
           ),
         ),
@@ -824,11 +912,15 @@ class ComposeSheet extends StatelessWidget {
 class SettingsSheet extends StatelessWidget {
   final bool showProtocolDetails;
   final ValueChanged<bool> onToggleDetails;
+  final bool ghostMode;
+  final ValueChanged<bool> onToggleGhostMode;
 
   const SettingsSheet({
     super.key,
     required this.showProtocolDetails,
     required this.onToggleDetails,
+    required this.ghostMode,
+    required this.onToggleGhostMode,
   });
 
   @override
@@ -843,6 +935,12 @@ class SettingsSheet extends StatelessWidget {
             onChanged: onToggleDetails,
             title: const Text('Show protocol details'),
             subtitle: const Text('Reveal object_root and lane metadata.'),
+          ),
+          SwitchListTile(
+            value: ghostMode,
+            onChanged: onToggleGhostMode,
+            title: const Text('Ghost mode'),
+            subtitle: const Text('Prefer privacy lanes (preview).'),
           ),
         ],
       ),
