@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:veil_sdk/veil_sdk.dart';
@@ -41,15 +43,37 @@ class _VeilHomePageState extends State<VeilHomePage> {
 
   VeilClient? _client;
   WebSocketLane? _lane;
+  LocalRelay? _relay;
+  bool _useLocalRelay = true;
+  bool _relayReady = false;
   bool _connected = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _startLocalRelay();
+  }
 
   @override
   void dispose() {
     _client?.stop();
+    _relay?.stop();
     _wsController.dispose();
     _peerController.dispose();
     _tagController.dispose();
     super.dispose();
+  }
+
+  Future<void> _startLocalRelay() async {
+    final relay = LocalRelay();
+    await relay.start();
+    setState(() {
+      _relay = relay;
+      _relayReady = true;
+      if (_useLocalRelay) {
+        _wsController.text = relay.url;
+      }
+    });
   }
 
   Future<void> _connect() async {
@@ -108,6 +132,15 @@ class _VeilHomePageState extends State<VeilHomePage> {
     });
   }
 
+  void _toggleLocalRelay(bool value) {
+    setState(() {
+      _useLocalRelay = value;
+      if (_useLocalRelay && _relay != null) {
+        _wsController.text = _relay!.url;
+      }
+    });
+  }
+
   void _updateSubscription() {
     final client = _client;
     if (client == null) return;
@@ -155,6 +188,16 @@ class _VeilHomePageState extends State<VeilHomePage> {
             title: 'Connection',
             child: Column(
               children: [
+                SwitchListTile(
+                  value: _useLocalRelay,
+                  onChanged: _relayReady ? _toggleLocalRelay : null,
+                  title: const Text('Use local relay'),
+                  subtitle: Text(
+                    _relayReady
+                        ? 'Local relay at ${_relay?.url}'
+                        : 'Starting local relay...',
+                  ),
+                ),
                 _InputField(label: 'WebSocket URL', controller: _wsController),
                 _InputField(label: 'Peer ID', controller: _peerController),
                 _InputField(
@@ -196,6 +239,15 @@ class _VeilHomePageState extends State<VeilHomePage> {
                 Text(
                   _connected ? 'Lane ready: ${_lane?.peerId}' : 'Not connected',
                   style: theme.textTheme.bodyLarge,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _relayReady
+                      ? 'Local relay: ${_relay?.url}'
+                      : 'Local relay: starting...',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: Colors.white70,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Text(
@@ -289,5 +341,46 @@ class _InputField extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class LocalRelay {
+  HttpServer? _server;
+  final _sockets = <WebSocket>[];
+  String url = '';
+
+  Future<void> start() async {
+    _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    url = 'ws://127.0.0.1:${_server!.port}';
+    _server!.listen((request) async {
+      if (!WebSocketTransformer.isUpgradeRequest(request)) {
+        request.response
+          ..statusCode = HttpStatus.badRequest
+          ..write('Expected WebSocket upgrade');
+        await request.response.close();
+        return;
+      }
+      final socket = await WebSocketTransformer.upgrade(request);
+      _sockets.add(socket);
+      socket.listen(
+        (data) {
+          for (final peer in _sockets) {
+            if (peer != socket && peer.readyState == WebSocket.open) {
+              peer.add(data);
+            }
+          }
+        },
+        onDone: () => _sockets.remove(socket),
+        onError: (_) => _sockets.remove(socket),
+      );
+    });
+  }
+
+  void stop() {
+    for (final socket in _sockets) {
+      socket.close();
+    }
+    _sockets.clear();
+    _server?.close();
   }
 }
