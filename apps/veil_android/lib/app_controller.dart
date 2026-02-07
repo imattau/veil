@@ -82,7 +82,6 @@ class VeilAppController extends ChangeNotifier {
   String get profileWebsite => _profileWebsite;
   String get profileLocation => _profileLocation;
   DateTime? get profileLastPublished => _profileLastPublished;
-  DateTime? get profileLastPublished => _profileLastPublished;
   bool get relayReady => _relayReady;
   bool get connected => _connected;
   String get relayUrl => _relay?.url ?? '';

@@ -12,13 +12,11 @@ import 'widgets.dart';
 class HomeFeed extends StatelessWidget {
   final VeilAppController controller;
   final bool showProtocolDetails;
-  final VoidCallback onOpenProfile;
 
   const HomeFeed({
     super.key,
     required this.controller,
     required this.showProtocolDetails,
-    required this.onOpenProfile,
   });
 
   @override
@@ -26,21 +24,12 @@ class HomeFeed extends StatelessWidget {
     final items = controller.feed;
     return ListView.builder(
       padding: const EdgeInsets.all(16),
-      itemCount: items.isEmpty ? 2 : items.length + 2,
+      itemCount: items.isEmpty ? 1 : items.length,
       itemBuilder: (context, index) {
-        if (index == 0) {
-          return HeaderCard(
-            controller: controller,
-            onOpenProfile: onOpenProfile,
-          );
-        }
-        if (index == 1) {
-          return const SizedBox(height: 16);
-        }
         if (items.isEmpty) {
           return const Center(child: CircularProgressIndicator());
         }
-        final entry = items[index - 2];
+        final entry = items[index];
         return PostCard(
           entry: entry,
           showProtocolDetails: showProtocolDetails,
@@ -62,87 +51,6 @@ class HomeFeed extends StatelessWidget {
           },
         );
       },
-    );
-  }
-}
-
-class HeaderCard extends StatelessWidget {
-  final VeilAppController controller;
-  final VoidCallback onOpenProfile;
-
-  const HeaderCard({
-    super.key,
-    required this.controller,
-    required this.onOpenProfile,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF0B1220), Color(0xFF121826)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF1F2937)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.25),
-            blurRadius: 16,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          GestureDetector(
-            onTap: onOpenProfile,
-            child: controller.profileAvatar?.isImage == true
-                ? CircleAvatar(
-                    radius: 24,
-                    backgroundImage: MemoryImage(
-                      controller.profileAvatar!.bytes,
-                    ),
-                  )
-                : Image.asset('assets/veil_logo.png', width: 48, height: 48),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: GestureDetector(
-              onTap: onOpenProfile,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    controller.displayName.isEmpty
-                        ? 'Operator'
-                        : controller.displayName,
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    controller.namespaceChoice,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Chip(
-            label: Text(controller.connectionStatus),
-            backgroundColor: controller.connectionStatus == 'LIVE'
-                ? const Color(0xFF134E4A)
-                : controller.connectionStatus == 'DEGRADED'
-                    ? const Color(0xFF3F2F0B)
-                    : const Color(0xFF3B1D1D),
-          ),
-        ],
-      ),
     );
   }
 }

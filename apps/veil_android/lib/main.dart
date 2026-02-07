@@ -9,6 +9,7 @@ import 'ui/onboarding.dart';
 import 'ui/profile.dart';
 import 'ui/settings.dart';
 import 'ui/vault.dart';
+import 'ui/widgets.dart';
 
 void main() {
   runApp(const VeilAndroidApp());
@@ -261,8 +262,58 @@ class _RootShellState extends State<RootShell> {
         }
         return Scaffold(
           appBar: AppBar(
-            title: const Text('VEIL'),
+            titleSpacing: 12,
+            title: GestureDetector(
+              onTap: _openProfile,
+              child: Row(
+                children: [
+                  _controller.profileAvatar?.isImage == true
+                      ? CircleAvatar(
+                          radius: 16,
+                          backgroundImage:
+                              MemoryImage(_controller.profileAvatar!.bytes),
+                        )
+                      : Image.asset(
+                          'assets/veil_logo.png',
+                          width: 28,
+                          height: 28,
+                        ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _controller.displayName.isEmpty
+                              ? 'Operator'
+                              : _controller.displayName,
+                          style: Theme.of(context).textTheme.titleMedium,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          _controller.namespaceChoice,
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: Colors.white70),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
             actions: [
+              Chip(
+                label: Text(_controller.connectionStatus),
+                backgroundColor: _controller.connectionStatus == 'LIVE'
+                    ? const Color(0xFF134E4A)
+                    : _controller.connectionStatus == 'DEGRADED'
+                        ? const Color(0xFF3F2F0B)
+                        : const Color(0xFF3B1D1D),
+              ),
+              const SizedBox(width: 8),
               IconButton(
                 icon: const Icon(Icons.tune),
                 onPressed: _openSettings,
@@ -278,7 +329,6 @@ class _RootShellState extends State<RootShell> {
                   HomeFeed(
                     controller: _controller,
                     showProtocolDetails: _showProtocolDetails,
-                    onOpenProfile: _openProfile,
                   ),
                   VaultView(controller: _controller),
                   NetworkView(controller: _controller),
