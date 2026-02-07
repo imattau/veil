@@ -26,6 +26,7 @@ export type MediaDescriptorV1 = {
   hash_hex: string;
   chunk_roots: string[];
   chunk_tag_hex?: string;
+  blurhash?: string;
   extensions?: Record<string, unknown>;
 };
 
@@ -100,6 +101,7 @@ export function encodeMediaDescriptor(media: MediaDescriptorV1): Uint8Array {
       hash_hex: media.hash_hex,
       chunk_roots: media.chunk_roots,
       chunk_tag_hex: media.chunk_tag_hex,
+      blurhash: media.blurhash,
       extensions: media.extensions,
     }) as Record<string, unknown>,
   });
@@ -154,6 +156,7 @@ export function buildMediaDescriptorFromChunks(
     hash_hex: string;
     chunk_tag_hex?: string;
     chunk_roots?: string[];
+    blurhash?: string;
   },
 ): MediaDescriptorV1 {
   return {
@@ -164,6 +167,7 @@ export function buildMediaDescriptorFromChunks(
     hash_hex: options.hash_hex,
     chunk_roots: options.chunk_roots ?? chunks.map(() => ""),
     chunk_tag_hex: options.chunk_tag_hex,
+    blurhash: options.blurhash,
   };
 }
 
@@ -200,6 +204,28 @@ export function extractReferences(envelope: AppEnvelope): {
     }
   }
   if (envelope.type === "media_desc" && isRecord(envelope.payload)) {
+    const roots = envelope.payload.chunk_roots;
+    if (Array.isArray(roots)) {
+      for (const root of roots) {
+        if (typeof root === "string") chunkRoots.push(root);
+      }
+    }
+    const tagHex = envelope.payload.chunk_tag_hex;
+    if (typeof tagHex === "string") chunkTagHexes.push(tagHex);
+  }
+
+  if (envelope.type === "progressive_image" && isRecord(envelope.payload)) {
+    const roots = envelope.payload.chunk_roots;
+    if (Array.isArray(roots)) {
+      for (const root of roots) {
+        if (typeof root === "string") chunkRoots.push(root);
+      }
+    }
+    const tagHex = envelope.payload.chunk_tag_hex;
+    if (typeof tagHex === "string") chunkTagHexes.push(tagHex);
+  }
+
+  if (envelope.type === "video_manifest" && isRecord(envelope.payload)) {
     const roots = envelope.payload.chunk_roots;
     if (Array.isArray(roots)) {
       for (const root of roots) {

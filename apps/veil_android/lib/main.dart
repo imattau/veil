@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_blurhash/flutter_blurhash.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
@@ -15,14 +18,95 @@ class VeilAndroidApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = ColorScheme.fromSeed(
+      seedColor: const Color(0xFFFB7C31),
+      brightness: Brightness.dark,
+      primary: const Color(0xFFFFA45C),
+      secondary: const Color(0xFF3DD6A8),
+      surface: const Color(0xFF0B111B),
+      surfaceContainerHighest: const Color(0xFF101827),
+    );
     return MaterialApp(
       title: 'VEIL Android',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFFB7C31),
-          brightness: Brightness.dark,
-        ),
+        colorScheme: colorScheme,
         useMaterial3: true,
+        scaffoldBackgroundColor: const Color(0xFF0B0F17),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF0B0F17),
+          elevation: 0,
+        ),
+        textTheme: ThemeData.dark().textTheme.copyWith(
+          headlineMedium: const TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.w700,
+            letterSpacing: -0.4,
+          ),
+          titleLarge: const TextStyle(
+            fontSize: 22,
+            fontWeight: FontWeight.w600,
+          ),
+          titleMedium: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
+          bodyMedium: const TextStyle(
+            fontSize: 14,
+            height: 1.35,
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: const Color(0xFF111827),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: Color(0xFF1F2937)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: Color(0xFF1F2937)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(color: colorScheme.primary, width: 1.2),
+          ),
+          labelStyle: const TextStyle(color: Color(0xFF9CA3AF)),
+          hintStyle: const TextStyle(color: Color(0xFF6B7280)),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: colorScheme.primary,
+            foregroundColor: const Color(0xFF0B0F17),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            side: const BorderSide(color: Color(0xFF1F2937)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+          ),
+        ),
+        chipTheme: ChipThemeData(
+          backgroundColor: const Color(0xFF0F172A),
+          side: const BorderSide(color: Color(0xFF1F2937)),
+          labelStyle: const TextStyle(color: Colors.white),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(999),
+          ),
+        ),
+        navigationBarTheme: NavigationBarThemeData(
+          backgroundColor: const Color(0xFF0B0F17),
+          indicatorColor: const Color(0xFF1F2937),
+          labelTextStyle: WidgetStateProperty.all(
+            const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
       ),
       home: const RootShell(),
     );
@@ -57,6 +141,7 @@ class _RootShellState extends State<RootShell> {
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       builder: (context) => ComposeSheet(
         onPublish: (text) {
           _controller.publishLocalPost(text);
@@ -78,6 +163,14 @@ class _RootShellState extends State<RootShell> {
         ghostMode: _controller.ghostMode,
         onToggleGhostMode: (value) {
           setState(() => _controller.setGhostMode(value));
+        },
+        requireSignedPublic: _controller.requireSignedPublic,
+        onToggleRequireSigned: (value) {
+          setState(() => _controller.setRequireSignedPublic(value));
+        },
+        clockSkewSeconds: _controller.clockSkewSeconds,
+        onClockSkewChanged: (value) {
+          setState(() => _controller.setClockSkewSeconds(value));
         },
       ),
     );
@@ -158,6 +251,7 @@ class VeilAppController extends ChangeNotifier {
     'Civic Updates',
     'Open Media',
   ];
+  final Set<String> _trustedFeeds = {};
 
   String displayName = '';
   String recoveryPhrase = '';
@@ -165,6 +259,9 @@ class VeilAppController extends ChangeNotifier {
   String peerId = 'android-client';
   String wsUrl = 'ws://127.0.0.1:9001';
   String tagHex = '';
+  String channelLabel = '';
+  final List<String> _extraTags = [];
+  final List<String> _forwardPeers = [];
   String bleDeviceId = '';
   String bleServiceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   String bleCharacteristicUuid = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
@@ -178,7 +275,11 @@ class VeilAppController extends ChangeNotifier {
   bool _connected = false;
   bool _ghostMode = false;
   bool _bleEnabled = false;
+  bool _requireSignedPublic = true;
+  int _clockSkewSeconds = 0;
+  bool _epochOverlapActive = false;
   Timer? _epochTimer;
+  Timer? _healthTimer;
   int _epochRemainingSeconds = 0;
 
   bool get onboardingComplete => displayName.isNotEmpty;
@@ -189,19 +290,31 @@ class VeilAppController extends ChangeNotifier {
   bool get bleEnabled => _bleEnabled;
   bool get useLocalRelay => _useLocalRelay;
   int get epochRemainingSeconds => _epochRemainingSeconds;
+  bool get epochOverlapActive => _epochOverlapActive;
+  bool get requireSignedPublic => _requireSignedPublic;
+  int get clockSkewSeconds => _clockSkewSeconds;
+  LaneHealthSnapshot? get fastLaneHealth =>
+      _client?.fastLane.healthSnapshot() ?? _lane?.healthSnapshot();
+  LaneHealthSnapshot? get fallbackLaneHealth =>
+      _client?.fallbackLane?.healthSnapshot() ?? _fallbackLane?.healthSnapshot();
   List<FeedEntry> get feed => List.unmodifiable(_feed);
   List<String> get events => List.unmodifiable(_events);
   List<String> get suggestedFeeds => List.unmodifiable(_suggestedFeeds);
+  Set<String> get trustedFeeds => Set.unmodifiable(_trustedFeeds);
+  List<String> get extraTags => List.unmodifiable(_extraTags);
+  List<String> get forwardPeers => List.unmodifiable(_forwardPeers);
 
   void init() {
     _startLocalRelay();
     _startEpochTimer();
+    connect();
   }
 
   void dispose() {
     _client?.stop();
     _relay?.stop();
     _epochTimer?.cancel();
+    _healthTimer?.cancel();
     super.dispose();
   }
 
@@ -228,6 +341,16 @@ class VeilAppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void toggleTrustedFeed(String feed) {
+    if (_trustedFeeds.contains(feed)) {
+      _trustedFeeds.remove(feed);
+    } else {
+      _trustedFeeds.add(feed);
+    }
+    _events.insert(0, 'Trusted feeds: ${_trustedFeeds.length}');
+    notifyListeners();
+  }
+
   void setWsUrl(String value) {
     wsUrl = value.trim();
     notifyListeners();
@@ -243,6 +366,89 @@ class VeilAppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  String _deriveTagHexForLabel(String label) {
+    final trimmed = label.trim();
+    if (trimmed.isEmpty) return '';
+    final slug = trimmed.toLowerCase().replaceAll(RegExp(r'\\s+'), '-');
+    return deriveChannelFeedTagHex('veil', slug);
+  }
+
+  void setChannelLabel(String value) {
+    channelLabel = value;
+    final derived = _deriveTagHexForLabel(value);
+    if (derived.isNotEmpty) {
+      tagHex = derived;
+    }
+    notifyListeners();
+  }
+
+  void addSubscription(String value) {
+    final cleaned = value.trim();
+    if (cleaned.isEmpty) return;
+    final derived = cleaned.startsWith('tag:')
+        ? cleaned.substring(4)
+        : _deriveTagHexForLabel(cleaned);
+    if (derived.isEmpty) return;
+    if (!_extraTags.contains(derived) && derived != tagHex) {
+      _extraTags.add(derived);
+      _client?.subscribe(derived);
+      _events.insert(0, 'Joined channel $cleaned');
+      notifyListeners();
+    }
+  }
+
+  void removeSubscription(String value) {
+    _extraTags.remove(value);
+    _client?.unsubscribe(value);
+    _events.insert(0, 'Unsubscribed from $value');
+    notifyListeners();
+  }
+
+  void handleScanValue(String value) {
+    final raw = value.trim();
+    if (raw.isEmpty) return;
+    final lower = raw.toLowerCase();
+    if (lower.startsWith('peer:')) {
+      addForwardPeer(raw.substring(5));
+      return;
+    }
+    if (lower.startsWith('tag:')) {
+      addSubscription(raw.substring(4));
+      return;
+    }
+    if (lower.startsWith('ws://') ||
+        lower.startsWith('wss://') ||
+        lower.startsWith('quic://')) {
+      addForwardPeer(raw);
+      return;
+    }
+    final hex = lower.replaceAll(RegExp(r'[^0-9a-f]'), '');
+    if (hex.length == 64) {
+      addSubscription(hex);
+      return;
+    }
+    _events.insert(0, 'Scan not recognized: $raw');
+    notifyListeners();
+  }
+
+  void addForwardPeer(String value) {
+    final cleaned = value.trim();
+    if (cleaned.isEmpty) return;
+    if (!_forwardPeers.contains(cleaned)) {
+      _forwardPeers.add(cleaned);
+      _client?.setForwardPeers(_forwardPeers);
+      _events.insert(0, 'Added peer $cleaned');
+      notifyListeners();
+    }
+  }
+
+  void removeForwardPeer(String value) {
+    _forwardPeers.remove(value);
+    _client?.setForwardPeers(_forwardPeers);
+    _events.insert(0, 'Removed peer $value');
+    notifyListeners();
+  }
+
   void setGhostMode(bool value) {
     _ghostMode = value;
     _events.insert(0, value ? 'Ghost mode enabled' : 'Ghost mode disabled');
@@ -252,6 +458,23 @@ class VeilAppController extends ChangeNotifier {
   void setBleEnabled(bool value) {
     _bleEnabled = value;
     _events.insert(0, value ? 'BLE lane enabled' : 'BLE lane disabled');
+    notifyListeners();
+  }
+
+  void setRequireSignedPublic(bool value) {
+    _requireSignedPublic = value;
+    _events.insert(
+      0,
+      value ? 'Signed public namespaces required' : 'Signed namespace optional',
+    );
+    notifyListeners();
+  }
+
+  void setClockSkewSeconds(String value) {
+    final parsed = int.tryParse(value.trim()) ?? 0;
+    _clockSkewSeconds = parsed.clamp(-3600, 3600);
+    _events.insert(0, 'Clock skew set to $_clockSkewSeconds sec');
+    _startEpochTimer();
     notifyListeners();
   }
 
@@ -332,12 +555,20 @@ class VeilAppController extends ChangeNotifier {
           _updateProgressFromShard(meta);
           _notify();
         },
+        onReconstructable: (root, have, need) {
+          if (need > have && have >= need - 1) {
+            _events.insert(0, 'Requesting missing shard for $root');
+          }
+          _markRequesting(root, need, have);
+          _notify();
+        },
         onPayload: (root, payload) {
           _events.insert(0, 'Payload $root (${payload.length} bytes)');
           _markReconstructed(root);
         },
       ),
       options: VeilClientOptions(
+        requiredSignedNamespaces: _requireSignedPublic ? {1} : {},
         plugins: [
           AutoFetchPlugin(resolveTagForRoot: (_, __) => tagHex),
           ThreadContextPlugin(resolveTagForRoot: (_, __) => tagHex),
@@ -348,6 +579,12 @@ class VeilAppController extends ChangeNotifier {
     if (tagHex.isNotEmpty) {
       client.subscribe(tagHex);
     }
+    for (final tag in _extraTags) {
+      client.subscribe(tag);
+    }
+    if (_forwardPeers.isNotEmpty) {
+      client.setForwardPeers(_forwardPeers);
+    }
     client.start();
 
     _client = client;
@@ -355,6 +592,7 @@ class VeilAppController extends ChangeNotifier {
     _fallbackLane = fallbackLane;
     _connected = true;
     _events.insert(0, 'Connected via ${wsLane.url}');
+    _startHealthTimer();
     _notify();
   }
 
@@ -362,11 +600,13 @@ class VeilAppController extends ChangeNotifier {
     _client?.stop();
     _connected = false;
     _events.insert(0, 'Disconnected');
+    _healthTimer?.cancel();
     _notify();
   }
 
   void updateSubscription(String value) {
-    tagHex = value.trim();
+    channelLabel = value.trim();
+    tagHex = _deriveTagHexForLabel(channelLabel);
     final client = _client;
     if (client == null) return;
     for (final sub in client.subscriptions()) {
@@ -375,7 +615,7 @@ class VeilAppController extends ChangeNotifier {
     if (tagHex.isNotEmpty) {
       client.subscribe(tagHex);
     }
-    _events.insert(0, 'Subscribed to $tagHex');
+    _events.insert(0, 'Joined channel $channelLabel');
     _notify();
   }
 
@@ -401,6 +641,7 @@ class VeilAppController extends ChangeNotifier {
           id: 'ghost-$i',
           author: '...',
           body: '...',
+          blurHash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj',
           reconstructed: false,
           isGhost: true,
           timestamp: DateTime.now(),
@@ -417,9 +658,20 @@ class VeilAppController extends ChangeNotifier {
         entry.reconstructed = true;
         entry.isGhost = false;
         entry.shardsHave = entry.shardsTotal;
+        entry.requestingMissing = false;
       }
     }
     _notify();
+  }
+
+  void _markRequesting(String root, int need, int have) {
+    for (final entry in _feed) {
+      if (entry.id == root) {
+        entry.shardsTotal = max(entry.shardsTotal, need);
+        entry.shardsHave = max(entry.shardsHave, have);
+        entry.requestingMissing = have >= need - 1 && !entry.reconstructed;
+      }
+    }
   }
 
   void _updateProgressFromShard(ShardMeta meta) {
@@ -447,9 +699,12 @@ class VeilAppController extends ChangeNotifier {
   void _startEpochTimer() {
     void update() {
       const epochSeconds = 86400;
-      final nowSeconds = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final nowSeconds =
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000) +
+          _clockSkewSeconds;
       final offset = nowSeconds % epochSeconds;
       _epochRemainingSeconds = epochSeconds - offset;
+      _epochOverlapActive = _epochRemainingSeconds <= 3600;
       notifyListeners();
     }
 
@@ -457,27 +712,40 @@ class VeilAppController extends ChangeNotifier {
     _epochTimer?.cancel();
     _epochTimer = Timer.periodic(const Duration(seconds: 1), (_) => update());
   }
+
+  void _startHealthTimer() {
+    _healthTimer?.cancel();
+    _healthTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (_connected) {
+        notifyListeners();
+      }
+    });
+  }
 }
 
 class FeedEntry {
   final String id;
   final String author;
   final String body;
+  final String? blurHash;
   bool reconstructed;
   bool isGhost;
   final DateTime timestamp;
   int shardsHave;
   int shardsTotal;
+  bool requestingMissing;
 
   FeedEntry({
     required this.id,
     required this.author,
     required this.body,
+    this.blurHash,
     required this.reconstructed,
     required this.timestamp,
     this.isGhost = false,
     this.shardsHave = 0,
     this.shardsTotal = 16,
+    this.requestingMissing = false,
   });
 
   factory FeedEntry.empty() => FeedEntry(
@@ -512,7 +780,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final controller = widget.controller;
     return Scaffold(
       body: Container(
-        padding: const EdgeInsets.all(24),
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             colors: [Color(0xFF0B0E14), Color(0xFF111827)],
@@ -520,74 +787,111 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             end: Alignment.bottomRight,
           ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 40),
-            Image.asset(
-              'assets/veil_header.png',
-              height: 140,
-              fit: BoxFit.cover,
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'Welcome to VEIL',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Your identity is created automatically. Choose a display name and a starting space.',
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
-            ),
-            const SizedBox(height: 24),
-            _InputField(label: 'Display name', controller: _nameController),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              value: _selected,
-              decoration: const InputDecoration(
-                labelText: 'Start in',
-                filled: true,
-                fillColor: Color(0xFF101827),
-              ),
-              items: const [
-                DropdownMenuItem(
-                  value: 'Public Square',
-                  child: Text('Public Square'),
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: IntrinsicHeight(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 12),
+                        Image.asset(
+                          'assets/veil_header.png',
+                          height: 120,
+                          fit: BoxFit.cover,
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                          'Welcome to VEIL',
+                          style: Theme.of(context).textTheme.headlineMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Your identity is created automatically. Choose a display name and a starting space.',
+                          style: Theme.of(
+                            context,
+                          ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+                        ),
+                        const SizedBox(height: 20),
+                        _InputField(
+                          label: 'Display name',
+                          controller: _nameController,
+                        ),
+                        const SizedBox(height: 8),
+                        DropdownButtonFormField<String>(
+                          value: _selected,
+                          decoration: const InputDecoration(
+                            labelText: 'Start in',
+                            filled: true,
+                            fillColor: Color(0xFF101827),
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'Public Square',
+                              child: Text('Public Square'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'Private Circles',
+                              child: Text('Private Circles'),
+                            ),
+                          ],
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() => _selected = value);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Trust starter feeds',
+                          style: Theme.of(
+                            context,
+                          ).textTheme.titleMedium?.copyWith(
+                            color: Colors.white70,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ...controller.suggestedFeeds.map(
+                          (feed) => CheckboxListTile(
+                            value: controller.trustedFeeds.contains(feed),
+                            onChanged: (_) => controller.toggleTrustedFeed(feed),
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(feed),
+                            subtitle: const Text('Bootstrap recommendation'),
+                          ),
+                        ),
+                        const Spacer(),
+                        ElevatedButton(
+                          onPressed: () {
+                            controller.setDisplayName(_nameController.text);
+                            controller.setNamespaceChoice(_selected);
+                            controller.generateIdentity();
+                            widget.onComplete();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            minimumSize: const Size.fromHeight(52),
+                          ),
+                          child: const Text('Continue'),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Recovery phrase stored locally. You can export it later.',
+                          style: Theme.of(
+                            context,
+                          ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-                DropdownMenuItem(
-                  value: 'Private Circles',
-                  child: Text('Private Circles'),
-                ),
-              ],
-              onChanged: (value) {
-                if (value != null) {
-                  setState(() => _selected = value);
-                }
-              },
-            ),
-            const Spacer(),
-            ElevatedButton(
-              onPressed: () {
-                controller.setDisplayName(_nameController.text);
-                controller.setNamespaceChoice(_selected);
-                controller.generateIdentity();
-                widget.onComplete();
-              },
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size.fromHeight(52),
-              ),
-              child: const Text('Continue'),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Recovery phrase stored locally. You can export it later.',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: Colors.white60),
-            ),
-          ],
+              );
+            },
+          ),
         ),
       ),
     );
@@ -636,9 +940,20 @@ class HeaderCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B1220),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0B1220), Color(0xFF121826)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0xFF1F2937)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 16,
+            offset: const Offset(0, 10),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -694,13 +1009,24 @@ class PostCard extends StatelessWidget {
         child: Container(
           height: 160,
           decoration: BoxDecoration(
-            color: const Color(0xFF0F172A),
+            gradient: const LinearGradient(
+              colors: [Color(0xFF0F172A), Color(0xFF0B1220)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: const Color(0xFF1F2937)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.22),
+                blurRadius: 12,
+                offset: const Offset(0, 6),
+              ),
+            ],
           ),
           child: Stack(
             children: [
-              const _BlurPlaceholder(),
+              _BlurPlaceholder(blurHash: entry.blurHash),
               Align(
                 alignment: Alignment.bottomRight,
                 child: _ShardProgressRing(
@@ -718,9 +1044,20 @@ class PostCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: const Color(0xFF0B1220),
+          gradient: const LinearGradient(
+            colors: [Color(0xFF0B1220), Color(0xFF0F172A)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: const Color(0xFF1F2937)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.25),
+              blurRadius: 14,
+              offset: const Offset(0, 8),
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -751,6 +1088,20 @@ class PostCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(entry.body),
+            if (entry.blurHash != null) ...[
+              const SizedBox(height: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  height: 180,
+                  width: double.infinity,
+                  child: BlurHash(
+                    hash: entry.blurHash!,
+                    duration: const Duration(milliseconds: 300),
+                  ),
+                ),
+              ),
+            ],
             if (!entry.reconstructed) ...[
               const SizedBox(height: 12),
               Row(
@@ -768,6 +1119,21 @@ class PostCard extends StatelessWidget {
                   ),
                 ],
               ),
+              if (entry.requestingMissing) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(Icons.radar, size: 16, color: Color(0xFF38BDF8)),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Requesting missing shard',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+                    ),
+                  ],
+                ),
+              ],
             ],
             if (showProtocolDetails) ...[
               const SizedBox(height: 12),
@@ -828,6 +1194,25 @@ class VaultView extends StatelessWidget {
                   context,
                 ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
               ),
+              if (controller.epochOverlapActive) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.swap_horiz,
+                      size: 16,
+                      color: Color(0xFF38BDF8),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Overlap window active',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
@@ -859,7 +1244,9 @@ class _NetworkViewState extends State<NetworkView> {
     final c = widget.controller;
     _wsController = TextEditingController(text: c.wsUrl);
     _peerController = TextEditingController(text: c.peerId);
-    _tagController = TextEditingController(text: c.tagHex);
+    _tagController = TextEditingController(
+      text: c.channelLabel.isNotEmpty ? c.channelLabel : c.tagHex,
+    );
     _bleDeviceController = TextEditingController(text: c.bleDeviceId);
     _bleServiceController = TextEditingController(text: c.bleServiceUuid);
     _bleCharController = TextEditingController(text: c.bleCharacteristicUuid);
@@ -883,13 +1270,17 @@ class _NetworkViewState extends State<NetworkView> {
       padding: const EdgeInsets.all(16),
       children: [
         _Panel(
-          title: 'Network Health',
+          title: 'Network Status',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(controller.connected ? 'Connected' : 'Offline'),
               const SizedBox(height: 8),
-              Text('Local relay: ${controller.relayUrl}'),
+              Text(
+                controller.useLocalRelay
+                    ? 'Using internal relay'
+                    : 'Using external relay',
+              ),
               const SizedBox(height: 8),
               Text('Ghost mode: ${controller.ghostMode ? 'On' : 'Off'}'),
             ],
@@ -900,22 +1291,19 @@ class _NetworkViewState extends State<NetworkView> {
           title: 'Lane Status',
           child: Column(
             children: [
-              ListTile(
-                dense: true,
-                leading: Icon(
-                  controller.connected ? Icons.wifi : Icons.wifi_off,
-                  size: 18,
-                ),
-                title: const Text('WebSocket Lane'),
-                subtitle: Text(controller.connected ? 'Healthy' : 'Idle'),
-                trailing: const Text('WS'),
+              _LaneHealthTile(
+                title: 'WebSocket Lane',
+                icon: controller.connected ? Icons.wifi : Icons.wifi_off,
+                label: 'WS',
+                enabled: controller.connected,
+                snapshot: controller.fastLaneHealth,
               ),
-              ListTile(
-                dense: true,
-                leading: const Icon(Icons.bluetooth, size: 18),
-                title: const Text('Bluetooth Lane'),
-                subtitle: Text(controller.bleEnabled ? 'Enabled' : 'Disabled'),
-                trailing: const Text('BLE'),
+              _LaneHealthTile(
+                title: 'Bluetooth Lane',
+                icon: Icons.bluetooth,
+                label: 'BLE',
+                enabled: controller.bleEnabled,
+                snapshot: controller.fallbackLaneHealth,
               ),
             ],
           ),
@@ -934,24 +1322,26 @@ class _NetworkViewState extends State<NetworkView> {
                 title: const Text('Use local relay'),
                 subtitle: Text(
                   controller.relayReady
-                      ? 'Local relay at ${controller.relayUrl}'
-                      : 'Starting local relay...',
+                      ? 'Internal relay is ready'
+                      : 'Starting internal relay...',
                 ),
               ),
+              if (!controller.useLocalRelay) ...[
+                _InputField(
+                  label: 'WebSocket URL',
+                  controller: _wsController,
+                  onChanged: controller.setWsUrl,
+                ),
+                _InputField(
+                  label: 'Peer ID',
+                  controller: _peerController,
+                  onChanged: controller.setPeerId,
+                ),
+              ],
               _InputField(
-                label: 'WebSocket URL',
-                controller: _wsController,
-                onChanged: controller.setWsUrl,
-              ),
-              _InputField(
-                label: 'Peer ID',
-                controller: _peerController,
-                onChanged: controller.setPeerId,
-              ),
-              _InputField(
-                label: 'Subscribe Tag (hex)',
+                label: 'Channel',
                 controller: _tagController,
-                onChanged: controller.setTagHex,
+                onChanged: controller.setChannelLabel,
               ),
               const SizedBox(height: 12),
               Row(
@@ -1043,6 +1433,8 @@ class DiscoveryView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final peerController = TextEditingController();
+    final tagController = TextEditingController();
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -1054,11 +1446,108 @@ class DiscoveryView extends StatelessWidget {
                   (feed) => ListTile(
                     dense: true,
                     title: Text(feed),
-                    subtitle: const Text('Bootstrap recommendation'),
-                    trailing: const Icon(Icons.add_circle_outline),
+                    subtitle: Text(
+                      controller.trustedFeeds.contains(feed)
+                          ? 'Trusted by you'
+                          : 'Bootstrap recommendation',
+                    ),
+                    trailing: controller.trustedFeeds.contains(feed)
+                        ? const Icon(Icons.verified, color: Color(0xFF34D399))
+                        : const Icon(Icons.add_circle_outline),
+                    onTap: () => controller.toggleTrustedFeed(feed),
                   ),
                 )
                 .toList(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        _Panel(
+          title: 'Add Peer',
+          child: Column(
+            children: [
+              _InputField(
+                label: 'Peer address (ws:// or quic://)',
+                controller: peerController,
+                onChanged: (_) {},
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () =>
+                          controller.addForwardPeer(peerController.text),
+                      child: const Text('Add Peer'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: () => _openScanner(
+                      context,
+                      onResult: controller.handleScanValue,
+                    ),
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: const Text('Scan'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ...controller.forwardPeers.map(
+                (peer) => ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.router, size: 18),
+                  title: Text(peer),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => controller.removeForwardPeer(peer),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        _Panel(
+          title: 'Add Subscription',
+          child: Column(
+            children: [
+              _InputField(
+                label: 'Channel name (or tag:HEX)',
+                controller: tagController,
+                onChanged: (_) {},
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () =>
+                          controller.addSubscription(tagController.text),
+                      child: const Text('Subscribe'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: () => _openScanner(
+                      context,
+                      onResult: controller.handleScanValue,
+                    ),
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: const Text('Scan'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ...controller.extraTags.map(
+                (tag) => ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.tag, size: 18),
+                  title: Text(tag),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => controller.removeSubscription(tag),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -1066,37 +1555,189 @@ class DiscoveryView extends StatelessWidget {
   }
 }
 
-class ComposeSheet extends StatelessWidget {
+Future<void> _openScanner(
+  BuildContext context, {
+  required void Function(String value) onResult,
+}) async {
+  await showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: const Color(0xFF0B0F17),
+    builder: (context) => _QrScannerSheet(onResult: onResult),
+  );
+}
+
+class _QrScannerSheet extends StatefulWidget {
+  final void Function(String value) onResult;
+
+  const _QrScannerSheet({required this.onResult});
+
+  @override
+  State<_QrScannerSheet> createState() => _QrScannerSheetState();
+}
+
+class _QrScannerSheetState extends State<_QrScannerSheet> {
+  bool _handled = false;
+
+  void _handle(String value) {
+    if (_handled) return;
+    _handled = true;
+    widget.onResult(value);
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.6,
+        child: Column(
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              height: 4,
+              width: 40,
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Scan QR',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: MobileScanner(
+                  onDetect: (capture) {
+                    for (final barcode in capture.barcodes) {
+                      final raw = barcode.rawValue;
+                      if (raw != null && raw.trim().isNotEmpty) {
+                        _handle(raw.trim());
+                        break;
+                      }
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LaneHealthTile extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final String label;
+  final bool enabled;
+  final LaneHealthSnapshot? snapshot;
+
+  const _LaneHealthTile({
+    required this.title,
+    required this.icon,
+    required this.label,
+    required this.enabled,
+    required this.snapshot,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final health = snapshot;
+    final sendOk = health?.outboundSendOk ?? 0;
+    final sendErr = health?.outboundSendErr ?? 0;
+    final inbound = health?.inboundReceived ?? 0;
+    final dropped = health?.inboundDropped ?? 0;
+    final queued = health?.outboundQueued ?? 0;
+    final reconnects = health?.reconnectAttempts ?? 0;
+    final sendTotal = sendOk + sendErr;
+    final okRatio = sendTotal == 0 ? 1.0 : sendOk / sendTotal;
+
+    return ListTile(
+      dense: true,
+      leading: Icon(icon, size: 18),
+      title: Text(title),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(enabled ? 'Healthy' : 'Idle'),
+          const SizedBox(height: 4),
+          Text(
+            'ok ${(okRatio * 100).toStringAsFixed(0)}% · '
+            'queued $queued · in $inbound · drop $dropped · retry $reconnects',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Colors.white60,
+            ),
+          ),
+        ],
+      ),
+      trailing: Text(label),
+    );
+  }
+}
+
+class ComposeSheet extends StatefulWidget {
   final void Function(String text) onPublish;
 
   const ComposeSheet({super.key, required this.onPublish});
 
   @override
+  State<ComposeSheet> createState() => _ComposeSheetState();
+}
+
+class _ComposeSheetState extends State<ComposeSheet> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final controller = TextEditingController();
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Compose', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 12),
-          TextField(
-            controller: controller,
-            maxLines: 5,
-            decoration: const InputDecoration(
-              hintText: 'Share an update...',
-              filled: true,
-              fillColor: Color(0xFF101827),
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Compose', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _controller,
+              maxLines: 5,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'Share an update...',
+                filled: true,
+                fillColor: Color(0xFF101827),
+              ),
             ),
-          ),
-          const SizedBox(height: 12),
-          ElevatedButton(
-            onPressed: () => onPublish(controller.text),
-            child: const Text('Publish'),
-          ),
-        ],
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: () => widget.onPublish(_controller.text),
+              child: const Text('Publish'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1107,6 +1748,10 @@ class SettingsSheet extends StatelessWidget {
   final ValueChanged<bool> onToggleDetails;
   final bool ghostMode;
   final ValueChanged<bool> onToggleGhostMode;
+  final bool requireSignedPublic;
+  final ValueChanged<bool> onToggleRequireSigned;
+  final int clockSkewSeconds;
+  final ValueChanged<String> onClockSkewChanged;
 
   const SettingsSheet({
     super.key,
@@ -1114,14 +1759,18 @@ class SettingsSheet extends StatelessWidget {
     required this.onToggleDetails,
     required this.ghostMode,
     required this.onToggleGhostMode,
+    required this.requireSignedPublic,
+    required this.onToggleRequireSigned,
+    required this.clockSkewSeconds,
+    required this.onClockSkewChanged,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+    return SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        shrinkWrap: true,
         children: [
           SwitchListTile(
             value: showProtocolDetails,
@@ -1134,6 +1783,21 @@ class SettingsSheet extends StatelessWidget {
             onChanged: onToggleGhostMode,
             title: const Text('Ghost mode'),
             subtitle: const Text('Prefer privacy lanes (preview).'),
+          ),
+          SwitchListTile(
+            value: requireSignedPublic,
+            onChanged: onToggleRequireSigned,
+            title: const Text('Require signed public posts'),
+            subtitle: const Text('Drop unsigned objects in public namespaces.'),
+          ),
+          TextFormField(
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Clock skew seconds',
+              helperText: 'Adjust for device clock drift (max +/-3600).',
+            ),
+            initialValue: clockSkewSeconds.toString(),
+            onFieldSubmitted: onClockSkewChanged,
           ),
         ],
       ),
@@ -1149,12 +1813,27 @@ class _Panel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF0B1220),
+        gradient: LinearGradient(
+          colors: [
+            scheme.surfaceContainerHighest.withOpacity(0.9),
+            const Color(0xFF0B1220),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: const Color(0xFF1F2937)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.25),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1204,7 +1883,9 @@ class _InputField extends StatelessWidget {
 }
 
 class _BlurPlaceholder extends StatefulWidget {
-  const _BlurPlaceholder();
+  final String? blurHash;
+
+  const _BlurPlaceholder({this.blurHash});
 
   @override
   State<_BlurPlaceholder> createState() => _BlurPlaceholderState();
@@ -1225,6 +1906,15 @@ class _BlurPlaceholderState extends State<_BlurPlaceholder>
 
   @override
   Widget build(BuildContext context) {
+    if (widget.blurHash != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BlurHash(
+          hash: widget.blurHash!,
+          duration: const Duration(milliseconds: 300),
+        ),
+      );
+    }
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, _) {

@@ -1,4 +1,5 @@
 import "dart:async";
+import "dart:math";
 import "dart:typed_data";
 
 import "bridge/veil_bridge.dart";
@@ -38,6 +39,10 @@ class VeilClientOptions {
   final int requestHopLimit;
   final int requestCooldownMs;
   final int maxForwardHops;
+  final int fastFanout;
+  final int fallbackFanout;
+  final bool adaptiveLaneScoring;
+  final double minimumHealthyLaneScore;
   final List<VeilClientPlugin> plugins;
 
   const VeilClientOptions({
@@ -48,6 +53,10 @@ class VeilClientOptions {
     this.requestHopLimit = 2,
     this.requestCooldownMs = 2000,
     this.maxForwardHops = 6,
+    this.fastFanout = 3,
+    this.fallbackFanout = 1,
+    this.adaptiveLaneScoring = true,
+    this.minimumHealthyLaneScore = 0.2,
     this.plugins = const [],
   });
 }
@@ -74,6 +83,11 @@ class VeilClient {
   final Map<String, int> _cacheSeenCount = {};
   final Map<String, int> _shardForwardHops = {};
   final Map<String, int> _objectPriority = {};
+  late final RarityTrackingStore? _rarityStore;
+  LaneHealthSnapshot? _fastHealth;
+  LaneHealthSnapshot? _fallbackHealth;
+  double _fastScore = 1.0;
+  double _fallbackScore = 1.0;
   bool _running = false;
   Timer? _timer;
 
@@ -87,7 +101,13 @@ class VeilClient {
     this.decryptKey,
     this.options = const VeilClientOptions(),
   }) : cacheStore = cacheStore ?? MemoryShardCacheStore(),
-       bridge = bridge ?? const VeilBridge();
+       bridge = bridge ?? const VeilBridge() {
+    if (this.cacheStore is RarityTrackingStore) {
+      _rarityStore = this.cacheStore as RarityTrackingStore;
+    } else {
+      _rarityStore = null;
+    }
+  }
 
   void subscribe(TagHex tagHex) => _subscriptions.add(tagHex.toLowerCase());
   void unsubscribe(TagHex tagHex) =>
@@ -116,6 +136,7 @@ class VeilClient {
 
   Future<void> tick() async {
     if (!_running) return;
+    _updateLaneHealth();
     final msg = await fastLane.recv();
     if (msg != null) {
       await _processInbound(msg, fastLane);
@@ -135,6 +156,19 @@ class VeilClient {
     }
     if (_cacheLastSeen.length <= maxEntries) {
       return;
+    }
+
+    if (_rarityStore != null) {
+      final missing = <String>[];
+      for (final key in _cacheLastSeen.keys) {
+        if (!_cacheSeenCount.containsKey(key)) {
+          missing.add(key);
+        }
+      }
+      if (missing.isNotEmpty) {
+        final counts = await _rarityStore!.loadSeenCounts(missing);
+        _cacheSeenCount.addAll(counts);
+      }
     }
 
     final entries = _cacheLastSeen.entries.toList();
@@ -198,6 +232,7 @@ class VeilClient {
       await cacheStore.set(key, msg.bytes);
       _cacheLastSeen[key] = DateTime.now().millisecondsSinceEpoch;
       _cacheSeenCount[key] = (_cacheSeenCount[key] ?? 0) + 1;
+      await _rarityStore?.noteSeen(key);
       await _evictIfNeeded();
       _noteShard(meta, key);
 
@@ -242,16 +277,51 @@ class VeilClient {
         return;
       }
 
-      for (final peer in _forwardPeers) {
-        if (peer == msg.peer) continue;
-        await fastLane.send(peer, msg.bytes);
-      }
-      if (_forwardPeers.isNotEmpty) {
+      final forwarded = await _forwardToPeers(msg, key);
+      if (forwarded > 0) {
         _shardForwardHops[key] = hops + 1;
       }
     } catch (err) {
       hooks.onDecodeError?.call(msg.peer, err);
     }
+  }
+
+  Future<int> _forwardToPeers(LaneMessage msg, String key) async {
+    final peers =
+        _forwardPeers.where((peer) => peer != msg.peer).toList(growable: false);
+    if (peers.isEmpty) {
+      return 0;
+    }
+
+    var fastFanout = options.fastFanout;
+    var fallbackFanout = options.fallbackFanout;
+    if (options.adaptiveLaneScoring && fallbackLane != null) {
+      if (_fastScore < options.minimumHealthyLaneScore &&
+          _fallbackScore > _fastScore) {
+        final shift = max(0, fastFanout - 1);
+        fastFanout = max(1, fastFanout - shift);
+        fallbackFanout += shift;
+      }
+    }
+
+    var forwarded = 0;
+    final fastPeers = _selectPeers(peers, fastFanout);
+    for (final peer in fastPeers) {
+      await fastLane.send(peer, msg.bytes);
+      forwarded += 1;
+    }
+
+    if (fallbackLane != null &&
+        fallbackFanout > 0 &&
+        _fallbackScore >= options.minimumHealthyLaneScore) {
+      final fallbackPeers = _selectPeers(peers, fallbackFanout);
+      for (final peer in fallbackPeers) {
+        await fallbackLane!.send(peer, msg.bytes);
+        forwarded += 1;
+      }
+    }
+
+    return forwarded;
   }
 
   void _noteShard(ShardMeta meta, String key) {
@@ -363,6 +433,46 @@ class VeilClient {
       return key;
     }
     return key.substring(0, idx);
+  }
+
+  void _updateLaneHealth() {
+    _fastHealth = fastLane.healthSnapshot();
+    _fastScore = _scoreFromSnapshot(_fastHealth);
+    if (fallbackLane != null) {
+      _fallbackHealth = fallbackLane!.healthSnapshot();
+      _fallbackScore = _scoreFromSnapshot(_fallbackHealth);
+    }
+  }
+
+  double _scoreFromSnapshot(LaneHealthSnapshot? snapshot) {
+    if (snapshot == null) {
+      return 1.0;
+    }
+    final outboundTotal =
+        snapshot.outboundSendOk + snapshot.outboundSendErr;
+    final sendOkRatio = outboundTotal == 0
+        ? 1.0
+        : snapshot.outboundSendOk / outboundTotal;
+    final inboundTotal =
+        snapshot.inboundReceived + snapshot.inboundDropped;
+    final dropRatio = inboundTotal == 0
+        ? 0.0
+        : snapshot.inboundDropped / inboundTotal;
+    final reconnectPenalty =
+        min(0.5, snapshot.reconnectAttempts / 10.0);
+    final score =
+        sendOkRatio * (1.0 - dropRatio) * (1.0 - reconnectPenalty);
+    return score.clamp(0.0, 1.0);
+  }
+
+  List<String> _selectPeers(List<String> peers, int count) {
+    if (count <= 0 || peers.isEmpty) {
+      return const [];
+    }
+    if (peers.length <= count) {
+      return List<String>.from(peers);
+    }
+    return peers.sublist(0, count);
   }
 }
 

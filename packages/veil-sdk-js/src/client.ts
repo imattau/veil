@@ -144,6 +144,7 @@ export interface VeilClientHooks {
 
 export interface VeilClientOptions {
   cacheStore?: ShardCacheStore;
+  requiredSignedNamespaces?: number[];
   fastFanout?: number;
   fallbackFanout?: number;
   adaptiveLaneScoring?: boolean;
@@ -270,6 +271,7 @@ export class VeilClient {
   private readonly requestHopLimit: number;
   private readonly requestCooldownMs: number;
   private readonly maxForwardHops: number;
+  private readonly requiredSignedNamespaces: Set<number>;
   private readonly plugins: VeilClientPlugin[];
   private readonly objectRootPriority = new Map<string, number>();
   private seenSincePrune = 0;
@@ -325,6 +327,9 @@ export class VeilClient {
     this.requestHopLimit = Math.max(0, options.requestHopLimit ?? 2);
     this.requestCooldownMs = Math.max(0, options.requestCooldownMs ?? 2_000);
     this.maxForwardHops = Math.max(0, options.maxForwardHops ?? 6);
+    this.requiredSignedNamespaces = new Set(
+      (options.requiredSignedNamespaces ?? []).filter((value) => Number.isInteger(value)),
+    );
     this.plugins = options.plugins ?? [];
     if (fallbackLane) {
       this.laneHealth.fallback = {
@@ -1046,6 +1051,9 @@ export class VeilClient {
         return;
       }
     }
+
+    // requiredSignedNamespaces is advisory at shard stage; enforce at object level
+    // via shouldAcceptShard or application-level verification.
 
     const tagHex = meta.tagHex.toLowerCase();
     if (!this.subscriptions.has(tagHex)) {

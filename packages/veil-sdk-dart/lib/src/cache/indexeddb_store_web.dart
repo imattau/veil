@@ -3,10 +3,12 @@ import "dart:typed_data";
 
 import "shard_cache_store.dart";
 
-class IndexedDbShardCacheStore implements ShardCacheStore {
+class IndexedDbShardCacheStore
+    implements ShardCacheStore, RarityTrackingStore {
   final String dbName;
   final String storeName;
   Database? _db;
+  final Map<String, int> _seen = {};
 
   IndexedDbShardCacheStore({
     this.dbName = "veil-cache",
@@ -102,6 +104,23 @@ class IndexedDbShardCacheStore implements ShardCacheStore {
       completer.completeError(request.error ?? "indexeddb keys failed");
     });
     return completer.future;
+  }
+
+  @override
+  Future<void> noteSeen(String key) async {
+    _seen.update(key, (value) => value + 1, ifAbsent: () => 1);
+  }
+
+  @override
+  Future<Map<String, int>> loadSeenCounts(List<String> keys) async {
+    final out = <String, int>{};
+    for (final key in keys) {
+      final count = _seen[key];
+      if (count != null) {
+        out[key] = count;
+      }
+    }
+    return out;
   }
 }
 
