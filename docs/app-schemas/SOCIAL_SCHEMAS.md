@@ -76,6 +76,51 @@ FileChunkV1 {
 **Thread Context Manager**: For `parent_root` / `thread_root`, request missing
 objects to fill the conversation context.
 
+### Example (SDK-js)
+
+```ts
+import { VeilClient, createAutoFetchPlugin, createThreadContextPlugin } from "@veil/sdk-js";
+
+const client = new VeilClient(fastLane, fallbackLane, hooks, {
+  plugins: [
+    createAutoFetchPlugin({
+      resolveTagForRoot: (root) => rootToTag.get(root) ?? null,
+    }),
+    createThreadContextPlugin({
+      resolveTagForRoot: (root) => rootToTag.get(root) ?? null,
+    }),
+  ],
+});
+
+// After your app reconstructs a full object:
+client.notifyObject(objectRootHex, objectBytes);
+```
+
+### Example (SDK-dart)
+
+```dart
+import "package:veil_sdk/veil_sdk.dart";
+
+final client = VeilClient(
+  fastLane: fastLane,
+  fallbackLane: fallbackLane,
+  hooks: const VeilClientHooks(),
+  options: VeilClientOptions(
+    plugins: [
+      AutoFetchPlugin(
+        resolveTagForRoot: (root, _) => rootToTag[root],
+      ),
+      ThreadContextPlugin(
+        resolveTagForRoot: (root, _) => rootToTag[root],
+      ),
+    ],
+  ),
+);
+
+// After reconstruction:
+client.notifyObject(objectRootHex, objectBytes);
+```
+
 ## 5) Constraints (Implementer Notes)
 
 - **Size enforcement**: if payload > ~250,000 bytes, split into `FileChunk` and
