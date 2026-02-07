@@ -77,7 +77,7 @@ class _VeilHomePageState extends State<VeilHomePage> {
   }
 
   Future<void> _connect() async {
-    await _client?.stop();
+    _client?.stop();
     final db = await openDatabase('veil_android_cache.db');
     final store = SqfliteShardCacheStore(db: db);
     await store.init();
