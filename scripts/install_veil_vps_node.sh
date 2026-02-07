@@ -169,8 +169,43 @@ ensure_writable_dir "$WEB_ROOT"
 chmod 0700 "$PREFIX" "$PREFIX/data" || true
 chown -R "$RUN_USER:$RUN_GROUP" "$PREFIX" "$WEB_ROOT" || true
 
+ensure_cargo() {
+  if command -v cargo >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "Rust toolchain not found."
+  if [[ -n "${VEIL_VPS_USE_DOCKER:-}" ]]; then
+    return 1
+  fi
+  read -r -p "Install Rust toolchain via rustup? [y/N] " confirm
+  if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "curl is required to install rustup."
+    local mgr
+    mgr=$(detect_pkg_mgr)
+    if [[ "$mgr" != "none" ]]; then
+      install_pkgs "$mgr" curl
+    else
+      echo "No package manager found to install curl."
+      return 1
+    fi
+  fi
+  curl https://sh.rustup.rs -sSf | sh -s -- -y
+  export PATH="$HOME/.cargo/bin:$PATH"
+  if ! command -v cargo >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
 if [[ ! -f target/release/veil-vps-node ]]; then
   echo "Building veil-vps-node (release)..."
+  if ! ensure_cargo; then
+    echo "Cargo not available. You can set VEIL_VPS_USE_DOCKER=1 and run via Docker."
+    exit 1
+  fi
   cargo build -p veil-vps-node --release
 fi
 
