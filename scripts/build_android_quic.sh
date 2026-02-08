@@ -18,7 +18,17 @@ if ! command -v cargo-ndk >/dev/null 2>&1; then
 fi
 
 if [[ -z "${ANDROID_NDK_HOME:-}" && -z "${ANDROID_NDK_ROOT:-}" ]]; then
+  if [[ -n "${ANDROID_SDK_ROOT:-}" && -d "${ANDROID_SDK_ROOT}/ndk" ]]; then
+    latest_ndk=$(ls -1 "${ANDROID_SDK_ROOT}/ndk" 2>/dev/null | sort -V | tail -n 1)
+    if [[ -n "${latest_ndk:-}" && -d "${ANDROID_SDK_ROOT}/ndk/${latest_ndk}" ]]; then
+      export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/${latest_ndk}"
+    fi
+  fi
+fi
+
+if [[ -z "${ANDROID_NDK_HOME:-}" && -z "${ANDROID_NDK_ROOT:-}" ]]; then
   echo "ANDROID_NDK_HOME/ANDROID_NDK_ROOT not set."
+  echo "Tip: export ANDROID_SDK_ROOT and re-run, or set ANDROID_NDK_HOME directly."
   exit 1
 fi
 
@@ -33,4 +43,3 @@ for abi in "${ABI_LIST[@]}"; do
   fi
   echo "Wrote $OUT_DIR/$abi/libveil_sdk_bridge.so"
   done
-
