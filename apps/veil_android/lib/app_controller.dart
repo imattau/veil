@@ -139,6 +139,7 @@ class VeilAppController extends ChangeNotifier {
         host: uri.host,
         port: port ?? 0,
         path: path,
+        query: uri.query.isEmpty ? null : uri.query,
       ).toString();
       return normalized.replaceAll(':0', '');
     }
@@ -331,9 +332,27 @@ class VeilAppController extends ChangeNotifier {
     namespaceChoice = prefs.getString('namespaceChoice') ?? namespaceChoice;
     peerId = prefs.getString('peerId') ?? peerId;
     wsUrl = prefs.getString('wsUrl') ?? wsUrl;
+    var wsChanged = false;
+    final normalizedWs = _normalizeWsEndpoint(wsUrl);
+    if (normalizedWs == null) {
+      if (wsUrl.isNotEmpty) {
+        wsChanged = true;
+      }
+      wsUrl = '';
+    } else if (normalizedWs != wsUrl) {
+      wsUrl = normalizedWs;
+      wsChanged = true;
+    }
     _wsEndpoints
       ..clear()
-      ..addAll(prefs.getStringList('wsEndpoints') ?? []);
+      ..addAll(
+        (prefs.getStringList('wsEndpoints') ?? [])
+            .map(_normalizeWsEndpoint)
+            .whereType<String>(),
+      );
+    if ((prefs.getStringList('wsEndpoints') ?? []).length != _wsEndpoints.length) {
+      wsChanged = true;
+    }
     tagHex = prefs.getString('tagHex') ?? tagHex;
     channelLabel = prefs.getString('channelLabel') ?? channelLabel;
     bleDeviceId = prefs.getString('bleDeviceId') ?? bleDeviceId;
@@ -387,6 +406,9 @@ class VeilAppController extends ChangeNotifier {
     }
     recoveryPhrase =
         await _secureStorage.read(key: 'recoveryPhrase') ?? recoveryPhrase;
+    if (wsChanged) {
+      await _persistPrefs();
+    }
     notifyListeners();
   }
 
