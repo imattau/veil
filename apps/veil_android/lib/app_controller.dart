@@ -34,6 +34,7 @@ class VeilAppController extends ChangeNotifier {
   final PublishQueue _publishQueue = PublishQueue();
   bool _publishInFlight = false;
   int _publishAttempts = 0;
+  static const int _maxStoredFeedEntries = 200;
   Database? _db;
   int _maxCacheEntries = 50000;
   int _maxPublishQueue = 500;
@@ -209,6 +210,7 @@ class VeilAppController extends ChangeNotifier {
     await _loadPrefs();
     await _openDb();
     await _loadPublishQueue();
+    await _loadFeedEntries();
     await _startLocalRelay();
     _startEpochTimer();
     connect();
@@ -505,6 +507,155 @@ class VeilAppController extends ChangeNotifier {
     await _db!.execute(
       'CREATE TABLE IF NOT EXISTS publish_queue (object_root TEXT PRIMARY KEY, bytes BLOB, enqueued_at INTEGER)',
     );
+    await _db!.execute(
+      'CREATE TABLE IF NOT EXISTS feed_entries (id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at INTEGER)',
+    );
+  }
+
+  Future<void> _loadFeedEntries() async {
+    final db = _db;
+    if (db == null) return;
+    final rows = await db.query(
+      'feed_entries',
+      orderBy: 'created_at DESC',
+      limit: _maxStoredFeedEntries,
+    );
+    if (rows.isEmpty) return;
+    _feed
+      ..clear()
+      ..addAll(
+        rows
+            .map((row) => _decodeFeedEntry(row['json'] as String))
+            .whereType<FeedEntry>(),
+      );
+  }
+
+  Future<void> _persistFeedEntry(FeedEntry entry) async {
+    if (entry.isGhost || entry.body.trim().isEmpty) return;
+    final db = _db;
+    if (db == null) return;
+    final json = _encodeFeedEntry(entry);
+    await db.insert(
+      'feed_entries',
+      {
+        'id': entry.id,
+        'json': json,
+        'created_at': entry.timestamp.millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    await _trimFeedEntries();
+  }
+
+  Future<void> _trimFeedEntries() async {
+    final db = _db;
+    if (db == null) return;
+    final rows = await db.query(
+      'feed_entries',
+      columns: ['id'],
+      orderBy: 'created_at DESC',
+      offset: _maxStoredFeedEntries,
+    );
+    if (rows.isEmpty) return;
+    final ids = rows.map((row) => row['id']).whereType<String>().toList();
+    if (ids.isEmpty) return;
+    final placeholders = List.filled(ids.length, '?').join(',');
+    await db.delete('feed_entries', where: 'id IN ($placeholders)', whereArgs: ids);
+  }
+
+  String _encodeFeedEntry(FeedEntry entry) {
+    final attachments = entry.attachments
+        .map(
+          (a) => {
+            'name': a.name,
+            'mime': a.mime,
+            'bytes': base64Encode(a.bytes),
+            'hashHex': a.hashHex,
+            'size': a.size,
+            'isImage': a.isImage,
+            'isVideo': a.isVideo,
+            'chunkCount': a.chunkCount,
+          },
+        )
+        .toList();
+    final previews = entry.linkPreviews
+        .map(
+          (p) => {
+            'url': p.url.toString(),
+            'title': p.title,
+            'description': p.description,
+            'imageUrl': p.imageUrl,
+          },
+        )
+        .toList();
+    return jsonEncode({
+      'id': entry.id,
+      'author': entry.author,
+      'authorKey': entry.authorKey,
+      'body': entry.body,
+      'blurHash': entry.blurHash,
+      'attachments': attachments,
+      'linkPreviews': previews,
+      'reconstructed': entry.reconstructed,
+      'isGhost': entry.isGhost,
+      'timestamp': entry.timestamp.millisecondsSinceEpoch,
+      'shardsHave': entry.shardsHave,
+      'shardsTotal': entry.shardsTotal,
+      'requestingMissing': entry.requestingMissing,
+      'fadedIn': entry.fadedIn,
+    });
+  }
+
+  FeedEntry? _decodeFeedEntry(String json) {
+    try {
+      final map = jsonDecode(json) as Map<String, dynamic>;
+      final attachments = (map['attachments'] as List<dynamic>? ?? [])
+          .map((item) => item as Map<String, dynamic>)
+          .map(
+            (item) => Attachment(
+              name: item['name'] as String? ?? 'attachment',
+              mime: item['mime'] as String? ?? 'application/octet-stream',
+              bytes: base64Decode(item['bytes'] as String? ?? ''),
+              hashHex: item['hashHex'] as String? ?? '',
+              size: item['size'] as int? ?? 0,
+              isImage: item['isImage'] as bool? ?? false,
+              isVideo: item['isVideo'] as bool? ?? false,
+              chunkCount: item['chunkCount'] as int? ?? 1,
+            ),
+          )
+          .toList();
+      final previews = (map['linkPreviews'] as List<dynamic>? ?? [])
+          .map((item) => item as Map<String, dynamic>)
+          .map(
+            (item) => LinkPreview(
+              url: Uri.parse(item['url'] as String? ?? ''),
+              title: item['title'] as String? ?? '',
+              description: item['description'] as String?,
+              imageUrl: item['imageUrl'] as String?,
+            ),
+          )
+          .toList();
+      return FeedEntry(
+        id: map['id'] as String? ?? '',
+        author: map['author'] as String? ?? '',
+        authorKey: map['authorKey'] as String? ?? '',
+        body: map['body'] as String? ?? '',
+        blurHash: map['blurHash'] as String?,
+        attachments: attachments,
+        linkPreviews: previews,
+        reconstructed: map['reconstructed'] as bool? ?? true,
+        isGhost: map['isGhost'] as bool? ?? false,
+        timestamp: DateTime.fromMillisecondsSinceEpoch(
+          map['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch,
+        ),
+        shardsHave: map['shardsHave'] as int? ?? 0,
+        shardsTotal: map['shardsTotal'] as int? ?? 0,
+        requestingMissing: map['requestingMissing'] as bool? ?? false,
+        fadedIn: map['fadedIn'] as bool? ?? false,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _loadPublishQueue() async {
@@ -1150,6 +1301,7 @@ class VeilAppController extends ChangeNotifier {
       timestamp: DateTime.now(),
     );
     _feed.insert(0, entry);
+    _persistFeedEntry(entry);
     _events.insert(0, 'Local post created');
     _notify();
     _enqueuePublishObjects(text, attachments, mentions);
@@ -1160,6 +1312,7 @@ class VeilAppController extends ChangeNotifier {
           item.linkPreviews
             ..clear()
             ..addAll(updated);
+          _persistFeedEntry(item);
         }
       }
       notifyListeners();
@@ -1265,6 +1418,7 @@ class VeilAppController extends ChangeNotifier {
         entry.shardsHave = entry.shardsTotal;
         entry.requestingMissing = false;
         entry.fadedIn = false;
+        _persistFeedEntry(entry);
       }
     }
     _notify();
