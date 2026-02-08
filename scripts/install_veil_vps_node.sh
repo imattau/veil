@@ -95,6 +95,13 @@ pick_free_port() {
 }
 
 resolve_ports() {
+  local existing_quic_bind=""
+  if [[ -f "$ENV_FILE" ]]; then
+    existing_quic_bind=$(grep "^VEIL_VPS_QUIC_BIND=" "$ENV_FILE" | tail -n 1 | cut -d= -f2-)
+  fi
+  if [[ -n "$existing_quic_bind" ]]; then
+    VEIL_VPS_QUIC_BIND="$existing_quic_bind"
+  fi
   if port_in_use "$PROXY_HTTP_PORT"; then
     if [[ "$REVERSE_PROXY" == "caddy" || "$REVERSE_PROXY" == "auto" ]] && systemctl is-active --quiet caddy; then
       echo "HTTP port ${PROXY_HTTP_PORT} already in use by Caddy; continuing."
@@ -112,19 +119,35 @@ resolve_ports() {
     fi
   fi
   if port_in_use "$PROXY_HEALTH_PORT"; then
-    PROXY_HEALTH_PORT=$(pick_free_port "$PROXY_HEALTH_PORT" 9091 19090)
-    echo "Health port in use, switching to ${PROXY_HEALTH_PORT}."
+    local existing_health=""
+    if [[ -f "$ENV_FILE" ]]; then
+      existing_health=$(grep "^VEIL_VPS_HEALTH_PORT=" "$ENV_FILE" | tail -n 1 | cut -d= -f2-)
+    fi
+    if [[ -n "$existing_health" && "$existing_health" == "$PROXY_HEALTH_PORT" ]]; then
+      echo "Health port ${PROXY_HEALTH_PORT} already used by veil-vps-node; continuing."
+    else
+      PROXY_HEALTH_PORT=$(pick_free_port "$PROXY_HEALTH_PORT" 9091 19090)
+      echo "Health port in use, switching to ${PROXY_HEALTH_PORT}."
+    fi
   fi
   local quic_port="5000"
   if [[ -n "${VEIL_VPS_QUIC_BIND:-}" ]]; then
     quic_port="${VEIL_VPS_QUIC_BIND##*:}"
   fi
   if port_in_use "$quic_port"; then
-    local new_quic
-    new_quic=$(pick_free_port "$quic_port" 5001 15000)
-    if [[ "$new_quic" != "$quic_port" ]]; then
-      export VEIL_VPS_QUIC_BIND="0.0.0.0:${new_quic}"
-      echo "QUIC port in use, switching to ${new_quic}."
+    local existing_quic_port=""
+    if [[ -n "$existing_quic_bind" ]]; then
+      existing_quic_port="${existing_quic_bind##*:}"
+    fi
+    if [[ -n "$existing_quic_port" && "$existing_quic_port" == "$quic_port" ]]; then
+      echo "QUIC port ${quic_port} already used by veil-vps-node; continuing."
+    else
+      local new_quic
+      new_quic=$(pick_free_port "$quic_port" 5001 15000)
+      if [[ "$new_quic" != "$quic_port" ]]; then
+        export VEIL_VPS_QUIC_BIND="0.0.0.0:${new_quic}"
+        echo "QUIC port in use, switching to ${new_quic}."
+      fi
     fi
   fi
 }
