@@ -74,6 +74,12 @@ class _NetworkViewState extends State<NetworkView> {
         : null;
     final rawEndpoint = _wsAddController.text.trim();
     final lowerEndpoint = rawEndpoint.toLowerCase();
+    if (_quicController.text != controller.quicEndpointValue) {
+      _quicController.text = controller.quicEndpointValue;
+    }
+    if (_quicCertController.text != controller.quicTrustedCertValue) {
+      _quicCertController.text = controller.quicTrustedCertValue;
+    }
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
