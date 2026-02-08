@@ -1049,9 +1049,6 @@ class VeilAppController extends ChangeNotifier {
       if (derived.isNotEmpty) {
         tagHex = derived;
         _channelTags[value] = derived;
-        if (!_channelLabels.contains(value)) {
-          _channelLabels.add(value);
-        }
         _persistPrefs();
         notifyListeners();
       }
