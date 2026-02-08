@@ -145,11 +145,11 @@ class VeilAppController extends ChangeNotifier {
       final normalized = Uri(
         scheme: scheme,
         host: uri.host,
-        port: port ?? 0,
+        port: port,
         path: path,
         query: uri.query.isEmpty ? null : uri.query,
       ).toString();
-      return normalized.replaceAll(':0', '');
+      return normalized;
     }
     return null;
   }
@@ -638,8 +638,13 @@ class VeilAppController extends ChangeNotifier {
     }
     if (lower.startsWith('ws://') ||
         lower.startsWith('wss://') ||
-        lower.startsWith('quic://')) {
-      addForwardPeer(raw);
+        lower.startsWith('http://') ||
+        lower.startsWith('https://')) {
+      addWsEndpoint(raw);
+      return;
+    }
+    if (lower.startsWith('quic://')) {
+      setQuicEndpoint(raw);
       return;
     }
     final hex = lower.replaceAll(RegExp(r'[^0-9a-f]'), '');
@@ -921,7 +926,15 @@ class VeilAppController extends ChangeNotifier {
     endpoints = endpoints
         .map(_normalizeWsEndpoint)
         .whereType<String>()
+        .where((value) => value.startsWith('ws://') || value.startsWith('wss://'))
         .toList();
+    if (endpoints.isEmpty) {
+      final fallback = _relay?.url ?? wsUrl;
+      final normalizedFallback = _normalizeWsEndpoint(fallback);
+      if (normalizedFallback != null) {
+        endpoints = [normalizedFallback];
+      }
+    }
     final wsLanes = endpoints
         .map(
           (endpoint) => WebSocketLane(url: Uri.parse(endpoint), peerId: peerId),
