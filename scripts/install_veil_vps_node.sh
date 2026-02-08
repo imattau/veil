@@ -238,8 +238,11 @@ ensure_cargo() {
   return 0
 }
 
-if [[ ! -f target/release/veil-vps-node ]]; then
+if command -v cargo >/dev/null 2>&1; then
   echo "Building veil-vps-node (release)..."
+  cargo build -p veil-vps-node --release
+elif [[ ! -f target/release/veil-vps-node ]]; then
+  echo "Cargo not found and no binary present."
   if ! ensure_cargo; then
     echo "Cargo not available. You can set VEIL_VPS_USE_DOCKER=1 and run via Docker."
     exit 1
