@@ -3,7 +3,71 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
+import 'package:veil_sdk/src/bridge/frb_generated.dart';
+
+class _MockBridgeApi extends VeilBridgeApiApi {
+  @override
+  Future<BigInt> crateApiCurrentEpochSeconds({
+    required BigInt now,
+    required BigInt epochSeconds,
+  }) async {
+    return BigInt.zero;
+  }
+
+  @override
+  Future<ObjectMeta> crateApiDecodeObjectMeta({required List<int> bytes}) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<ShardMeta> crateApiDecodeShardMeta({required List<int> bytes}) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<Uint8List> crateApiDecryptObjectPayload({
+    required List<int> objectBytes,
+    required List<int> keyBytes,
+  }) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<String> crateApiDeriveFeedTagHex({
+    required String publisherPubkeyHex,
+    required int namespace,
+  }) async {
+    return '0' * 64;
+  }
+
+  @override
+  Future<String> crateApiDeriveObjectRootHex({required List<int> objectBytes}) async {
+    return '1' * 64;
+  }
+
+  @override
+  Future<String> crateApiDeriveRvTagHex({
+    required String recipientPubkeyHex,
+    required int epoch,
+    required int namespace,
+  }) async {
+    return '2' * 64;
+  }
+
+  @override
+  Future<Uint8List> crateApiReconstructObjectPaddedFromShards({
+    required List<Uint8List> shardBytes,
+    required String expectedRootHex,
+  }) async {
+    return Uint8List(0);
+  }
+}
+
 void main() {
+  setUpAll(() async {
+    VeilBridgeApi.initMock(api: _MockBridgeApi());
+  });
+
   test('publisher builds post with attachments', () async {
     final publisher = VeilPublisher();
     final attachment = Uint8List.fromList(List<int>.generate(1024, (i) => i % 256));
