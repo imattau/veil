@@ -14,11 +14,15 @@ import 'widgets.dart';
 class HomeFeed extends StatelessWidget {
   final VeilAppController controller;
   final bool showProtocolDetails;
+  final VoidCallback onOpenNetwork;
+  final VoidCallback onOpenDiscovery;
 
   const HomeFeed({
     super.key,
     required this.controller,
     required this.showProtocolDetails,
+    required this.onOpenNetwork,
+    required this.onOpenDiscovery,
   });
 
   @override
@@ -29,7 +33,11 @@ class HomeFeed extends StatelessWidget {
       itemCount: items.isEmpty ? 1 : items.length,
       itemBuilder: (context, index) {
         if (items.isEmpty) {
-          return const Center(child: CircularProgressIndicator());
+          return _EmptyFeedState(
+            status: controller.connectionStatus,
+            onOpenNetwork: onOpenNetwork,
+            onOpenDiscovery: onOpenDiscovery,
+          );
         }
         final entry = items[index];
         return PostCard(
@@ -54,6 +62,80 @@ class HomeFeed extends StatelessWidget {
           },
         );
       },
+    );
+  }
+}
+
+class _EmptyFeedState extends StatelessWidget {
+  final String status;
+  final VoidCallback onOpenNetwork;
+  final VoidCallback onOpenDiscovery;
+
+  const _EmptyFeedState({
+    required this.status,
+    required this.onOpenNetwork,
+    required this.onOpenDiscovery,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isOffline = status == 'OFFLINE';
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0B1220), Color(0xFF0F172A)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF1F2937)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isOffline ? Icons.cloud_off : Icons.auto_awesome,
+                color: Colors.white70,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                isOffline ? 'Feed offline' : 'Feed ready',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            isOffline
+                ? 'Connect to a peer to start receiving posts.'
+                : 'No posts yet. Join channels to fill your feed.',
+            style: Theme.of(context)
+                .textTheme
+                .bodyMedium
+                ?.copyWith(color: Colors.white70),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: onOpenNetwork,
+                icon: const Icon(Icons.network_check),
+                label: const Text('Network'),
+              ),
+              OutlinedButton.icon(
+                onPressed: onOpenDiscovery,
+                icon: const Icon(Icons.explore),
+                label: const Text('Discover'),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

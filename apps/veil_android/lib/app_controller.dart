@@ -40,6 +40,7 @@ class VeilAppController extends ChangeNotifier {
   int _maxPublishQueue = 500;
   SharedPreferences? _prefs;
   final List<FeedEntry> _feed = [];
+  final List<FeedEntry> _visibleFeed = [];
   final List<PrivateMessage> _privateMessages = [];
   final List<String> _events = [];
   final List<String> _suggestedFeeds = [
@@ -198,8 +199,7 @@ class VeilAppController extends ChangeNotifier {
         .toList();
   }
   List<FeedEntry> get feed => List.unmodifiable(_feed);
-  List<FeedEntry> get visibleFeed =>
-      List.unmodifiable(_feed.where((entry) => !isBlocked(entry.authorKey)));
+  List<FeedEntry> get visibleFeed => List.unmodifiable(_visibleFeed);
   List<PrivateMessage> get privateMessages =>
       List.unmodifiable(_privateMessages);
   List<String> get events => List.unmodifiable(_events);
@@ -632,6 +632,7 @@ class VeilAppController extends ChangeNotifier {
             .map((row) => _decodeFeedEntry(row['json'] as String))
             .whereType<FeedEntry>(),
       );
+    _refreshVisibleFeed();
   }
 
   Future<void> _persistFeedEntry(FeedEntry entry) async {
@@ -1538,6 +1539,7 @@ class VeilAppController extends ChangeNotifier {
       timestamp: DateTime.now(),
     );
     _feed.insert(0, entry);
+    _refreshVisibleFeed();
     _persistFeedEntry(entry);
     _events.insert(0, 'Local post created');
     _notify();
@@ -1705,6 +1707,7 @@ class VeilAppController extends ChangeNotifier {
         ),
       );
     }
+    _refreshVisibleFeed();
   }
 
   void _markReconstructed(String root) {
@@ -1718,6 +1721,7 @@ class VeilAppController extends ChangeNotifier {
         _persistFeedEntry(entry);
       }
     }
+    _refreshVisibleFeed();
     _notify();
   }
 
@@ -1750,7 +1754,14 @@ class VeilAppController extends ChangeNotifier {
     if (_feed.isEmpty) {
       addSkeletons();
     }
+    _refreshVisibleFeed();
     notifyListeners();
+  }
+
+  void _refreshVisibleFeed() {
+    _visibleFeed
+      ..clear()
+      ..addAll(_feed.where((entry) => !isBlocked(entry.authorKey)));
   }
 
   TrustTier trustTierFor(String authorKey) {

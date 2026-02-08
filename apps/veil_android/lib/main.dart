@@ -360,6 +360,8 @@ class _RootShellState extends State<RootShell> {
                   HomeFeed(
                     controller: _controller,
                     showProtocolDetails: _showProtocolDetails,
+                    onOpenNetwork: () => setState(() => _tabIndex = 3),
+                    onOpenDiscovery: () => setState(() => _tabIndex = 4),
                   ),
                   ChannelsView(controller: _controller),
                   VaultView(
