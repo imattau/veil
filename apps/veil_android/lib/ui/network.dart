@@ -16,7 +16,6 @@ class NetworkView extends StatefulWidget {
 }
 
 class _NetworkViewState extends State<NetworkView> {
-  late final TextEditingController _wsController;
   late final TextEditingController _wsAddController;
   late final TextEditingController _peerController;
   late final TextEditingController _tagController;
@@ -33,7 +32,6 @@ class _NetworkViewState extends State<NetworkView> {
   void initState() {
     super.initState();
     final c = widget.controller;
-    _wsController = TextEditingController(text: c.wsUrl);
     _wsAddController = TextEditingController();
     _peerController = TextEditingController(text: c.peerId);
     _tagController = TextEditingController(
@@ -51,7 +49,6 @@ class _NetworkViewState extends State<NetworkView> {
 
   @override
   void dispose() {
-    _wsController.dispose();
     _wsAddController.dispose();
     _peerController.dispose();
     _tagController.dispose();
@@ -70,11 +67,9 @@ class _NetworkViewState extends State<NetworkView> {
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final theme = Theme.of(context);
-    final wsError = _wsController.text.isNotEmpty
-        ? controller.wsUrlError
-        : null;
     final rawEndpoint = _wsAddController.text.trim();
     final lowerEndpoint = rawEndpoint.toLowerCase();
+    final wsError = rawEndpoint.isNotEmpty ? controller.wsUrlError : null;
     final wsEndpoints = controller.wsEndpoints;
     if (_quicController.text != controller.quicEndpointValue) {
       _quicController.text = controller.quicEndpointValue;
@@ -159,15 +154,76 @@ class _NetworkViewState extends State<NetworkView> {
                 ],
               ),
               const SizedBox(height: 8),
-              InputField(
-                label: 'Primary WebSocket URL (wss://.../ws)',
-                controller: _wsController,
-                onChanged: (value) {
-                  controller.setWsUrl(value);
-                  setState(() {});
-                },
-                errorText: wsError,
+              Text(
+                'WebSocket endpoints (priority order)',
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: Colors.white70,
+                ),
               ),
+              const SizedBox(height: 6),
+              if (wsEndpoints.isNotEmpty) ...[
+                Column(
+                  children: wsEndpoints
+                      .asMap()
+                      .entries
+                      .map(
+                        (entry) => ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          leading: Text(
+                            '#${entry.key + 1}',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: Colors.white60,
+                            ),
+                          ),
+                          title: Text(entry.value),
+                          trailing: Wrap(
+                            spacing: 4,
+                            children: [
+                              IconButton(
+                                tooltip: 'Edit',
+                                icon: const Icon(Icons.edit, size: 18),
+                                onPressed: () {
+                                  _wsAddController.text = entry.value;
+                                  setState(() {});
+                                },
+                              ),
+                              IconButton(
+                                tooltip: 'Copy',
+                                icon: const Icon(Icons.copy, size: 18),
+                                onPressed: () async {
+                                  await Clipboard.setData(
+                                    ClipboardData(text: entry.value),
+                                  );
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Endpoint copied'),
+                                    ),
+                                  );
+                                },
+                              ),
+                              IconButton(
+                                tooltip: 'Remove',
+                                icon: const Icon(Icons.close, size: 18),
+                                onPressed: () {
+                                  controller.removeWsEndpoint(entry.value);
+                                  setState(() {});
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ] else
+                Text(
+                  'No endpoints yet.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: Colors.white60,
+                  ),
+                ),
               const SizedBox(height: 12),
               Text(
                 'QUIC endpoint (primary)',
@@ -274,15 +330,8 @@ class _NetworkViewState extends State<NetworkView> {
                 ),
               ),
               const SizedBox(height: 12),
-              Text(
-                'Additional WebSocket endpoints',
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: Colors.white70,
-                ),
-              ),
-              const SizedBox(height: 6),
               InputField(
-                label: 'Add endpoint (wss://.../ws or veil://vps)',
+                label: 'Scan or paste endpoint (wss://.../ws or veil://vps)',
                 controller: _wsAddController,
                 onChanged: (_) {},
               ),
@@ -319,52 +368,9 @@ class _NetworkViewState extends State<NetworkView> {
                     });
                   },
                   icon: const Icon(Icons.add),
-                  label: const Text('Add'),
+                  label: const Text('Add endpoint'),
                 ),
               ),
-              if (wsEndpoints.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Column(
-                  children: wsEndpoints
-                      .map(
-                        (endpoint) => ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.public, size: 18),
-                          title: Text(endpoint),
-                          trailing: Wrap(
-                            spacing: 4,
-                            children: [
-                              IconButton(
-                                tooltip: 'Copy',
-                                icon: const Icon(Icons.copy, size: 18),
-                                onPressed: () async {
-                                  await Clipboard.setData(
-                                    ClipboardData(text: endpoint),
-                                  );
-                                  if (!context.mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Endpoint copied'),
-                                    ),
-                                  );
-                                },
-                              ),
-                              IconButton(
-                                tooltip: 'Remove',
-                                icon: const Icon(Icons.close, size: 18),
-                                onPressed: () {
-                                  controller.removeWsEndpoint(endpoint);
-                                  setState(() {});
-                                },
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                      .toList(),
-                ),
-              ],
               const SizedBox(height: 12),
               InputField(
                 label: 'Peer ID',
