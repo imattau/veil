@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>VEIL VPS Node</title>
+    <link rel="icon" href="veil_logo.png" />
     <style>
       :root {
         color-scheme: dark;
@@ -131,7 +132,7 @@
         padding-bottom: 32px;
       }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   </head>
   <body>
     <header>
@@ -182,14 +183,29 @@
       document.getElementById("quicEndpoint").textContent = `QUIC: ${quic}`;
 
       const qrTarget = document.getElementById("qr");
-      QRCode.toCanvas(profile, { width: 200, margin: 1, color: { dark: "#e2e8f0", light: "#0b0f17" } }, (err, canvas) => {
-        if (err) {
-          qrTarget.textContent = "QR unavailable";
+      function renderQr() {
+        if (typeof QRCode === "undefined") {
+          qrTarget.textContent = "QR unavailable. Use copy link below.";
           return;
         }
-        qrTarget.innerHTML = "";
-        qrTarget.appendChild(canvas);
-      });
+        QRCode.toCanvas(
+          profile,
+          { width: 200, margin: 1, color: { dark: "#e2e8f0", light: "#0b0f17" } },
+          (err, canvas) => {
+            if (err) {
+              qrTarget.textContent = "QR unavailable. Use copy link below.";
+              return;
+            }
+            qrTarget.innerHTML = "";
+            qrTarget.appendChild(canvas);
+          },
+        );
+      }
+      if (document.readyState === "complete") {
+        renderQr();
+      } else {
+        window.addEventListener("load", renderQr);
+      }
 
       document.getElementById("copyProfile").addEventListener("click", async () => {
         await navigator.clipboard.writeText(profile);
