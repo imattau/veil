@@ -376,23 +376,23 @@ class _RootShellState extends State<RootShell> {
             destinations: const [
               NavigationDestination(
                 icon: Icon(Icons.dynamic_feed),
-                label: 'Feed',
+                label: '',
               ),
               NavigationDestination(
                 icon: Icon(Icons.tag),
-                label: 'Channels',
+                label: '',
               ),
               NavigationDestination(
                 icon: Icon(Icons.lock),
-                label: 'Vault',
+                label: '',
               ),
               NavigationDestination(
                 icon: Icon(Icons.network_check),
-                label: 'Network',
+                label: '',
               ),
               NavigationDestination(
                 icon: Icon(Icons.explore),
-                label: 'Discovery',
+                label: '',
               ),
             ],
           ),
