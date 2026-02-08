@@ -1,4 +1,5 @@
 use std::env;
+use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -30,6 +31,7 @@ fn main() {
     let quic_cert_hex = get_arg_value(&args, "--quic-cert-hex");
     let quic_cert_b64 = get_arg_value(&args, "--quic-cert-b64");
     let quic_cert_path = get_arg_value(&args, "--quic-cert-path");
+    let quic_cert_url = get_arg_value(&args, "--quic-cert-url");
     let tag_hex = get_arg_value(&args, "--tag")
         .or_else(|| env::var("VEIL_VPS_CORE_TAGS").ok().and_then(|v| v.split(',').next().map(|s| s.to_string())))
         .unwrap_or_else(|| DEFAULT_CORE_TAGS[0].to_string());
@@ -90,11 +92,18 @@ fn main() {
     let mut quic_sender = None;
     let mut quic_receiver = None;
     if let Some(peer) = quic_peer.as_ref() {
-        match build_quic_adapter(peer, quic_cert_hex.clone(), quic_cert_b64.clone(), quic_cert_path.clone()) {
+        match build_quic_adapter(
+            peer,
+            quic_cert_hex.clone(),
+            quic_cert_b64.clone(),
+            quic_cert_path.clone(),
+            quic_cert_url.clone(),
+        ) {
             Ok(adapter) => quic_sender = Some(adapter),
             Err(err) => eprintln!("QUIC sender error: {err}"),
         }
-        match build_quic_adapter(peer, quic_cert_hex, quic_cert_b64, quic_cert_path) {
+        match build_quic_adapter(peer, quic_cert_hex, quic_cert_b64, quic_cert_path, quic_cert_url)
+        {
             Ok(adapter) => quic_receiver = Some(adapter),
             Err(err) => eprintln!("QUIC receiver error: {err}"),
         }
@@ -184,7 +193,7 @@ fn main() {
 fn print_usage() {
     eprintln!(
         "Usage: cargo run -p veil-sim --bin vps_multilane_probe -- \
-  --ws wss://host/ws [--quic host:port --quic-cert-hex HEX|--quic-cert-b64 B64|--quic-cert-path PATH] \
+  --ws wss://host/ws [--quic host:port --quic-cert-hex HEX|--quic-cert-b64 B64|--quic-cert-path PATH|--quic-cert-url https://host/veil/quic_cert.der] \
   [--tag HEX] [--namespace N] [--timeout SECONDS]"
     );
 }
@@ -229,6 +238,7 @@ fn build_quic_adapter(
     cert_hex: Option<String>,
     cert_b64: Option<String>,
     cert_path: Option<String>,
+    cert_url: Option<String>,
 ) -> Result<QuicAdapter, String> {
     let cert = if let Some(hex) = cert_hex {
         hex_to_bytes(&hex)?
@@ -236,8 +246,12 @@ fn build_quic_adapter(
         base64::decode(b64).map_err(|_| "invalid base64 cert".to_string())?
     } else if let Some(path) = cert_path {
         std::fs::read(path).map_err(|err| format!("failed to read cert: {err}"))?
+    } else if let Some(url) = cert_url {
+        fetch_cert_from_url(&url)?
     } else {
-        return Err("QUIC cert required (--quic-cert-hex/b64/path)".to_string());
+        return Err(
+            "QUIC cert required (--quic-cert-hex/b64/path or --quic-cert-url)".to_string(),
+        );
     };
 
     let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
@@ -312,4 +326,27 @@ fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
         i += 2;
     }
     Ok(out)
+}
+
+fn fetch_cert_from_url(url: &str) -> Result<Vec<u8>, String> {
+    if !url.starts_with("https://") {
+        return Err("QUIC cert URL must be https://".to_string());
+    }
+    let response = ureq::get(url)
+        .timeout_connect(5_000)
+        .timeout_read(8_000)
+        .call()
+        .map_err(|err| format!("failed to fetch cert: {err}"))?;
+    if response.status() >= 400 {
+        return Err(format!("cert fetch failed: HTTP {}", response.status()));
+    }
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|err| format!("failed to read cert: {err}"))?;
+    if bytes.is_empty() {
+        return Err("cert fetch returned empty body".to_string());
+    }
+    Ok(bytes)
 }
