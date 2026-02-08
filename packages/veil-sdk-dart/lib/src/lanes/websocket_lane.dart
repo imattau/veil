@@ -1,6 +1,8 @@
 import "dart:async";
+import "dart:io";
 
 import "package:web_socket_channel/web_socket_channel.dart";
+import "package:web_socket_channel/io.dart";
 
 import "lane.dart";
 
@@ -32,12 +34,13 @@ class WebSocketLane implements VeilLane {
     this.reconnectMax = const Duration(seconds: 10),
     this.backoffMultiplier = 2.0,
   }) : _reconnectDelay = reconnectInitial {
-    _connect();
+    unawaited(_connect());
   }
 
-  void _connect() {
+  Future<void> _connect() async {
     try {
-      _socket = WebSocketChannel.connect(url);
+      final socket = await WebSocket.connect(url.toString());
+      _socket = IOWebSocketChannel(socket);
       _socket!.stream.listen(
         (event) {
           try {
@@ -83,7 +86,7 @@ class WebSocketLane implements VeilLane {
     _reconnectAttempts += 1;
     _reconnectTimer = Timer(delay, () {
       _reconnectTimer = null;
-      _connect();
+      unawaited(_connect());
       _flushBuffered();
     });
   }
