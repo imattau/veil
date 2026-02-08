@@ -503,11 +503,13 @@ check_service() {
 }
 
 configure_firewall() {
+  local quic_bind="${VEIL_VPS_QUIC_BIND:-0.0.0.0:5000}"
+  local quic_port="${quic_bind##*:}"
   if command -v ufw >/dev/null 2>&1; then
     ufw allow "${PROXY_HTTP_PORT}"/tcp || true
     ufw allow "${PROXY_HTTPS_PORT}"/tcp || true
     # Health port is bound to localhost by default; no public firewall rule.
-    ufw allow "${VEIL_VPS_QUIC_BIND##*:}"/udp || true
+    ufw allow "${quic_port}"/udp || true
     ufw --force enable || true
     echo "Configured UFW rules."
     return
@@ -516,7 +518,7 @@ configure_firewall() {
     firewall-cmd --permanent --add-port="${PROXY_HTTP_PORT}"/tcp || true
     firewall-cmd --permanent --add-port="${PROXY_HTTPS_PORT}"/tcp || true
     # Health port is bound to localhost by default; no public firewall rule.
-    firewall-cmd --permanent --add-port="${VEIL_VPS_QUIC_BIND##*:}"/udp || true
+    firewall-cmd --permanent --add-port="${quic_port}"/udp || true
     firewall-cmd --reload || true
     echo "Configured firewalld rules."
     return
