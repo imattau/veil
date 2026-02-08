@@ -126,7 +126,15 @@ class VeilAppController extends ChangeNotifier {
     if (trimmed.isEmpty) return null;
     final lower = trimmed.toLowerCase();
     if (lower.startsWith('ws://') || lower.startsWith('wss://')) {
-      return trimmed;
+      final uri = Uri.tryParse(trimmed);
+      if (uri == null || uri.host.isEmpty) return null;
+      return Uri(
+        scheme: uri.scheme,
+        host: uri.host,
+        port: uri.hasPort && uri.port != 0 ? uri.port : null,
+        path: uri.path.isEmpty ? '/ws' : uri.path,
+        query: uri.query.isEmpty ? null : uri.query,
+      ).toString();
     }
     if (lower.startsWith('http://') || lower.startsWith('https://')) {
       final uri = Uri.tryParse(trimmed);
@@ -911,7 +919,8 @@ class VeilAppController extends ChangeNotifier {
     }
 
     endpoints = endpoints
-        .where((value) => value.startsWith('ws://') || value.startsWith('wss://'))
+        .map(_normalizeWsEndpoint)
+        .whereType<String>()
         .toList();
     final wsLanes = endpoints
         .map(
