@@ -6,6 +6,7 @@ CRATE_DIR="$ROOT_DIR/packages/veil-sdk-dart/rust"
 OUT_DIR="$ROOT_DIR/apps/veil_android/android/app/src/main/jniLibs"
 
 ABI_LIST=("arm64-v8a" "armeabi-v7a" "x86_64")
+TARGET_LIST=("aarch64-linux-android" "armv7-linux-androideabi" "x86_64-linux-android")
 
 if ! command -v cargo >/dev/null 2>&1; then
   echo "cargo not found; install Rust first"
@@ -15,6 +16,11 @@ fi
 if ! command -v cargo-ndk >/dev/null 2>&1; then
   echo "cargo-ndk not found; installing..."
   cargo install cargo-ndk --locked
+fi
+
+if ! command -v rustup >/dev/null 2>&1; then
+  echo "rustup not found; install Rust with rustup first."
+  exit 1
 fi
 
 if [[ -z "${ANDROID_NDK_HOME:-}" && -z "${ANDROID_NDK_ROOT:-}" ]]; then
@@ -33,6 +39,13 @@ if [[ -z "${ANDROID_NDK_HOME:-}" && -z "${ANDROID_NDK_ROOT:-}" ]]; then
 fi
 
 NDK_HOME="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT}}"
+
+for target in "${TARGET_LIST[@]}"; do
+  if ! rustup target list --installed | grep -q "^${target}\$"; then
+    echo "Installing Rust target ${target}"
+    rustup target add "${target}"
+  fi
+done
 
 for abi in "${ABI_LIST[@]}"; do
   echo "Building QUIC bridge for $abi"
