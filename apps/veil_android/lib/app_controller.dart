@@ -175,7 +175,7 @@ class VeilAppController extends ChangeNotifier {
     await _loadPrefs();
     await _openDb();
     await _loadPublishQueue();
-    _startLocalRelay();
+    await _startLocalRelay();
     _startEpochTimer();
     connect();
   }
