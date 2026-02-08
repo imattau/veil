@@ -45,8 +45,12 @@ if [[ -z "${toolchain}" ]]; then
   toolchain="stable"
 fi
 for target in "${TARGET_LIST[@]}"; do
-  echo "Ensuring Rust target ${target} (${toolchain})"
-  rustup target add "${target}" --toolchain "${toolchain}"
+  echo "Ensuring Rust target ${target}"
+  rustup target add "${target}"
+  if [[ -n "${toolchain}" ]]; then
+    echo "Ensuring Rust target ${target} (${toolchain})"
+    rustup target add "${target}" --toolchain "${toolchain}"
+  fi
 done
 
 for abi in "${ABI_LIST[@]}"; do
