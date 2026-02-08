@@ -70,11 +70,15 @@ class _NetworkViewState extends State<NetworkView> {
     final rawEndpoint = _wsAddController.text.trim();
     final lowerEndpoint = rawEndpoint.toLowerCase();
     final wsEndpoints = controller.wsEndpoints;
+    final quicEndpoints = controller.quicEndpoints;
+    final selectedQuic = controller.quicEndpointValue;
+    final selectedCert =
+        selectedQuic.isNotEmpty ? controller.quicCertFor(selectedQuic) ?? '' : '';
     if (_quicController.text != controller.quicEndpointValue) {
       _quicController.text = controller.quicEndpointValue;
     }
-    if (_quicCertController.text != controller.quicTrustedCertValue) {
-      _quicCertController.text = controller.quicTrustedCertValue;
+    if (_quicCertController.text != selectedCert) {
+      _quicCertController.text = selectedCert;
     }
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -207,29 +211,23 @@ class _NetworkViewState extends State<NetworkView> {
                 ),
               ),
               const SizedBox(height: 6),
-              if (controller.quicEndpointValue.isNotEmpty || wsEndpoints.isNotEmpty) ...[
+              if (quicEndpoints.isNotEmpty || wsEndpoints.isNotEmpty) ...[
                 Column(
                   children: (() {
                     final rows = <_EndpointRow>[];
-                    if (controller.quicEndpointValue.isNotEmpty) {
+                    for (final endpoint in quicEndpoints) {
                       rows.add(
                         _EndpointRow(
                           index: rows.length + 1,
-                          label: 'QUIC',
-                          value: controller.quicEndpointValue,
+                          label: endpoint == selectedQuic ? 'QUIC (primary)' : 'QUIC',
+                          value: endpoint,
                           onEdit: () {
-                            _quicController.text =
-                                controller.quicEndpointValue;
-                            controller.setQuicEndpoint(
-                              controller.quicEndpointValue,
-                            );
+                            controller.setQuicEndpoint(endpoint);
                             setState(() {});
                           },
                           onCopy: () async {
                             await Clipboard.setData(
-                              ClipboardData(
-                                text: controller.quicEndpointValue,
-                              ),
+                              ClipboardData(text: endpoint),
                             );
                             if (!context.mounted) return;
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -239,10 +237,8 @@ class _NetworkViewState extends State<NetworkView> {
                             );
                           },
                           onRemove: () {
-                            controller.setQuicEndpoint('');
-                            setState(() {
-                              _quicController.text = '';
-                            });
+                            controller.removeQuicEndpoint(endpoint);
+                            setState(() {});
                           },
                         ),
                       );
@@ -291,13 +287,16 @@ class _NetworkViewState extends State<NetworkView> {
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
                   onPressed: () async {
-                    await controller.pinQuicCertFromServer();
+                    await controller.pinQuicCertFromServer(
+                      selectedQuic.isEmpty ? null : selectedQuic,
+                    );
                     if (!mounted) return;
                     setState(() {
                       _quicCertController.text =
-                          controller.quicTrustedCertValue;
+                          controller.quicCertFor(selectedQuic) ?? '';
                     });
-                    final message = controller.quicTrustedCertValue.isEmpty
+                    final message = selectedQuic.isEmpty ||
+                            (controller.quicCertFor(selectedQuic) ?? '').isEmpty
                         ? 'Failed to pin QUIC cert'
                         : 'Pinned QUIC certificate';
                     ScaffoldMessenger.of(
@@ -308,8 +307,7 @@ class _NetworkViewState extends State<NetworkView> {
                   label: const Text('Pin QUIC cert'),
                 ),
               ),
-              if (controller.quicEndpointValue.isNotEmpty &&
-                  controller.quicTrustedCertValue.isEmpty)
+              if (selectedQuic.isNotEmpty && (selectedCert.isEmpty))
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
@@ -321,9 +319,15 @@ class _NetworkViewState extends State<NetworkView> {
                 ),
               const SizedBox(height: 12),
               InputField(
-                label: 'Trusted cert (hex)',
+                label: 'Trusted cert for selected QUIC (hex)',
                 controller: _quicCertController,
-                onChanged: controller.setQuicTrustedCert,
+                onChanged: (value) {
+                  if (selectedQuic.isEmpty) {
+                    controller.setQuicTrustedCert(value);
+                  } else {
+                    controller.setQuicCertFor(selectedQuic, value);
+                  }
+                },
                 minLines: 2,
                 maxLines: 3,
               ),
@@ -331,20 +335,20 @@ class _NetworkViewState extends State<NetworkView> {
               Row(
                 children: [
                   Icon(
-                    controller.quicTrustedCertValue.isEmpty
+                    selectedCert.isEmpty
                         ? Icons.warning_amber_rounded
                         : Icons.verified,
                     size: 16,
-                    color: controller.quicTrustedCertValue.isEmpty
+                    color: selectedCert.isEmpty
                         ? Colors.amber
                         : Colors.greenAccent,
                   ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      controller.quicTrustedCertValue.isEmpty
+                      selectedCert.isEmpty
                           ? 'No cert pinned'
-                          : 'Pinned cert (${controller.quicTrustedCertValue.length ~/ 2} bytes)',
+                          : 'Pinned cert (${selectedCert.length ~/ 2} bytes)',
                       style: const TextStyle(
                         color: Colors.white70,
                         fontSize: 12,

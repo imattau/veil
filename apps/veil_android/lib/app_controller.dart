@@ -72,6 +72,8 @@ class VeilAppController extends ChangeNotifier {
   String bleServiceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   String bleCharacteristicUuid = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
   String quicEndpoint = '';
+  final List<String> _quicEndpoints = [];
+  final Map<String, String> _quicCertsByEndpoint = {};
   bool _torEnabled = false;
   String torWsUrl = '';
   String torSocksHost = '127.0.0.1';
@@ -81,7 +83,7 @@ class VeilAppController extends ChangeNotifier {
 
   VeilClient? _client;
   VeilLane? _lane;
-  QuicLane? _quicLane;
+  VeilLane? _quicLane;
   TorLane? _torLane;
   BleLane? _bleLane;
   VeilLane? _fallbackLane;
@@ -118,11 +120,17 @@ class VeilAppController extends ChangeNotifier {
   int get maxCacheEntries => _maxCacheEntries;
   int get maxPublishQueue => _maxPublishQueue;
   String get quicEndpointValue => quicEndpoint;
+  List<String> get quicEndpoints => List.unmodifiable(_quicEndpoints);
   bool get torEnabled => _torEnabled;
   String get torWsUrlValue => torWsUrl;
   String get torSocksHostValue => torSocksHost;
   int get torSocksPortValue => torSocksPort;
-  String get quicTrustedCertValue => quicTrustedCertHex;
+  String get quicTrustedCertValue {
+    if (quicEndpoint.isEmpty) {
+      return quicTrustedCertHex;
+    }
+    return _quicCertsByEndpoint[quicEndpoint] ?? quicTrustedCertHex;
+  }
   String? get wsUrlError {
     if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
       return 'Use ws:// or wss://';
@@ -452,6 +460,14 @@ class VeilAppController extends ChangeNotifier {
     if ((prefs.getStringList('wsEndpoints') ?? []).length != _wsEndpoints.length) {
       wsChanged = true;
     }
+    if (quicEndpoint.isNotEmpty && !_quicEndpoints.contains(quicEndpoint)) {
+      _quicEndpoints.add(quicEndpoint);
+    }
+    if (quicEndpoint.isNotEmpty &&
+        quicTrustedCertHex.isNotEmpty &&
+        !_quicCertsByEndpoint.containsKey(quicEndpoint)) {
+      _quicCertsByEndpoint[quicEndpoint] = quicTrustedCertHex;
+    }
     tagHex = prefs.getString('tagHex') ?? tagHex;
     channelLabel = prefs.getString('channelLabel') ?? channelLabel;
     privateIdHex = prefs.getString('privateIdHex') ?? privateIdHex;
@@ -466,8 +482,27 @@ class VeilAppController extends ChangeNotifier {
     bleCharacteristicUuid =
         prefs.getString('bleCharacteristicUuid') ?? bleCharacteristicUuid;
     quicEndpoint = prefs.getString('quicEndpoint') ?? quicEndpoint;
+    _quicEndpoints
+      ..clear()
+      ..addAll(prefs.getStringList('quicEndpoints') ?? const []);
+    final certMap = prefs.getString('quicCertsByEndpoint');
+    if (certMap != null && certMap.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(certMap) as Map<String, dynamic>;
+        decoded.forEach((key, value) {
+          final cert = value as String?;
+          if (cert != null && cert.isNotEmpty) {
+            _quicCertsByEndpoint[key] = cert;
+          }
+        });
+      } catch (_) {}
+    }
     quicTrustedCertHex =
         prefs.getString('quicTrustedCertHex') ?? quicTrustedCertHex;
+    if (quicEndpoint.isNotEmpty &&
+        _quicCertsByEndpoint.containsKey(quicEndpoint)) {
+      quicTrustedCertHex = _quicCertsByEndpoint[quicEndpoint]!;
+    }
     _torEnabled = prefs.getBool('torEnabled') ?? _torEnabled;
     torWsUrl = prefs.getString('torWsUrl') ?? torWsUrl;
     torSocksHost = prefs.getString('torSocksHost') ?? torSocksHost;
@@ -543,6 +578,11 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setString('bleServiceUuid', bleServiceUuid);
     await prefs.setString('bleCharacteristicUuid', bleCharacteristicUuid);
     await prefs.setString('quicEndpoint', quicEndpoint);
+    await prefs.setStringList('quicEndpoints', _quicEndpoints);
+    await prefs.setString(
+      'quicCertsByEndpoint',
+      jsonEncode(_quicCertsByEndpoint),
+    );
     await prefs.setString('quicTrustedCertHex', quicTrustedCertHex);
     await prefs.setBool('torEnabled', _torEnabled);
     await prefs.setString('torWsUrl', torWsUrl);
@@ -1171,11 +1211,11 @@ class VeilAppController extends ChangeNotifier {
       setQuicEndpoint(quic);
     }
     if (cert != null && cert.isNotEmpty) {
-      setQuicTrustedCert(cert);
+      setQuicCertFor(quicEndpoint, cert);
     } else if (certB64 != null && certB64.isNotEmpty) {
       try {
         final bytes = base64Decode(certB64);
-        setQuicTrustedCert(_bytesToHex(bytes));
+        setQuicCertFor(quicEndpoint, _bytesToHex(bytes));
       } catch (_) {
         _events.insert(0, 'Invalid QUIC cert (base64)');
       }
@@ -1191,7 +1231,7 @@ class VeilAppController extends ChangeNotifier {
         if (cert == null || cert.isEmpty) {
           _events.insert(0, 'Failed to pin QUIC cert');
         } else {
-          quicTrustedCertHex = cert;
+          setQuicCertFor(quicEndpoint, cert);
           await _persistPrefs();
           _events.insert(0, 'Pinned QUIC certificate');
         }
@@ -1300,11 +1340,79 @@ class VeilAppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setQuicEndpoint(String value) {
-    quicEndpoint = value.trim();
+  String? _normalizeQuicEndpoint(String value) {
+    final cleaned = value.trim();
+    if (cleaned.isEmpty) return null;
+    if (cleaned.startsWith('quic://')) {
+      return cleaned;
+    }
+    if (cleaned.contains(':')) {
+      return 'quic://$cleaned';
+    }
+    return null;
+  }
+
+  void addQuicEndpoint(String value) {
+    final normalized = _normalizeQuicEndpoint(value);
+    if (normalized == null) return;
+    if (!_quicEndpoints.contains(normalized)) {
+      _quicEndpoints.add(normalized);
+    }
+    if (quicEndpoint.isEmpty) {
+      quicEndpoint = normalized;
+    }
     _persistPrefs();
     notifyListeners();
     _maybeAutoPinQuic();
+  }
+
+  void setQuicEndpoint(String value) {
+    final normalized = _normalizeQuicEndpoint(value);
+    if (normalized == null) {
+      quicEndpoint = '';
+      _persistPrefs();
+      notifyListeners();
+      return;
+    }
+    quicEndpoint = normalized;
+    quicTrustedCertHex =
+        _quicCertsByEndpoint[quicEndpoint] ?? quicTrustedCertHex;
+    if (_quicEndpoints.contains(normalized)) {
+      _quicEndpoints
+        ..remove(normalized)
+        ..insert(0, normalized);
+    } else {
+      _quicEndpoints.insert(0, normalized);
+    }
+    _persistPrefs();
+    notifyListeners();
+    _maybeAutoPinQuic();
+  }
+
+  void removeQuicEndpoint(String value) {
+    _quicEndpoints.remove(value);
+    _quicCertsByEndpoint.remove(value);
+    if (quicEndpoint == value) {
+      quicEndpoint = _quicEndpoints.isNotEmpty ? _quicEndpoints.first : '';
+    }
+    _persistPrefs();
+    notifyListeners();
+  }
+
+  String? quicCertFor(String endpoint) => _quicCertsByEndpoint[endpoint];
+
+  void setQuicCertFor(String endpoint, String value) {
+    final cert = value.trim();
+    if (cert.isEmpty) {
+      _quicCertsByEndpoint.remove(endpoint);
+    } else {
+      _quicCertsByEndpoint[endpoint] = cert;
+    }
+    if (quicEndpoint == endpoint) {
+      quicTrustedCertHex = cert;
+    }
+    _persistPrefs();
+    notifyListeners();
   }
 
   void setTorEnabled(bool value) {
@@ -1334,9 +1442,13 @@ class VeilAppController extends ChangeNotifier {
   }
 
   void setQuicTrustedCert(String value) {
-    quicTrustedCertHex = value.trim();
-    _persistPrefs();
-    notifyListeners();
+    if (quicEndpoint.isEmpty) {
+      quicTrustedCertHex = value.trim();
+      _persistPrefs();
+      notifyListeners();
+      return;
+    }
+    setQuicCertFor(quicEndpoint, value);
   }
 
   String _bytesToHex(List<int> bytes) {
@@ -1347,8 +1459,9 @@ class VeilAppController extends ChangeNotifier {
     return buffer.toString();
   }
 
-  Future<void> pinQuicCertFromServer() async {
-    if (quicEndpoint.isEmpty) {
+  Future<void> pinQuicCertFromServer([String? endpoint]) async {
+    final target = endpoint ?? quicEndpoint;
+    if (target.isEmpty) {
       _events.insert(0, 'Set QUIC endpoint first');
       _notify();
       return;
@@ -1360,13 +1473,13 @@ class VeilAppController extends ChangeNotifier {
     }
     _events.insert(0, 'Fetching QUIC certificate...');
     _notify();
-    final cert = await QuicLane.fetchPinnedCertHex(quicEndpoint);
+    final cert = await QuicLane.fetchPinnedCertHex(target);
     if (cert == null || cert.isEmpty) {
       _events.insert(0, 'Failed to fetch QUIC cert');
       _notify();
       return;
     }
-    quicTrustedCertHex = cert;
+    setQuicCertFor(target, cert);
     await _persistPrefs();
     _events.insert(0, 'Pinned QUIC certificate');
     _notify();
@@ -1374,7 +1487,10 @@ class VeilAppController extends ChangeNotifier {
 
   void _maybeAutoPinQuic() {
     if (_quicAutoPinInFlight) return;
-    if (quicEndpoint.isEmpty || quicTrustedCertHex.isNotEmpty) return;
+    if (quicEndpoint.isEmpty ||
+        (_quicCertsByEndpoint[quicEndpoint] ?? '').isNotEmpty) {
+      return;
+    }
     _quicAutoPinInFlight = true;
     Future.microtask(() async {
       if (!await QuicLane.isSupported()) {
@@ -1383,7 +1499,7 @@ class VeilAppController extends ChangeNotifier {
       }
       final cert = await QuicLane.fetchPinnedCertHex(quicEndpoint);
       if (cert != null && cert.isNotEmpty) {
-        quicTrustedCertHex = cert;
+        setQuicCertFor(quicEndpoint, cert);
         await _persistPrefs();
         _events.insert(0, 'Pinned QUIC certificate');
         _notify();
@@ -1462,14 +1578,19 @@ class VeilAppController extends ChangeNotifier {
         : wsLanes.first;
     _lane = wsLane;
 
-    if (quicEndpoint.isNotEmpty && await QuicLane.isSupported()) {
-      _quicLane = QuicLane(
-        endpoint: quicEndpoint,
-        peerId: peerId,
-        trustedPeerCertHex: quicTrustedCertHex.isEmpty
-            ? null
-            : quicTrustedCertHex,
-      );
+    final quicTargets = _quicEndpoints.isNotEmpty
+        ? List<String>.from(_quicEndpoints)
+        : (quicEndpoint.isNotEmpty ? [quicEndpoint] : <String>[]);
+    if (quicTargets.isNotEmpty && await QuicLane.isSupported()) {
+      final lanes = quicTargets.map((endpoint) {
+        final cert = _quicCertsByEndpoint[endpoint] ?? '';
+        return QuicLane(
+          endpoint: endpoint,
+          peerId: peerId,
+          trustedPeerCertHex: cert.isEmpty ? null : cert,
+        );
+      }).toList();
+      _quicLane = lanes.length > 1 ? MultiLane(lanes: lanes) : lanes.first;
     }
 
     BleLane? bleLane;
