@@ -228,26 +228,39 @@ _QuicBindings? _getBindings() {
   }
   try {
     _bindings = _QuicBindings(_openLib());
-  } catch (_) {
+    print("QuicLane: Native library loaded successfully.");
+  } catch (e) {
+    print("QuicLane: Failed to load native library: $e");
     _bindings = null;
   }
   return _bindings;
 }
 
 ffi.DynamicLibrary _openLib() {
+  String libName;
   if (Platform.isAndroid) {
-    return ffi.DynamicLibrary.open("libveil_sdk_bridge.so");
-  }
-  if (Platform.isIOS) {
+    libName = "libveil_sdk_bridge.so";
+  } else if (Platform.isIOS) {
+    // On iOS, static libraries are directly linked.
+    // DynamicLibrary.process() is used to access symbols from the main executable.
     return ffi.DynamicLibrary.process();
+  } else if (Platform.isMacOS) {
+    libName = "libveil_sdk_bridge.dylib";
+  } else if (Platform.isWindows) {
+    libName = "veil_sdk_bridge.dll";
+  } else {
+    // Default for Linux/other
+    libName = "libveil_sdk_bridge.so";
   }
-  if (Platform.isMacOS) {
-    return ffi.DynamicLibrary.open("libveil_sdk_bridge.dylib");
+  print("QuicLane: Attempting to open native library: $libName");
+  try {
+    final lib = ffi.DynamicLibrary.open(libName);
+    print("QuicLane: Native library $libName opened successfully.");
+    return lib;
+  } catch (e) {
+    print("QuicLane: Failed to open native library $libName: $e");
+    rethrow;
   }
-  if (Platform.isWindows) {
-    return ffi.DynamicLibrary.open("veil_sdk_bridge.dll");
-  }
-  return ffi.DynamicLibrary.open("libveil_sdk_bridge.so");
 }
 
 typedef _isSupportedNative = ffi.Int32 Function();
