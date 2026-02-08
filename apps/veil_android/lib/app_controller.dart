@@ -157,38 +157,47 @@ class VeilAppController extends ChangeNotifier {
   }
 
   String? _normalizeWsEndpoint(String raw) {
-    final trimmed = raw.trim();
+    var trimmed = raw.trim();
     if (trimmed.isEmpty) return null;
+    
+    // Default to wss:// if no scheme provided
+    if (!trimmed.contains('://')) {
+      trimmed = 'wss://$trimmed';
+    }
+
     final lower = trimmed.toLowerCase();
-    if (lower.startsWith('ws://') || lower.startsWith('wss://')) {
-      final uri = Uri.tryParse(trimmed);
-      if (uri == null || uri.host.isEmpty) return null;
-      return Uri(
-        scheme: uri.scheme,
-        userInfo: uri.userInfo,
-        host: uri.host,
-        port: uri.hasPort && uri.port != 0 ? uri.port : null,
-        path: uri.path.isEmpty ? '/ws' : uri.path,
-        query: uri.query.isEmpty ? null : uri.query,
-      ).toString();
+    String scheme;
+    if (lower.startsWith('ws://')) {
+      scheme = 'ws';
+    } else if (lower.startsWith('wss://')) {
+      scheme = 'wss';
+    } else if (lower.startsWith('http://')) {
+      scheme = 'ws';
+    } else if (lower.startsWith('https://')) {
+      scheme = 'wss';
+    } else {
+      return null;
     }
-    if (lower.startsWith('http://') || lower.startsWith('https://')) {
-      final uri = Uri.tryParse(trimmed);
-      if (uri == null || uri.host.isEmpty) return null;
-      final scheme = uri.scheme == 'https' ? 'wss' : 'ws';
-      final port = uri.hasPort && uri.port != 0 ? uri.port : null;
-      final path = (uri.path.isEmpty || uri.path == '/') ? '/ws' : uri.path;
-      final normalized = Uri(
-        scheme: scheme,
-        userInfo: uri.userInfo,
-        host: uri.host,
-        port: port,
-        path: path,
-        query: uri.query.isEmpty ? null : uri.query,
-      ).toString();
-      return normalized;
+
+    final uri = Uri.tryParse(trimmed);
+    if (uri == null || uri.host.isEmpty) return null;
+
+    final port = uri.hasPort && uri.port != 0 ? uri.port : null;
+    var path = uri.path;
+    if (path.isEmpty || path == '/') {
+      path = '/ws';
+    } else if (!path.startsWith('/')) {
+      path = '/$path';
     }
-    return null;
+
+    return Uri(
+      scheme: scheme,
+      userInfo: uri.userInfo,
+      host: uri.host,
+      port: port,
+      path: path,
+      query: uri.query.isEmpty ? null : uri.query,
+    ).toString();
   }
 
   String? get channelError {
