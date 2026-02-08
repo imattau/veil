@@ -827,6 +827,10 @@ class VeilAppController extends ChangeNotifier {
     if (derived.isEmpty) return;
     _channelLabels.add(normalized);
     _channelTags[normalized] = derived;
+    if (derived != tagHex && !_extraTags.contains(derived)) {
+      _extraTags.add(derived);
+      _client?.subscribe(derived);
+    }
     _events.insert(0, 'Added channel $normalized');
     _persistPrefs();
     _notify();
@@ -834,7 +838,11 @@ class VeilAppController extends ChangeNotifier {
 
   void removeChannelLabel(String value) {
     _channelLabels.remove(value);
-    _channelTags.remove(value);
+    final tag = _channelTags.remove(value);
+    if (tag != null && tag != tagHex) {
+      _extraTags.remove(tag);
+      _client?.unsubscribe(tag);
+    }
     if (channelLabel == value) {
       channelLabel = _channelLabels.isNotEmpty ? _channelLabels.first : '';
       if (channelLabel.isNotEmpty) {
@@ -1346,6 +1354,7 @@ class VeilAppController extends ChangeNotifier {
   }
 
   Future<void> updateSubscription(String value) async {
+    final previousTag = tagHex;
     channelLabel = value.trim();
     tagHex = await _deriveTagHexForLabel(channelLabel);
     if (tagHex.isNotEmpty) {
@@ -1356,11 +1365,16 @@ class VeilAppController extends ChangeNotifier {
     }
     final client = _client;
     if (client == null) return;
-    for (final sub in client.subscriptions()) {
-      client.unsubscribe(sub);
+    if (previousTag.isNotEmpty &&
+        previousTag != tagHex &&
+        !_extraTags.contains(previousTag)) {
+      client.unsubscribe(previousTag);
     }
     if (tagHex.isNotEmpty) {
       client.subscribe(tagHex);
+    }
+    for (final extra in _extraTags) {
+      client.subscribe(extra);
     }
     _events.insert(0, 'Joined channel $channelLabel');
     _notify();

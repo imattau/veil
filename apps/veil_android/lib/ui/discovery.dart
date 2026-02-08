@@ -62,11 +62,11 @@ class _DiscoveryViewState extends State<DiscoveryView> {
         ),
         const SizedBox(height: 16),
         Panel(
-          title: 'Add Peer',
+          title: 'Add Endpoint',
           child: Column(
             children: [
               InputField(
-                label: 'Peer address (ws:// or quic://)',
+                label: 'Endpoint (wss://.../ws or veil://vps)',
                 controller: _peerController,
                 onChanged: (_) {},
                 onScan: () => openScanner(
@@ -78,35 +78,27 @@ class _DiscoveryViewState extends State<DiscoveryView> {
                 children: [
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: () =>
-                          controller.addForwardPeer(_peerController.text),
-                      child: const Text('Add Peer'),
+                      onPressed: () {
+                        controller.handleScanValue(_peerController.text);
+                        _peerController.clear();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Endpoint added'),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      },
+                      child: const Text('Add Endpoint'),
                     ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 8),
-              ...controller.forwardPeers.map(
-                (peer) => ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.router, size: 18),
-                  title: Text(peer),
-                  trailing: SizedBox(
-                    width: 48,
-                    height: 48,
-                    child: IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => controller.removeForwardPeer(peer),
-                    ),
-                  ),
-                ),
               ),
             ],
           ),
         ),
         const SizedBox(height: 16),
         Panel(
-          title: 'Add Subscription',
+          title: 'Subscribe to Channel',
           child: Column(
             children: [
               InputField(
@@ -122,32 +114,21 @@ class _DiscoveryViewState extends State<DiscoveryView> {
                 children: [
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: () =>
-                          controller.addSubscription(_tagController.text),
-                      child: const Text('Subscribe'),
+                      onPressed: () async {
+                        await controller.addChannelLabel(_tagController.text);
+                        _tagController.clear();
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Channel added'),
+                            behavior: SnackBarBehavior.floating,
+                          ),
+                        );
+                      },
+                      child: const Text('Add Channel'),
                     ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 8),
-              ...controller.extraTags.map(
-                (tag) => Dismissible(
-                  key: ValueKey(tag),
-                  direction: DismissDirection.endToStart,
-                  background: Container(
-                    alignment: Alignment.centerRight,
-                    padding: const EdgeInsets.only(right: 16),
-                    color: const Color(0xFF7F1D1D),
-                    child: const Icon(Icons.delete, color: Colors.white),
-                  ),
-                  onDismissed: (_) => controller.removeSubscription(tag),
-                  child: ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.tag, size: 18),
-                    title: Text(tag),
-                    trailing: const Icon(Icons.chevron_right),
-                  ),
-                ),
               ),
             ],
           ),
@@ -156,4 +137,3 @@ class _DiscoveryViewState extends State<DiscoveryView> {
     );
   }
 }
-
