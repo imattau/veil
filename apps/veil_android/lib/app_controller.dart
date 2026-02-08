@@ -224,10 +224,46 @@ class VeilAppController extends ChangeNotifier {
 
   Future<void> _startLocalRelay() async {
     final relay = LocalRelay();
-    await relay.start();
-    _relay = relay;
-    _relayReady = true;
-    notifyListeners();
+    try {
+      await relay.start();
+      _relay = relay;
+      _relayReady = true;
+      notifyListeners();
+    } catch (err) {
+      _relay = null;
+      _relayReady = false;
+      _events.insert(0, 'Local relay failed to start: $err');
+      _notify();
+    }
+  }
+
+  Future<void> _ensureLocalRelay() async {
+    if (_relay == null) {
+      await _startLocalRelay();
+      return;
+    }
+    final uri = Uri.tryParse(_relay!.url);
+    if (uri == null || uri.port == 0) {
+      _relay?.stop();
+      _relay = null;
+      _relayReady = false;
+      await _startLocalRelay();
+      return;
+    }
+    try {
+      final socket = await Socket.connect(
+        uri.host,
+        uri.port,
+        timeout: const Duration(milliseconds: 400),
+      );
+      socket.destroy();
+    } catch (_) {
+      _relay?.stop();
+      _relay = null;
+      _relayReady = false;
+      _events.insert(0, 'Local relay restarted');
+      await _startLocalRelay();
+    }
   }
 
   void setUseLocalRelay(bool value) {}
@@ -906,6 +942,9 @@ class VeilAppController extends ChangeNotifier {
     await _openDb();
     final store = SqfliteShardCacheStore(db: _db!);
     await store.init();
+    if (_useLocalRelay) {
+      await _ensureLocalRelay();
+    }
 
     final String primaryUrl;
     List<String> endpoints;
