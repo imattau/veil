@@ -121,6 +121,30 @@ class VeilAppController extends ChangeNotifier {
     return null;
   }
 
+  String? _normalizeWsEndpoint(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    final lower = trimmed.toLowerCase();
+    if (lower.startsWith('ws://') || lower.startsWith('wss://')) {
+      return trimmed;
+    }
+    if (lower.startsWith('http://') || lower.startsWith('https://')) {
+      final uri = Uri.tryParse(trimmed);
+      if (uri == null || uri.host.isEmpty) return null;
+      final scheme = uri.scheme == 'https' ? 'wss' : 'ws';
+      final port = uri.hasPort && uri.port != 0 ? uri.port : null;
+      final path = (uri.path.isEmpty || uri.path == '/') ? '/ws' : uri.path;
+      final normalized = Uri(
+        scheme: scheme,
+        host: uri.host,
+        port: port ?? 0,
+        path: path,
+      ).toString();
+      return normalized.replaceAll(':0', '');
+    }
+    return null;
+  }
+
   String? get channelError {
     if (channelLabel.isEmpty) return null;
     final isHex = RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(channelLabel);
@@ -454,21 +478,26 @@ class VeilAppController extends ChangeNotifier {
   }
 
   void setWsUrl(String value) {
-    wsUrl = value.trim();
+    final normalized = _normalizeWsEndpoint(value);
+    if (normalized == null) {
+      wsUrl = '';
+      _events.insert(0, 'Invalid WebSocket URL');
+    } else {
+      wsUrl = normalized;
+    }
     _persistPrefs();
     notifyListeners();
   }
 
   void addWsEndpoint(String value) {
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) return;
-    if (!trimmed.startsWith('ws://') && !trimmed.startsWith('wss://')) {
+    final normalized = _normalizeWsEndpoint(value);
+    if (normalized == null) {
       _events.insert(0, 'Endpoint must start with ws:// or wss://');
       _notify();
       return;
     }
-    if (!_wsEndpoints.contains(trimmed)) {
-      _wsEndpoints.add(trimmed);
+    if (!_wsEndpoints.contains(normalized)) {
+      _wsEndpoints.add(normalized);
       _persistPrefs();
       _events.insert(0, 'Added WebSocket endpoint');
       _notify();
@@ -859,6 +888,9 @@ class VeilAppController extends ChangeNotifier {
       endpoints = [primaryUrl];
     }
 
+    endpoints = endpoints
+        .where((value) => value.startsWith('ws://') || value.startsWith('wss://'))
+        .toList();
     final wsLanes = endpoints
         .map(
           (endpoint) => WebSocketLane(url: Uri.parse(endpoint), peerId: peerId),
