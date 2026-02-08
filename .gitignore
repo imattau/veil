@@ -1,5 +1,4 @@
 /target/
-Cargo.lock
 
 # Rust/cargo-fuzz outputs
 fuzz/artifacts/
