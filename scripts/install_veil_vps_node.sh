@@ -45,6 +45,13 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+if [[ -z "$PROXY_DOMAIN" && "$REVERSE_PROXY" != "none" ]]; then
+  read -r -p "Enter domain for TLS/HTTP (leave blank to skip proxy setup): " input_domain
+  if [[ -n "$input_domain" ]]; then
+    PROXY_DOMAIN="$input_domain"
+  fi
+fi
+
 ensure_writable_dir() {
   local dir="$1"
   mkdir -p "$dir"
