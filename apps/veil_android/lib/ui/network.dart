@@ -115,7 +115,7 @@ class _NetworkViewState extends State<NetworkView> {
                 onChanged: (_) {},
               ),
               const Text(
-                'e.g. wss://user:pass@node.com/ws',
+                'e.g. wss://user:pass@node.com/ws/',
                 style: TextStyle(fontSize: 10, color: Colors.white38),
               ),
               const SizedBox(height: 8),
