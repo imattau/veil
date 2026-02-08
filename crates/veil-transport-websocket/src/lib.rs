@@ -317,6 +317,7 @@ struct OutboundMessage {
 
 impl WebSocketServerAdapter {
     pub fn listen(config: WebSocketServerAdapterConfig) -> Result<Self, WebSocketAdapterError> {
+        let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<(), String>>(1);
         let (outbound_tx, outbound_rx) =
             tokio_mpsc::channel::<OutboundMessage>(config.outbound_queue_capacity);
         let (inbound_tx, inbound_rx) =
@@ -334,7 +335,10 @@ impl WebSocketServerAdapter {
                 .build()
             {
                 Ok(rt) => rt,
-                Err(_) => return,
+                Err(_) => {
+                    let _ = startup_tx.send(Err("failed to build tokio runtime".to_string()));
+                    return;
+                }
             };
             runtime.block_on(run_server_worker(
                 worker_config,
@@ -343,8 +347,15 @@ impl WebSocketServerAdapter {
                 outbound_rx,
                 inbound_tx,
                 shutdown_rx,
+                startup_tx,
             ));
         });
+
+        match startup_rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => return Err(WebSocketAdapterError::Closed), // or map to bind error
+            Err(_) => return Err(WebSocketAdapterError::Closed),
+        }
 
         Ok(Self {
             max_payload_hint: config.max_payload_hint,
@@ -416,6 +427,10 @@ impl TransportAdapter for WebSocketServerAdapter {
         self.running.load(Ordering::Relaxed)
     }
 
+    fn can_recv(&self) -> bool {
+        self.running.load(Ordering::Relaxed)
+    }
+
     fn health_snapshot(&self) -> TransportHealthSnapshot {
         let m = self.metrics_snapshot();
         TransportHealthSnapshot {
@@ -436,16 +451,19 @@ async fn run_server_worker(
     mut outbound_rx: tokio_mpsc::Receiver<OutboundMessage>,
     inbound_tx: mpsc::SyncSender<(String, Vec<u8>)>,
     mut shutdown_rx: oneshot::Receiver<()>,
+    startup_tx: mpsc::SyncSender<Result<(), String>>,
 ) {
     let listener = match tokio::net::TcpListener::bind(&config.bind_addr).await {
         Ok(l) => l,
         Err(err) => {
             eprintln!("websocket server bind failed on {}: {}", config.bind_addr, err);
+            let _ = startup_tx.send(Err(err.to_string()));
             running.store(false, Ordering::Relaxed);
             return;
         }
     };
 
+    let _ = startup_tx.send(Ok(()));
     let mut clients = std::collections::HashMap::<String, tokio_mpsc::Sender<Vec<u8>>>::new();
 
     loop {
@@ -454,6 +472,7 @@ async fn run_server_worker(
             maybe_conn = listener.accept() => {
                 if let Ok((stream, addr)) = maybe_conn {
                     let peer_id = addr.to_string();
+                    eprintln!("websocket server: accepting connection from {}", peer_id);
                     let (client_tx, mut client_rx) = tokio_mpsc::channel::<Vec<u8>>(128);
                     clients.insert(peer_id.clone(), client_tx);
 
@@ -462,35 +481,49 @@ async fn run_server_worker(
                     let peer_id_inner = peer_id.clone();
 
                     tokio::spawn(async move {
-                        if let Ok(ws_stream) = tokio_tungstenite::accept_async(stream).await {
-                            let (mut write, mut read) = ws_stream.split();
-                            loop {
-                                tokio::select! {
-                                    maybe_msg = read.next() => {
-                                        match maybe_msg {
-                                            Some(Ok(Message::Binary(bytes))) => {
-                                                if inbound_tx.try_send((peer_id_inner.clone(), bytes)).is_ok() {
-                                                    metrics.inbound_received.fetch_add(1, Ordering::Relaxed);
-                                                } else {
-                                                    metrics.inbound_dropped.fetch_add(1, Ordering::Relaxed);
+                        match tokio_tungstenite::accept_async(stream).await {
+                            Ok(ws_stream) => {
+                                eprintln!("websocket server: handshake successful for {}", peer_id_inner);
+                                let (mut write, mut read) = ws_stream.split();
+                                loop {
+                                    tokio::select! {
+                                        maybe_msg = read.next() => {
+                                            match maybe_msg {
+                                                Some(Ok(Message::Binary(bytes))) => {
+                                                    if inbound_tx.try_send((peer_id_inner.clone(), bytes)).is_ok() {
+                                                        metrics.inbound_received.fetch_add(1, Ordering::Relaxed);
+                                                    } else {
+                                                        metrics.inbound_dropped.fetch_add(1, Ordering::Relaxed);
+                                                    }
                                                 }
+                                                Some(Ok(Message::Close(_))) => {
+                                                    eprintln!("websocket server: connection closed by {}", peer_id_inner);
+                                                    break;
+                                                }
+                                                Some(Err(err)) => {
+                                                    eprintln!("websocket server: read error from {}: {}", peer_id_inner, err);
+                                                    break;
+                                                }
+                                                None => break,
+                                                _ => {}
                                             }
-                                            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                                            _ => {}
                                         }
-                                    }
-                                    maybe_out = client_rx.recv() => {
-                                        if let Some(bytes) = maybe_out {
-                                            if write.send(Message::Binary(bytes)).await.is_err() {
-                                                metrics.outbound_send_err.fetch_add(1, Ordering::Relaxed);
+                                        maybe_out = client_rx.recv() => {
+                                            if let Some(bytes) = maybe_out {
+                                                if write.send(Message::Binary(bytes)).await.is_err() {
+                                                    metrics.outbound_send_err.fetch_add(1, Ordering::Relaxed);
+                                                    break;
+                                                }
+                                                metrics.outbound_send_ok.fetch_add(1, Ordering::Relaxed);
+                                            } else {
                                                 break;
                                             }
-                                            metrics.outbound_send_ok.fetch_add(1, Ordering::Relaxed);
-                                        } else {
-                                            break;
                                         }
                                     }
                                 }
+                            }
+                            Err(err) => {
+                                eprintln!("websocket server: handshake failed for {}: {}", peer_id_inner, err);
                             }
                         }
                     });
