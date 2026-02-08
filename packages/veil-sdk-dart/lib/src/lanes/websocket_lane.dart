@@ -45,20 +45,28 @@ class WebSocketLane implements VeilLane {
   }
 
   Future<void> _connect() async {
+    print("WebSocketLane: Attempting to connect to ${url.toString()}");
+    print("WebSocketLane: Initial URL port: ${url.port}");
     try {
       final Map<String, String> headers = {};
       if (url.userInfo.isNotEmpty) {
         final auth = base64Encode(utf8.encode(url.userInfo));
         headers["Authorization"] = "Basic $auth";
+        print("WebSocketLane: Using Basic Auth for ${url.host}");
       }
+
+      final effectivePort = url.port == 0 
+          ? (url.scheme == 'wss' ? 443 : (url.scheme == 'ws' ? 80 : url.port))
+          : url.port;
 
       final cleanUrl = Uri(
         scheme: url.scheme,
         host: url.host,
-        port: url.port,
+        port: effectivePort,
         path: url.path,
         query: url.query,
       );
+      print("WebSocketLane: Connecting to cleaned URL: ${cleanUrl.toString()}");
 
       HttpClient? customClient;
       if (trustedPeerCertHex != null && trustedPeerCertHex!.isNotEmpty) {
@@ -66,6 +74,7 @@ class WebSocketLane implements VeilLane {
         ctx.setTrustedCertificatesBytes(_hexToBytes(trustedPeerCertHex!));
         customClient = HttpClient(context: ctx);
         customClient.badCertificateCallback = (cert, host, port) => true;
+        print("WebSocketLane: Using custom client with pinned cert.");
       }
       final socket = await WebSocket.connect(
         cleanUrl.toString(),
@@ -73,6 +82,7 @@ class WebSocketLane implements VeilLane {
         headers: headers,
       );
       _socket = IOWebSocketChannel(socket);
+      print("WebSocketLane: Connection established to ${cleanUrl.toString()}");
       _socket!.stream.listen(
         (event) {
           try {
@@ -82,21 +92,27 @@ class WebSocketLane implements VeilLane {
               _inbox.add(LaneMessage(peer: peerId, bytes: event.codeUnits));
             } else {
               _inboundDropped += 1;
+              print("WebSocketLane: Dropped unknown event type.");
               return;
             }
             _inboundReceived += 1;
-          } catch (_) {
+          } catch (e) {
             _inboundDropped += 1;
+            print("WebSocketLane: Error processing inbound event: $e");
           }
         },
-        onError: (_) {
+        onError: (err, stack) {
+          print("WebSocketLane: Stream error for ${cleanUrl.toString()}: $err, stack: $stack");
+          _lastError = err.toString();
           _scheduleReconnect();
         },
         onDone: () {
+          print("WebSocketLane: Stream done for ${cleanUrl.toString()}.");
           _scheduleReconnect();
         },
       );
     } catch (err) {
+      print("WebSocketLane: Connection failed for ${url.toString()}: $err");
       _lastError = err.toString();
       _outboundErr += 1;
       _scheduleReconnect();
