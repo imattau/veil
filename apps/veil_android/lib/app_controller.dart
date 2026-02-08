@@ -49,6 +49,8 @@ class VeilAppController extends ChangeNotifier {
   ];
   final Set<String> _trustedFeeds = {};
   final LocalWotPolicy _wotPolicy = LocalWotPolicy();
+  final List<String> _channelLabels = [];
+  final Map<String, String> _channelTags = {};
 
   String displayName = '';
   String recoveryPhrase = '';
@@ -174,6 +176,22 @@ class VeilAppController extends ChangeNotifier {
   LaneHealthSnapshot? get fallbackLaneHealth =>
       _client?.fallbackLane?.healthSnapshot() ??
       _fallbackLane?.healthSnapshot();
+  List<ChannelInfo> get channels {
+    final labels = <String>{
+      if (channelLabel.isNotEmpty) channelLabel,
+      ..._channelLabels,
+    }.toList();
+    labels.sort();
+    return labels
+        .map(
+          (label) => ChannelInfo(
+            label: label,
+            tagHex: _channelTags[label] ?? '',
+            isDefault: label == channelLabel,
+          ),
+        )
+        .toList();
+  }
   List<FeedEntry> get feed => List.unmodifiable(_feed);
   List<FeedEntry> get visibleFeed =>
       List.unmodifiable(_feed.where((entry) => !isBlocked(entry.authorKey)));
@@ -402,6 +420,9 @@ class VeilAppController extends ChangeNotifier {
     }
     tagHex = prefs.getString('tagHex') ?? tagHex;
     channelLabel = prefs.getString('channelLabel') ?? channelLabel;
+    _channelLabels
+      ..clear()
+      ..addAll(prefs.getStringList('channelLabels') ?? const []);
     bleDeviceId = prefs.getString('bleDeviceId') ?? bleDeviceId;
     bleServiceUuid = prefs.getString('bleServiceUuid') ?? bleServiceUuid;
     bleCharacteristicUuid =
@@ -456,6 +477,7 @@ class VeilAppController extends ChangeNotifier {
     if (wsChanged) {
       await _persistPrefs();
     }
+    await _refreshChannelTags();
     notifyListeners();
   }
 
@@ -469,6 +491,7 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setStringList('wsEndpoints', _wsEndpoints);
     await prefs.setString('tagHex', tagHex);
     await prefs.setString('channelLabel', channelLabel);
+    await prefs.setStringList('channelLabels', _channelLabels);
     await prefs.setString('bleDeviceId', bleDeviceId);
     await prefs.setString('bleServiceUuid', bleServiceUuid);
     await prefs.setString('bleCharacteristicUuid', bleCharacteristicUuid);
@@ -745,6 +768,12 @@ class VeilAppController extends ChangeNotifier {
   String _normalizeChannelLabel(String label) {
     final trimmed = label.trim();
     if (trimmed.isEmpty) return '';
+    if (trimmed.toLowerCase().startsWith('tag:')) {
+      return 'tag:${trimmed.substring(4).toLowerCase()}';
+    }
+    if (RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(trimmed)) {
+      return 'tag:${trimmed.toLowerCase()}';
+    }
     return trimmed.toLowerCase().replaceAll(RegExp(r'\\s+'), '-');
   }
 
@@ -765,6 +794,9 @@ class VeilAppController extends ChangeNotifier {
   Future<String> _deriveTagHexForLabel(String label) async {
     final normalized = _normalizeChannelLabel(label);
     if (normalized.isEmpty) return '';
+    if (normalized.startsWith('tag:')) {
+      return normalized.substring(4);
+    }
     final namespace = _deriveChannelNamespace(1, normalized);
     return _bridge.deriveFeedTagHex(_channelPublisherKey, namespace);
   }
@@ -775,12 +807,62 @@ class VeilAppController extends ChangeNotifier {
       final derived = await _deriveTagHexForLabel(value);
       if (derived.isNotEmpty) {
         tagHex = derived;
+        _channelTags[value] = derived;
+        if (!_channelLabels.contains(value)) {
+          _channelLabels.add(value);
+        }
         _persistPrefs();
         notifyListeners();
       }
     }();
     _persistPrefs();
     notifyListeners();
+  }
+
+  Future<void> addChannelLabel(String value) async {
+    final normalized = _normalizeChannelLabel(value);
+    if (normalized.isEmpty) return;
+    if (_channelLabels.contains(normalized)) return;
+    final derived = await _deriveTagHexForLabel(normalized);
+    if (derived.isEmpty) return;
+    _channelLabels.add(normalized);
+    _channelTags[normalized] = derived;
+    _events.insert(0, 'Added channel $normalized');
+    _persistPrefs();
+    _notify();
+  }
+
+  void removeChannelLabel(String value) {
+    _channelLabels.remove(value);
+    _channelTags.remove(value);
+    if (channelLabel == value) {
+      channelLabel = _channelLabels.isNotEmpty ? _channelLabels.first : '';
+      if (channelLabel.isNotEmpty) {
+        tagHex = _channelTags[channelLabel] ?? tagHex;
+      }
+    }
+    _events.insert(0, 'Removed channel $value');
+    _persistPrefs();
+    _notify();
+  }
+
+  Future<void> setDefaultChannel(String value) async {
+    if (value.trim().isEmpty) return;
+    setChannelLabel(value);
+    await updateSubscription(value);
+  }
+
+  Future<void> _refreshChannelTags() async {
+    final labels = <String>{
+      if (channelLabel.isNotEmpty) channelLabel,
+      ..._channelLabels,
+    }.toList();
+    for (final label in labels) {
+      final derived = await _deriveTagHexForLabel(label);
+      if (derived.isNotEmpty) {
+        _channelTags[label] = derived;
+      }
+    }
   }
 
   Future<void> addSubscription(String value) async {
@@ -1266,6 +1348,12 @@ class VeilAppController extends ChangeNotifier {
   Future<void> updateSubscription(String value) async {
     channelLabel = value.trim();
     tagHex = await _deriveTagHexForLabel(channelLabel);
+    if (tagHex.isNotEmpty) {
+      _channelTags[channelLabel] = tagHex;
+      if (!_channelLabels.contains(channelLabel)) {
+        _channelLabels.add(channelLabel);
+      }
+    }
     final client = _client;
     if (client == null) return;
     for (final sub in client.subscriptions()) {
@@ -1534,6 +1622,18 @@ class VeilAppController extends ChangeNotifier {
       }
     });
   }
+}
+
+class ChannelInfo {
+  final String label;
+  final String tagHex;
+  final bool isDefault;
+
+  const ChannelInfo({
+    required this.label,
+    required this.tagHex,
+    required this.isDefault,
+  });
 }
 
 class LocalRelay {

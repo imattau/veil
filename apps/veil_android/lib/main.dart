@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'app_controller.dart';
 import 'ui/compose.dart';
+import 'ui/channels.dart';
 import 'ui/discovery.dart';
 import 'ui/home_feed.dart';
 import 'ui/network.dart';
@@ -355,6 +356,7 @@ class _RootShellState extends State<RootShell> {
                     controller: _controller,
                     showProtocolDetails: _showProtocolDetails,
                   ),
+                  ChannelsView(controller: _controller),
                   VaultView(controller: _controller),
                   NetworkView(controller: _controller),
                   DiscoveryView(controller: _controller),
@@ -375,6 +377,10 @@ class _RootShellState extends State<RootShell> {
               NavigationDestination(
                 icon: Icon(Icons.dynamic_feed),
                 label: 'Feed',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.tag),
+                label: 'Channels',
               ),
               NavigationDestination(
                 icon: Icon(Icons.lock),
