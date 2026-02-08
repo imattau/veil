@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../helpers/scan_helpers.dart';
 
@@ -62,6 +63,32 @@ class _DiscoveryViewState extends State<DiscoveryView> {
         ),
         const SizedBox(height: 16),
         Panel(
+          title: 'Suggested Channels',
+          child: Column(
+            children: controller.suggestedFeeds
+                .map(
+                  (feed) => ListTile(
+                    dense: true,
+                    title: Text(feed),
+                    subtitle: const Text('Tap to add as a channel'),
+                    trailing: const Icon(Icons.add),
+                    onTap: () async {
+                      await controller.addChannelLabel(feed);
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Added channel $feed'),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Panel(
           title: 'Add Endpoint',
           child: Column(
             children: [
@@ -90,6 +117,24 @@ class _DiscoveryViewState extends State<DiscoveryView> {
                       },
                       child: const Text('Add Endpoint'),
                     ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: () async {
+                      final data = await Clipboard.getData('text/plain');
+                      final value = data?.text?.trim();
+                      if (value == null || value.isEmpty) return;
+                      _peerController.text = value;
+                      controller.handleScanValue(value);
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Endpoint pasted'),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    child: const Text('Paste'),
                   ),
                 ],
               ),

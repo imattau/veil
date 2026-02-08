@@ -2,11 +2,13 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mime/mime.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
+import '../app_controller.dart';
 import '../models.dart';
 class ComposeScreen extends StatefulWidget {
   final void Function(
@@ -15,11 +17,15 @@ class ComposeScreen extends StatefulWidget {
     String channelLabel,
   ) onPublish;
   final String channelLabel;
+  final VeilAppController controller;
+  final VoidCallback onManageChannels;
 
   const ComposeScreen({
     super.key,
     required this.onPublish,
     required this.channelLabel,
+    required this.controller,
+    required this.onManageChannels,
   });
 
   @override
@@ -32,6 +38,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
   final _picker = ImagePicker();
   final List<Attachment> _attachments = [];
   bool _attachMenuOpen = false;
+  bool _processingAttachment = false;
 
   @override
   void initState() {
@@ -53,11 +60,13 @@ class _ComposeScreenState extends State<ComposeScreen> {
         title: const Text('Compose'),
         actions: [
           TextButton(
-            onPressed: () => widget.onPublish(
-              _controller.text,
-              _attachments,
-              _channelController.text.trim(),
-            ),
+            onPressed: _processingAttachment
+                ? null
+                : () => widget.onPublish(
+                      _controller.text,
+                      _attachments,
+                      _channelController.text.trim(),
+                    ),
             child: const Text('Publish'),
           ),
         ],
@@ -86,13 +95,17 @@ class _ComposeScreenState extends State<ComposeScreen> {
                 ],
               ),
               const SizedBox(height: 6),
-              TextField(
-                controller: _channelController,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(
-                  prefixText: '#',
-                  hintText: 'general',
-                ),
+              ChannelPicker(
+                controller: widget.controller,
+                value: _channelController.text.trim().isEmpty
+                    ? widget.channelLabel
+                    : _channelController.text.trim(),
+                onChanged: (value) {
+                  setState(() {
+                    _channelController.text = value;
+                  });
+                },
+                onManage: widget.onManageChannels,
               ),
               const SizedBox(height: 12),
               TextField(
@@ -109,11 +122,31 @@ class _ComposeScreenState extends State<ComposeScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              Text(
-                '${_attachments.length} attached',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.white70,
-                ),
+              Row(
+                children: [
+                  Text(
+                    '${_attachments.length} attached',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Colors.white70,
+                    ),
+                  ),
+                  if (_processingAttachment) ...[
+                    const SizedBox(width: 12),
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Processing…',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(color: Colors.white70),
+                    ),
+                  ],
+                ],
               ),
               if (_attachments.isNotEmpty) ...[
                 const SizedBox(height: 12),
@@ -231,31 +264,35 @@ class _ComposeScreenState extends State<ComposeScreen> {
     if (image == null) return;
     final bytes = await image.readAsBytes();
     final digest = sha256.convert(bytes).toString();
-    final chunks = splitIntoFileChunks(bytes);
-    final chunkRoots = chunks
-        .map((chunk) => sha256.convert(chunk.data).toString())
-        .toList();
-    final descriptor = MediaDescriptorV1(
-      mime: image.mimeType ?? 'image/*',
-      size: bytes.length,
-      hashHex: digest,
-      chunkRoots: chunkRoots,
-    );
-    setState(() {
-      _attachments.add(
-        Attachment(
-          name: image.name,
-          mime: image.mimeType ?? 'image/*',
-          bytes: bytes,
-          hashHex: digest,
-          size: bytes.length,
-          isImage: true,
-          isVideo: false,
-          chunkCount: chunks.length,
-          descriptor: descriptor,
-        ),
+    setState(() => _processingAttachment = true);
+    try {
+      final result = await compute(_buildChunkMeta, bytes);
+      final descriptor = MediaDescriptorV1(
+        mime: image.mimeType ?? 'image/*',
+        size: bytes.length,
+        hashHex: digest,
+        chunkRoots: result.chunkRoots,
       );
-    });
+      setState(() {
+        _attachments.add(
+          Attachment(
+            name: image.name,
+            mime: image.mimeType ?? 'image/*',
+            bytes: bytes,
+            hashHex: digest,
+            size: bytes.length,
+            isImage: true,
+            isVideo: false,
+            chunkCount: result.chunkCount,
+            descriptor: descriptor,
+          ),
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _processingAttachment = false);
+      }
+    }
   }
 
   Future<void> _pickFile() async {
@@ -266,30 +303,109 @@ class _ComposeScreenState extends State<ComposeScreen> {
     if (bytes == null) return;
     final mime = lookupMimeType(file.name) ?? 'application/octet-stream';
     final digest = sha256.convert(bytes).toString();
-    final chunks = splitIntoFileChunks(bytes);
-    final chunkRoots = chunks
-        .map((chunk) => sha256.convert(chunk.data).toString())
-        .toList();
-    final descriptor = MediaDescriptorV1(
-      mime: mime,
-      size: bytes.length,
-      hashHex: digest,
-      chunkRoots: chunkRoots,
-    );
-    setState(() {
-      _attachments.add(
-        Attachment(
-          name: file.name,
-          mime: mime,
-          bytes: bytes,
-          hashHex: digest,
-          size: bytes.length,
-          isImage: mime.startsWith('image/'),
-          isVideo: mime.startsWith('video/'),
-          chunkCount: chunks.length,
-          descriptor: descriptor,
-        ),
+    setState(() => _processingAttachment = true);
+    try {
+      final resultMeta = await compute(_buildChunkMeta, bytes);
+      final descriptor = MediaDescriptorV1(
+        mime: mime,
+        size: bytes.length,
+        hashHex: digest,
+        chunkRoots: resultMeta.chunkRoots,
       );
-    });
+      setState(() {
+        _attachments.add(
+          Attachment(
+            name: file.name,
+            mime: mime,
+            bytes: bytes,
+            hashHex: digest,
+            size: bytes.length,
+            isImage: mime.startsWith('image/'),
+            isVideo: mime.startsWith('video/'),
+            chunkCount: resultMeta.chunkCount,
+            descriptor: descriptor,
+          ),
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _processingAttachment = false);
+      }
+    }
   }
+}
+
+class ChannelPicker extends StatelessWidget {
+  final VeilAppController controller;
+  final String value;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onManage;
+
+  const ChannelPicker({
+    super.key,
+    required this.controller,
+    required this.value,
+    required this.onChanged,
+    required this.onManage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final channels = controller.channels;
+    final options = channels.isNotEmpty
+        ? channels
+        : [ChannelInfo(label: value, tagHex: '', isDefault: true)];
+    return Row(
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<String>(
+            value: options.any((c) => c.label == value)
+                ? value
+                : options.first.label,
+            items: options
+                .map(
+                  (channel) => DropdownMenuItem(
+                    value: channel.label,
+                    child: Text(
+                      channel.label.startsWith('tag:')
+                          ? 'Custom tag'
+                          : '#${channel.label}',
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: (next) {
+              if (next != null) {
+                onChanged(next);
+              }
+            },
+            decoration: const InputDecoration(
+              labelText: 'Posting to',
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          onPressed: onManage,
+          tooltip: 'Manage channels',
+          icon: const Icon(Icons.tune),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChunkMetaResult {
+  final List<String> chunkRoots;
+  final int chunkCount;
+
+  const _ChunkMetaResult(this.chunkRoots, this.chunkCount);
+}
+
+_ChunkMetaResult _buildChunkMeta(Uint8List bytes) {
+  final chunks = splitIntoFileChunks(bytes);
+  final chunkRoots = chunks
+      .map((chunk) => sha256.convert(chunk.data).toString())
+      .toList();
+  return _ChunkMetaResult(chunkRoots, chunks.length);
 }

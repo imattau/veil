@@ -454,6 +454,12 @@ class VeilAppController extends ChangeNotifier {
     _extraTags
       ..clear()
       ..addAll(prefs.getStringList('extraTags') ?? const []);
+    for (final tag in _extraTags) {
+      final label = 'tag:${tag.toLowerCase()}';
+      if (!_channelLabels.contains(label)) {
+        _channelLabels.add(label);
+      }
+    }
     _forwardPeers
       ..clear()
       ..addAll(prefs.getStringList('forwardPeers') ?? const []);

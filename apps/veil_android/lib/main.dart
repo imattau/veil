@@ -174,6 +174,11 @@ class _RootShellState extends State<RootShell> {
               : _controller.tagHex.isNotEmpty
                   ? 'Custom tag'
                   : 'General',
+          controller: _controller,
+          onManageChannels: () {
+            Navigator.of(context).pop();
+            setState(() => _tabIndex = 1);
+          },
           onPublish: (text, attachments, channelLabel) {
             if (channelLabel.isNotEmpty) {
               _controller.setChannelLabel(channelLabel);

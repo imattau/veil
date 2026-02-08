@@ -91,22 +91,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          'Trust starter feeds',
+                          'You can trust starter feeds later in Discovery.',
                           style: Theme.of(
                             context,
-                          ).textTheme.titleMedium?.copyWith(
+                          ).textTheme.bodySmall?.copyWith(
                             color: Colors.white70,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        ...controller.suggestedFeeds.map(
-                          (feed) => CheckboxListTile(
-                            value: controller.trustedFeeds.contains(feed),
-                            onChanged: (_) => controller.toggleTrustedFeed(feed),
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(feed),
-                            subtitle: const Text('Bootstrap recommendation'),
                           ),
                         ),
                         const Spacer(),
