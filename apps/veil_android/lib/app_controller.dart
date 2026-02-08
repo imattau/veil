@@ -639,7 +639,7 @@ class VeilAppController extends ChangeNotifier {
           return;
         }
         final cert = await QuicLane.fetchPinnedCertHex(quic);
-        if (cert.isEmpty) {
+        if (cert == null || cert.isEmpty) {
           _events.insert(0, 'Failed to pin QUIC cert');
         } else {
           quicTrustedCertHex = cert;
