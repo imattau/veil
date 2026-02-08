@@ -1040,6 +1040,18 @@ class VeilAppController extends ChangeNotifier {
   void handleScanValue(String value) {
     final raw = value.trim();
     if (raw.isEmpty) return;
+    if (_looksLikeDomain(raw)) {
+      _events.insert(0, 'Fetching VPS profile…');
+      _notify();
+      Future.microtask(() async {
+        final ok = await importVpsFromDomain(raw);
+        if (!ok) {
+          _events.insert(0, 'Failed to import VPS profile');
+          _notify();
+        }
+      });
+      return;
+    }
     if (_importVpsProfile(raw)) {
       _events.insert(0, 'Imported VPS profile');
       _notify();
@@ -1053,6 +1065,25 @@ class VeilAppController extends ChangeNotifier {
     if (lower.startsWith('tag:')) {
       addSubscription(raw.substring(4));
       return;
+    }
+    if (lower.startsWith('http://') || lower.startsWith('https://')) {
+      final uri = Uri.tryParse(raw);
+      if (uri != null &&
+          uri.host.isNotEmpty &&
+          (uri.path.isEmpty ||
+              uri.path == '/' ||
+              uri.path.endsWith('/config.js'))) {
+        _events.insert(0, 'Fetching VPS profile…');
+        _notify();
+        Future.microtask(() async {
+          final ok = await importVpsFromDomain(uri.host);
+          if (!ok) {
+            _events.insert(0, 'Failed to import VPS profile');
+            _notify();
+          }
+        });
+        return;
+      }
     }
     if (lower.startsWith('ws://') ||
         lower.startsWith('wss://') ||
@@ -1072,6 +1103,34 @@ class VeilAppController extends ChangeNotifier {
     }
     _events.insert(0, 'Scan not recognized: $raw');
     notifyListeners();
+  }
+
+  bool _looksLikeDomain(String value) {
+    final cleaned = value.trim();
+    if (cleaned.contains('://')) return false;
+    if (cleaned.contains('/')) return false;
+    return cleaned.contains('.');
+  }
+
+  Future<bool> importVpsFromDomain(String value) async {
+    final host = value.trim();
+    if (host.isEmpty) return false;
+    try {
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 6);
+      final req =
+          await client.getUrl(Uri.parse('https://$host/config.js'));
+      final resp = await req.close();
+      if (resp.statusCode >= 400) {
+        return false;
+      }
+      final body = await resp.transform(utf8.decoder).join();
+      final profile = VpsProfile.parseConfigJs(host, body);
+      if (profile == null) return false;
+      return _importVpsProfile(profile.toProfileUri());
+    } catch (_) {
+      return false;
+    }
   }
 
   bool _importVpsProfile(String raw) {

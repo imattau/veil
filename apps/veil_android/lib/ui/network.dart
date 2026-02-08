@@ -105,7 +105,7 @@ class _NetworkViewState extends State<NetworkView> {
               ),
               const SizedBox(height: 8),
               InputField(
-                label: 'Paste profile or endpoint',
+                label: 'Paste profile, domain, or endpoint',
                 controller: _wsAddController,
                 onChanged: (_) {},
               ),

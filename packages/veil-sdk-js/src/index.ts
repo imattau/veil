@@ -151,6 +151,8 @@ export {
   initVeilWasm,
   bytesToHex,
 } from "./tags";
+export { parseVpsConfigJs, toVpsProfileUri, vpsProfileFromDomain } from "./vps";
+export type { VpsProfile } from "./vps";
 export {
   exportPublicKeyRaw,
   generateEd25519KeyPair,

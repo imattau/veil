@@ -20,4 +20,5 @@ export "src/models/shard_request.dart";
 export "src/models/veil_types.dart";
 export "src/plugins/app_plugins.dart";
 export "src/tags.dart";
+export "src/vps_profile.dart";
 export "src/wot.dart";

@@ -96,7 +96,7 @@ class _DiscoveryViewState extends State<DiscoveryView> {
           child: Column(
             children: [
               InputField(
-                label: 'Endpoint (wss://.../ws or veil://vps)',
+                label: 'Endpoint (domain, wss://.../ws, or veil://vps)',
                 controller: _peerController,
                 onChanged: (_) {},
                 onScan: () => openScanner(
