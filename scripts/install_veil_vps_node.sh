@@ -96,12 +96,12 @@ pick_free_port() {
 
 resolve_ports() {
   if port_in_use "$PROXY_HTTP_PORT"; then
-    PROXY_HTTP_PORT=$(pick_free_port "$PROXY_HTTP_PORT" 8080 18080)
-    echo "HTTP port in use, switching to ${PROXY_HTTP_PORT}."
+    echo "HTTP port ${PROXY_HTTP_PORT} is in use. Please free it to use standard ports."
+    exit 1
   fi
   if port_in_use "$PROXY_HTTPS_PORT"; then
-    PROXY_HTTPS_PORT=$(pick_free_port "$PROXY_HTTPS_PORT" 8443 18443)
-    echo "HTTPS port in use, switching to ${PROXY_HTTPS_PORT}."
+    echo "HTTPS port ${PROXY_HTTPS_PORT} is in use. Please free it to use standard ports."
+    exit 1
   fi
   if port_in_use "$PROXY_HEALTH_PORT"; then
     PROXY_HEALTH_PORT=$(pick_free_port "$PROXY_HEALTH_PORT" 9091 19090)
@@ -419,14 +419,7 @@ CADDYCONF
     echo "import ${CADDY_CONF_DIR}/*" >> "$CADDYFILE"
   fi
   if [[ -f "$CADDYFILE" ]] && ! grep -q "http_port" "$CADDYFILE"; then
-    if [[ "$PROXY_HTTP_PORT" != "80" || "$PROXY_HTTPS_PORT" != "443" ]]; then
-      cat <<GLOBALCONF >> "$CADDYFILE"
-{
-  http_port ${PROXY_HTTP_PORT}
-  https_port ${PROXY_HTTPS_PORT}
-}
-GLOBALCONF
-    fi
+    true
   fi
   caddy validate --config "$CADDYFILE" && systemctl reload caddy || true
 }
