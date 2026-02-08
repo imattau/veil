@@ -6,6 +6,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rand::rngs::OsRng;
 use rand::RngCore;
+use base64::engine::general_purpose::STANDARD as Base64Standard;
+use base64::Engine as _;
 use veil_codec::shard::{encode_shard_cbor, ShardHeaderV1, ShardV1, SHARD_HEADER_LEN};
 use veil_core::{Epoch, Namespace, Tag};
 use veil_transport::adapter::TransportAdapter;
@@ -260,7 +262,9 @@ fn build_quic_adapter(
     let cert = if let Some(hex) = cert_hex {
         hex_to_bytes(&hex)?
     } else if let Some(b64) = cert_b64 {
-        base64::decode(b64).map_err(|_| "invalid base64 cert".to_string())?
+        Base64Standard
+            .decode(b64)
+            .map_err(|_| "invalid base64 cert".to_string())?
     } else if let Some(path) = cert_path {
         std::fs::read(path).map_err(|err| format!("failed to read cert: {err}"))?
     } else if let Some(url) = cert_url {
@@ -349,10 +353,11 @@ fn fetch_cert_from_url(url: &str) -> Result<Vec<u8>, String> {
     if !url.starts_with("https://") {
         return Err("QUIC cert URL must be https://".to_string());
     }
-    let response = ureq::get(url)
-        .timeout_connect(5_000)
-        .timeout_read(8_000)
-        .call()
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout_read(Duration::from_secs(8))
+        .build();
+    let response = agent.get(url).call()
         .map_err(|err| format!("failed to fetch cert: {err}"))?;
     if response.status() >= 400 {
         return Err(format!("cert fetch failed: HTTP {}", response.status()));
