@@ -418,10 +418,10 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
               ],
               Align(
                 alignment: Alignment.centerRight,
-                child: TextButton.icon(
+                child: IconButton(
                   onPressed: () => _openInspect(context, entry),
-                  icon: const Icon(Icons.info_outline, size: 18),
-                  label: const Text('Inspect'),
+                  icon: const Icon(Icons.info_outline, size: 20),
+                  tooltip: 'Inspect',
                 ),
               ),
             ],
@@ -437,17 +437,11 @@ class _ReconstructedChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: const [
-        Icon(
-          Icons.verified,
-          size: 16,
-          color: Color(0xFF34D399),
-        ),
-        SizedBox(width: 4),
-        Text('Reconstructed'),
-      ],
+    return const Icon(
+      Icons.verified,
+      size: 18,
+      color: Color(0xFF34D399),
+      semanticLabel: 'Reconstructed',
     );
   }
 }
