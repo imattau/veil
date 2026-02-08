@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
 import '../app_controller.dart';
@@ -74,6 +75,7 @@ class _NetworkViewState extends State<NetworkView> {
         : null;
     final rawEndpoint = _wsAddController.text.trim();
     final lowerEndpoint = rawEndpoint.toLowerCase();
+    final wsEndpoints = controller.wsEndpoints;
     if (_quicController.text != controller.quicEndpointValue) {
       _quicController.text = controller.quicEndpointValue;
     }
@@ -156,13 +158,19 @@ class _NetworkViewState extends State<NetworkView> {
               ExpansionTile(
                 title: const Text('Advanced connection'),
                 subtitle: Text(
-                  'External relay settings',
+                  'External relay endpoints and profile imports',
                   style: theme.textTheme.bodySmall,
                 ),
                 childrenPadding: const EdgeInsets.only(top: 8),
                 children: [
+                  Text(
+                    'Primary relay',
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: Colors.white70,
+                    ),
+                  ),
                   InputField(
-                    label: 'WebSocket URL',
+                    label: 'Primary WebSocket URL (wss://.../ws)',
                     controller: _wsController,
                     onChanged: (value) {
                       controller.setWsUrl(value);
@@ -177,7 +185,7 @@ class _NetworkViewState extends State<NetworkView> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Scan a veil://vps profile to auto-import endpoints.',
+                          'Scan or paste a veil://vps profile to import WS + QUIC.',
                           style: theme.textTheme.bodySmall,
                         ),
                       ),
@@ -190,8 +198,15 @@ class _NetworkViewState extends State<NetworkView> {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Additional WebSocket endpoints',
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: Colors.white70,
+                    ),
+                  ),
                   InputField(
-                    label: 'Add WebSocket endpoint',
+                    label: 'Add endpoint (wss://.../ws or veil://vps)',
                     controller: _wsAddController,
                     onChanged: (_) {},
                   ),
@@ -228,22 +243,47 @@ class _NetworkViewState extends State<NetworkView> {
                         });
                       },
                       icon: const Icon(Icons.add),
-                      label: const Text('Add endpoint'),
+                      label: const Text('Add'),
                     ),
                   ),
-                  if (controller.wsEndpoints.isNotEmpty) ...[
+                  if (wsEndpoints.isNotEmpty) ...[
                     const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: controller.wsEndpoints
+                    Column(
+                      children: wsEndpoints
                           .map(
-                            (endpoint) => Chip(
-                              label: Text(endpoint),
-                              onDeleted: () {
-                                controller.removeWsEndpoint(endpoint);
-                                setState(() {});
-                              },
+                            (endpoint) => ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.public, size: 18),
+                              title: Text(endpoint),
+                              trailing: Wrap(
+                                spacing: 4,
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Copy',
+                                    icon: const Icon(Icons.copy, size: 18),
+                                    onPressed: () async {
+                                      await Clipboard.setData(
+                                        ClipboardData(text: endpoint),
+                                      );
+                                      if (!context.mounted) return;
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Endpoint copied'),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Remove',
+                                    icon: const Icon(Icons.close, size: 18),
+                                    onPressed: () {
+                                      controller.removeWsEndpoint(endpoint);
+                                      setState(() {});
+                                    },
+                                  ),
+                                ],
+                              ),
                             ),
                           )
                           .toList(),
@@ -380,6 +420,28 @@ class _NetworkViewState extends State<NetworkView> {
                 label: 'QUIC endpoint (quic://host:port)',
                 controller: _quicController,
                 onChanged: controller.setQuicEndpoint,
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  TextButton.icon(
+                    onPressed: controller.quicEndpointValue.isEmpty
+                        ? null
+                        : () async {
+                            await Clipboard.setData(
+                              ClipboardData(text: controller.quicEndpointValue),
+                            );
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('QUIC endpoint copied'),
+                              ),
+                            );
+                          },
+                    icon: const Icon(Icons.copy, size: 16),
+                    label: const Text('Copy endpoint'),
+                  ),
+                ],
               ),
               const SizedBox(height: 12),
               InputField(
