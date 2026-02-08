@@ -401,6 +401,12 @@ server {
         limit_req zone=veil_health burst=10 nodelay;
         ${health_auth_snippet}
     }
+    location /peers {
+        proxy_pass http://127.0.0.1:${PROXY_HEALTH_PORT};
+        proxy_set_header Host $host;
+        limit_req zone=veil_health burst=10 nodelay;
+        ${health_auth_snippet}
+    }
 }
 NGINXCONF
   if [[ ! -e "$NGINX_SITE_LINK" ]]; then
@@ -424,7 +430,7 @@ configure_caddy() {
     health_hash=$(caddy hash-password --plaintext "$PROXY_HEALTH_PASS" 2>/dev/null || true)
     if [[ -n "$health_hash" ]]; then
       health_auth_block=$(cat <<EOF
-  @veil_health path /health /metrics
+  @veil_health path /health /metrics /peers
   basic_auth @veil_health {
     ${PROXY_HEALTH_USER} ${health_hash}
   }
@@ -444,6 +450,7 @@ ${PROXY_DOMAIN} {
 ${health_auth_block}
   reverse_proxy /health 127.0.0.1:${PROXY_HEALTH_PORT}
   reverse_proxy /metrics 127.0.0.1:${PROXY_HEALTH_PORT}
+  reverse_proxy /peers 127.0.0.1:${PROXY_HEALTH_PORT}
 }
 CADDYCONF
   if [[ -f "$CADDYFILE" ]] && ! grep -q "conf.d" "$CADDYFILE"; then
