@@ -40,13 +40,8 @@ fi
 
 NDK_HOME="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT}}"
 
-toolchain="$(rustup show active-toolchain 2>/dev/null | awk '{print $1}')"
-if [[ -z "${toolchain}" ]]; then
-  toolchain="stable"
-fi
-if [[ -z "${RUSTUP_TOOLCHAIN:-}" ]]; then
-  export RUSTUP_TOOLCHAIN="${toolchain}"
-fi
+toolchain="${RUSTUP_TOOLCHAIN:-stable}"
+export RUSTUP_TOOLCHAIN="${toolchain}"
 for target in "${TARGET_LIST[@]}"; do
   echo "Ensuring Rust target ${target}"
   rustup target add "${target}"

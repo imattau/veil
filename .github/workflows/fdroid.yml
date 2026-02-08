@@ -54,7 +54,7 @@ jobs:
 
       - name: Install Rust Android targets
         run: |
-          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android --toolchain stable
 
       - name: Install Android NDK
         run: |
@@ -62,6 +62,8 @@ jobs:
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/25.2.9519653" >> $GITHUB_ENV
 
       - name: Build QUIC native libs
+        env:
+          RUSTUP_TOOLCHAIN: stable
         run: |
           ./scripts/build_android_quic.sh
 
