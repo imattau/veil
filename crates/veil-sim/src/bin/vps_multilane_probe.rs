@@ -8,6 +8,7 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use base64::engine::general_purpose::STANDARD as Base64Standard;
 use base64::Engine as _;
+use rustls::crypto::{aws_lc_rs, ring};
 use veil_codec::shard::{encode_shard_cbor, ShardHeaderV1, ShardV1, SHARD_HEADER_LEN};
 use veil_core::{Epoch, Namespace, Tag};
 use veil_transport::adapter::TransportAdapter;
@@ -32,7 +33,7 @@ fn main() {
     let mut ws_url = get_arg_value(&args, "--ws");
     let mut quic_peer = get_arg_value(&args, "--quic");
     let quic_cert_hex = get_arg_value(&args, "--quic-cert-hex");
-    let quic_cert_b64 = get_arg_value(&args, "--quic-cert-b64");
+    let mut quic_cert_b64 = get_arg_value(&args, "--quic-cert-b64");
     let quic_cert_path = get_arg_value(&args, "--quic-cert-path");
     let mut quic_cert_url = get_arg_value(&args, "--quic-cert-url");
     let tag_hex = get_arg_value(&args, "--tag")
@@ -46,6 +47,18 @@ fn main() {
         .unwrap_or(12);
 
     if let Some(host) = domain.as_deref() {
+        if quic_cert_b64.is_none() {
+            if let Ok(cfg) = fetch_vps_config(host) {
+                if quic_peer.is_none() {
+                    if let Some(port) = cfg.quic_port {
+                        quic_peer = Some(format!("{host}:{port}"));
+                    }
+                }
+                if quic_cert_b64.is_none() {
+                    quic_cert_b64 = cfg.quic_cert_b64;
+                }
+            }
+        }
         if ws_url.is_none() {
             ws_url = Some(format!("wss://{host}/ws"));
         }
@@ -108,6 +121,8 @@ fn main() {
 
     let mut quic_sender = None;
     let mut quic_receiver = None;
+    install_rustls_crypto_provider();
+
     if let Some(peer) = quic_peer.as_ref() {
         match build_quic_adapter(
             peer,
@@ -354,8 +369,8 @@ fn fetch_cert_from_url(url: &str) -> Result<Vec<u8>, String> {
         return Err("QUIC cert URL must be https://".to_string());
     }
     let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(5))
-        .timeout_read(Duration::from_secs(8))
+        .timeout_connect(Duration::from_secs(8))
+        .timeout_read(Duration::from_secs(15))
         .build();
     let response = agent.get(url).call()
         .map_err(|err| format!("failed to fetch cert: {err}"))?;
@@ -371,4 +386,60 @@ fn fetch_cert_from_url(url: &str) -> Result<Vec<u8>, String> {
         return Err("cert fetch returned empty body".to_string());
     }
     Ok(bytes)
+}
+
+fn install_rustls_crypto_provider() {
+    let _ = aws_lc_rs::default_provider().install_default();
+    let _ = ring::default_provider().install_default();
+}
+
+struct VpsConfig {
+    quic_port: Option<u16>,
+    quic_cert_b64: Option<String>,
+}
+
+fn fetch_vps_config(host: &str) -> Result<VpsConfig, String> {
+    let url = format!("https://{host}/config.js");
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(5))
+        .timeout_read(Duration::from_secs(8))
+        .build();
+    let response = agent.get(&url).call().map_err(|err| format!("{err}"))?;
+    if response.status() >= 400 {
+        return Err(format!("config fetch failed: HTTP {}", response.status()));
+    }
+    let mut body = String::new();
+    response
+        .into_reader()
+        .read_to_string(&mut body)
+        .map_err(|err| format!("failed to read config: {err}"))?;
+    let quic_port = extract_js_value(&body, "VEIL_VPS_QUIC_PORT")
+        .and_then(|value| value.parse::<u16>().ok());
+    let quic_cert_b64 = extract_js_value(&body, "VEIL_VPS_QUIC_CERT_B64");
+    Ok(VpsConfig {
+        quic_port,
+        quic_cert_b64,
+    })
+}
+
+fn extract_js_value(body: &str, key: &str) -> Option<String> {
+    for line in body.lines() {
+        let line = line.trim();
+        if !line.starts_with("window.") {
+            continue;
+        }
+        if !line.contains(key) {
+            continue;
+        }
+        let value = line
+            .split('=')
+            .nth(1)
+            .map(|v| v.trim().trim_end_matches(';'))?;
+        let value = value.trim_matches('"').trim_matches('\'');
+        if value.is_empty() {
+            return None;
+        }
+        return Some(value.to_string());
+    }
+    None
 }
