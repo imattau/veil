@@ -1655,14 +1655,11 @@ class VeilAppController extends ChangeNotifier {
         endpoints = [normalizedFallback];
       }
     }
-    final wsLanes = endpoints.map((endpoint) {
-      final cert = quicCertFor(endpoint) ?? quicTrustedCertValue;
-      return WebSocketLane(
-        url: Uri.parse(endpoint),
-        peerId: peerId,
-        trustedPeerCertHex: cert.isEmpty ? null : cert,
-      );
-    }).toList();
+    final wsLanes = endpoints
+        .map(
+          (endpoint) => WebSocketLane(url: Uri.parse(endpoint), peerId: peerId),
+        )
+        .toList();
     final VeilLane wsLane = wsLanes.length > 1
         ? MultiLane(lanes: wsLanes)
         : wsLanes.first;
