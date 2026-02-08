@@ -188,18 +188,16 @@
           qrTarget.textContent = "QR unavailable. Use copy link below.";
           return;
         }
-        QRCode.toCanvas(
-          profile,
-          { width: 200, margin: 1, color: { dark: "#e2e8f0", light: "#0b0f17" } },
-          (err, canvas) => {
-            if (err) {
-              qrTarget.textContent = "QR unavailable. Use copy link below.";
-              return;
-            }
-            qrTarget.innerHTML = "";
-            qrTarget.appendChild(canvas);
-          },
-        );
+        qrTarget.innerHTML = "";
+        // qrcodejs exposes a global QRCode constructor
+        new QRCode(qrTarget, {
+          text: profile,
+          width: 200,
+          height: 200,
+          colorDark: "#e2e8f0",
+          colorLight: "#0b0f17",
+          correctLevel: QRCode.CorrectLevel.M,
+        });
       }
       if (document.readyState === "complete") {
         renderQr();
