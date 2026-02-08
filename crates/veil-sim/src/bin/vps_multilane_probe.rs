@@ -26,12 +26,13 @@ fn main() {
         return;
     }
 
-    let ws_url = get_arg_value(&args, "--ws");
-    let quic_peer = get_arg_value(&args, "--quic");
+    let domain = get_arg_value(&args, "--domain");
+    let mut ws_url = get_arg_value(&args, "--ws");
+    let mut quic_peer = get_arg_value(&args, "--quic");
     let quic_cert_hex = get_arg_value(&args, "--quic-cert-hex");
     let quic_cert_b64 = get_arg_value(&args, "--quic-cert-b64");
     let quic_cert_path = get_arg_value(&args, "--quic-cert-path");
-    let quic_cert_url = get_arg_value(&args, "--quic-cert-url");
+    let mut quic_cert_url = get_arg_value(&args, "--quic-cert-url");
     let tag_hex = get_arg_value(&args, "--tag")
         .or_else(|| env::var("VEIL_VPS_CORE_TAGS").ok().and_then(|v| v.split(',').next().map(|s| s.to_string())))
         .unwrap_or_else(|| DEFAULT_CORE_TAGS[0].to_string());
@@ -42,8 +43,22 @@ fn main() {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(12);
 
+    if let Some(host) = domain.as_deref() {
+        if ws_url.is_none() {
+            ws_url = Some(format!("wss://{host}/ws"));
+        }
+        if quic_peer.is_none() {
+            quic_peer = Some(format!("{host}:5000"));
+        }
+        if quic_cert_url.is_none() {
+            quic_cert_url = Some(format!("https://{host}/veil/quic_cert.der"));
+        }
+    }
+
     if ws_url.is_none() && quic_peer.is_none() {
-        eprintln!("Provide at least one lane: --ws <wss://.../ws> or --quic <host:port>");
+        eprintln!(
+            "Provide at least one lane: --domain <host> or --ws <wss://.../ws> or --quic <host:port>"
+        );
         print_usage();
         std::process::exit(2);
     }
@@ -193,7 +208,9 @@ fn main() {
 fn print_usage() {
     eprintln!(
         "Usage: cargo run -p veil-sim --bin vps_multilane_probe -- \
-  --ws wss://host/ws [--quic host:port --quic-cert-hex HEX|--quic-cert-b64 B64|--quic-cert-path PATH|--quic-cert-url https://host/veil/quic_cert.der] \
+  --domain host \
+  [--ws wss://host/ws] [--quic host:port] \\
+  [--quic-cert-hex HEX|--quic-cert-b64 B64|--quic-cert-path PATH|--quic-cert-url https://host/veil/quic_cert.der] \
   [--tag HEX] [--namespace N] [--timeout SECONDS]"
     );
 }
