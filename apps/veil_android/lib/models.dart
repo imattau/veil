@@ -87,6 +87,24 @@ class LinkPreview {
   });
 }
 
+class PrivateMessage {
+  final String id;
+  final String from;
+  final String to;
+  final String body;
+  final DateTime timestamp;
+  final bool incoming;
+
+  const PrivateMessage({
+    required this.id,
+    required this.from,
+    required this.to,
+    required this.body,
+    required this.timestamp,
+    required this.incoming,
+  });
+}
+
 class LinkPreviewCard extends StatelessWidget {
   final LinkPreview preview;
 

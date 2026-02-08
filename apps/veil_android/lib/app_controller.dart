@@ -40,6 +40,7 @@ class VeilAppController extends ChangeNotifier {
   int _maxPublishQueue = 500;
   SharedPreferences? _prefs;
   final List<FeedEntry> _feed = [];
+  final List<PrivateMessage> _privateMessages = [];
   final List<String> _events = [];
   final List<String> _suggestedFeeds = [
     'Public Square',
@@ -198,6 +199,8 @@ class VeilAppController extends ChangeNotifier {
   List<FeedEntry> get feed => List.unmodifiable(_feed);
   List<FeedEntry> get visibleFeed =>
       List.unmodifiable(_feed.where((entry) => !isBlocked(entry.authorKey)));
+  List<PrivateMessage> get privateMessages =>
+      List.unmodifiable(_privateMessages);
   List<String> get events => List.unmodifiable(_events);
   List<String> get suggestedFeeds => List.unmodifiable(_suggestedFeeds);
   Set<String> get trustedFeeds => Set.unmodifiable(_trustedFeeds);
@@ -232,6 +235,7 @@ class VeilAppController extends ChangeNotifier {
     await _openDb();
     await _loadPublishQueue();
     await _loadFeedEntries();
+    await _loadPrivateMessages();
     await _startLocalRelay();
     _startEpochTimer();
     connect();
@@ -549,6 +553,66 @@ class VeilAppController extends ChangeNotifier {
     await _db!.execute(
       'CREATE TABLE IF NOT EXISTS feed_entries (id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at INTEGER)',
     );
+    await _db!.execute(
+      'CREATE TABLE IF NOT EXISTS private_messages (id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at INTEGER)',
+    );
+  }
+
+  Future<void> _loadPrivateMessages() async {
+    final db = _db;
+    if (db == null) return;
+    final rows = await db.query(
+      'private_messages',
+      orderBy: 'created_at DESC',
+      limit: 200,
+    );
+    if (rows.isEmpty) return;
+    _privateMessages
+      ..clear()
+      ..addAll(
+        rows
+            .map((row) => _decodePrivateMessage(row['json'] as String))
+            .whereType<PrivateMessage>(),
+      );
+  }
+
+  Future<void> _persistPrivateMessage(PrivateMessage message) async {
+    final db = _db;
+    if (db == null) return;
+    await db.insert(
+      'private_messages',
+      {
+        'id': message.id,
+        'json': jsonEncode({
+          'id': message.id,
+          'from': message.from,
+          'to': message.to,
+          'body': message.body,
+          'timestamp': message.timestamp.millisecondsSinceEpoch,
+          'incoming': message.incoming,
+        }),
+        'created_at': message.timestamp.millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  PrivateMessage? _decodePrivateMessage(String json) {
+    try {
+      final map = jsonDecode(json) as Map<String, dynamic>;
+      return PrivateMessage(
+        id: map['id'] as String? ?? '',
+        from: map['from'] as String? ?? '',
+        to: map['to'] as String? ?? '',
+        body: map['body'] as String? ?? '',
+        timestamp: DateTime.fromMillisecondsSinceEpoch(
+          map['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch,
+        ),
+        incoming: map['incoming'] as bool? ?? false,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _loadFeedEntries() async {
@@ -1360,6 +1424,7 @@ class VeilAppController extends ChangeNotifier {
         onPayload: (root, payload) {
           _events.insert(0, 'Payload $root (${payload.length} bytes)');
           _markReconstructed(root);
+          _handlePayload(root, payload);
         },
       ),
       options: VeilClientOptions(
@@ -1467,6 +1532,66 @@ class VeilAppController extends ChangeNotifier {
       }
       notifyListeners();
     });
+  }
+
+  void _handlePayload(String root, Uint8List payload) {
+    try {
+      final envelope = decodeAppEnvelope(payload);
+      if (envelope.type != 'dm') {
+        return;
+      }
+      final dm = decodeDirectMessage(payload);
+      final to = (dm.extensions?['to'] as String?) ?? '';
+      final from = (dm.extensions?['from'] as String?) ?? '';
+      final mentions = dm.mentions ?? const [];
+      final isForMe = to == privateIdHex || mentions.contains(privateIdHex);
+      if (!isForMe) {
+        return;
+      }
+      final msg = PrivateMessage(
+        id: root,
+        from: from.isEmpty ? 'unknown' : from,
+        to: to.isEmpty ? privateIdHex : to,
+        body: dm.body,
+        timestamp: DateTime.now(),
+        incoming: true,
+      );
+      _privateMessages.insert(0, msg);
+      _persistPrivateMessage(msg);
+      _events.insert(0, 'Direct message received');
+      _notify();
+    } catch (_) {
+      return;
+    }
+  }
+
+  Future<void> sendDirectMessage(String toHex, String body) async {
+    final cleaned = toHex.trim().toLowerCase();
+    if (cleaned.isEmpty || body.trim().isEmpty) return;
+    final dm = DirectMessageV1(
+      body: body.trim(),
+      mentions: [cleaned],
+      extensions: {
+        'from': privateIdHex,
+        'to': cleaned,
+      },
+    );
+    final obj = await _publisher.buildDirectMessage(dm);
+    _publishQueue.enqueue(obj);
+    _persistPublishObject(obj);
+    _events.insert(0, 'Queued direct message');
+    final msg = PrivateMessage(
+      id: obj.objectRootHex,
+      from: privateIdHex,
+      to: cleaned,
+      body: body.trim(),
+      timestamp: DateTime.now(),
+      incoming: false,
+    );
+    _privateMessages.insert(0, msg);
+    _persistPrivateMessage(msg);
+    _notify();
+    _drainPublishQueue();
   }
 
   void _enqueuePublishObjects(
