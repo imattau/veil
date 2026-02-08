@@ -256,12 +256,17 @@ pub extern "C" fn veil_quic_start(
         _ => return 0,
     };
 
-    let identity = match QuicIdentity::generate_self_signed(&server_name) {
+    let identity = match QuicIdentity::generate_self_signed("client-identity") {
         Ok(id) => id,
-        Err(_) => return 0,
+        Err(e) => {
+            eprintln!("FFI: Failed to generate client identity: {}", e);
+            return 0;
+        }
     };
 
-    let mut config = QuicAdapterConfig::new(bind_addr, &server_name, identity.clone());
+    let mut config = QuicAdapterConfig::new(bind_addr, &server_name, identity);
+    // If trusted_peer_cert_hex is provided, use it for pinning (e.g. self-signed)
+    // Otherwise, QuicAdapter::connect will rely on system roots (for publicly trusted certs like Let's Encrypt)
     if !trusted_peer_cert_hex.is_null() {
         if let Ok(hex) = cstr_to_string(trusted_peer_cert_hex) {
             if !hex.is_empty() {
@@ -274,7 +279,10 @@ pub extern "C" fn veil_quic_start(
 
     let adapter = match QuicAdapter::connect(config) {
         Ok(adapter) => adapter,
-        Err(_) => return 0,
+        Err(e) => {
+            eprintln!("FFI: QuicAdapter::connect failed: {}", e);
+            return 0;
+        }
     };
 
     let id = QUIC_NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -289,18 +297,31 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
     endpoint: *const c_char,
     server_name: *const c_char,
 ) -> *mut c_char {
-    let endpoint = match cstr_to_string(endpoint) {
+    eprintln!("FFI: veil_quic_fetch_peer_cert called");
+    let endpoint_str = match cstr_to_string(endpoint) {
         Ok(value) => value,
-        Err(_) => return std::ptr::null_mut(),
+        Err(e) => {
+            eprintln!("FFI: invalid endpoint string: {}", e);
+            return std::ptr::null_mut();
+        }
     };
-    let server_name = match cstr_to_string(server_name) {
+    let server_name_str = match cstr_to_string(server_name) {
         Ok(value) if !value.is_empty() => value,
-        _ => return std::ptr::null_mut(),
+        _ => {
+            eprintln!("FFI: invalid server_name string");
+            return std::ptr::null_mut();
+        }
     };
-    let addr = match strip_scheme(&endpoint).parse::<SocketAddr>() {
+    eprintln!("FFI: Fetching cert for endpoint: {} (server_name: {})", endpoint_str, server_name_str);
+
+    let addr = match strip_scheme(&endpoint_str).parse::<SocketAddr>() {
         Ok(addr) => addr,
-        Err(_) => return std::ptr::null_mut(),
+        Err(e) => {
+            eprintln!("FFI: failed to parse SocketAddr from {}: {}", endpoint_str, e);
+            return std::ptr::null_mut();
+        }
     };
+    eprintln!("FFI: Parsed address: {}", addr);
 
     let cert_store: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
     let cert_store_clone = Arc::clone(&cert_store);
@@ -310,40 +331,79 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
         .build()
     {
         Ok(rt) => rt,
-        Err(_) => return std::ptr::null_mut(),
+        Err(e) => {
+            eprintln!("FFI: failed to build tokio runtime: {}", e);
+            return std::ptr::null_mut();
+        }
     };
+    eprintln!("FFI: Tokio runtime built");
 
     let result = runtime.block_on(async move {
         let verifier = RecordingVerifier {
             store: cert_store_clone,
         };
-        let client_cfg = build_insecure_client_config(verifier)?;
-        let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
-            .map_err(|_| "endpoint init failed")?;
-        endpoint.set_default_client_config(client_cfg);
-        let connecting = endpoint
-            .connect(addr, &server_name)
-            .map_err(|_| "connect failed")?;
-        let _connection = tokio::time::timeout(Duration::from_secs(3), connecting)
-            .await
-            .map_err(|_| "connect timeout")?
-            .map_err(|_| "connect error")?;
-        endpoint.wait_idle().await;
+        let client_cfg = build_insecure_client_config(verifier).map_err(|e| {
+            eprintln!("FFI: build_insecure_client_config failed: {}", e);
+            e
+        })?;
+        eprintln!("FFI: Client config built");
+
+        let mut endpoint_quinn = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
+            .map_err(|e| {
+                eprintln!("FFI: quinn::Endpoint::client failed: {}", e);
+                e.to_string()
+            })?;
+        endpoint_quinn.set_default_client_config(client_cfg);
+        eprintln!("FFI: Quinn endpoint created, attempting connect to {}", addr);
+
+        let connecting = endpoint_quinn
+            .connect(addr, &server_name_str)
+            .map_err(|e| {
+                eprintln!("FFI: quinn connect failed: {}", e);
+                e.to_string()
+            })?;
+        eprintln!("FFI: Connecting to QUIC peer...");
+
+        let connection_result = tokio::time::timeout(Duration::from_secs(10), connecting).await;
+        eprintln!("FFI: Connection attempt finished (timeout: {:?})", connection_result.is_err());
+
+        let _connection = connection_result
+            .map_err(|e| {
+                eprintln!("FFI: connect timeout: {}", e);
+                e.to_string()
+            })?
+            .map_err(|e| {
+                eprintln!("FFI: connect error: {:?}", e);
+                e.to_string()
+            })?;
+        eprintln!("FFI: QUIC connection established");
+
+        // Wait a bit for the verifier to record the cert, then idle.
+        tokio::time::sleep(Duration::from_millis(100)).await; 
+        endpoint_quinn.wait_idle().await;
+        eprintln!("FFI: Quinn endpoint idle");
         Ok::<(), String>(())
     });
 
     if result.is_err() {
+        eprintln!("FFI: QUIC fetch_peer_cert operation failed: {:?}", result.err());
         return std::ptr::null_mut();
     }
 
-    let cert = cert_store.lock().ok().and_then(|guard| guard.clone());
+    let cert_guard = cert_store.lock().ok();
+    let cert = cert_guard.and_then(|guard| guard.clone());
     let Some(cert) = cert else {
+        eprintln!("FFI: No certificate recorded by verifier.");
         return std::ptr::null_mut();
     };
     let hex = hex_encode_bytes(&cert);
+    eprintln!("FFI: Certificate fetched successfully. Length: {}", hex.len());
     match CString::new(hex) {
         Ok(cstr) => cstr.into_raw(),
-        Err(_) => std::ptr::null_mut(),
+        Err(e) => {
+            eprintln!("FFI: Failed to create CString from hex: {}", e);
+            std::ptr::null_mut()
+        }
     }
 }
 
