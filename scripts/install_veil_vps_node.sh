@@ -393,7 +393,8 @@ configure_caddy() {
     health_hash=$(caddy hash-password --plaintext "$PROXY_HEALTH_PASS" 2>/dev/null || true)
     if [[ -n "$health_hash" ]]; then
       health_auth_block=$(cat <<EOF
-  basicauth /health /metrics {
+  @veil_health path /health /metrics
+  basic_auth @veil_health {
     ${PROXY_HEALTH_USER} ${health_hash}
   }
 EOF
