@@ -72,6 +72,8 @@ class _NetworkViewState extends State<NetworkView> {
     final wsError = _wsController.text.isNotEmpty
         ? controller.wsUrlError
         : null;
+    final rawEndpoint = _wsAddController.text.trim();
+    final lowerEndpoint = rawEndpoint.toLowerCase();
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -187,8 +189,6 @@ class _NetworkViewState extends State<NetworkView> {
                     controller: _wsAddController,
                     onChanged: (_) {},
                   ),
-                  final rawEndpoint = _wsAddController.text.trim();
-                  final lowerEndpoint = rawEndpoint.toLowerCase();
                   if (rawEndpoint.isNotEmpty &&
                       !lowerEndpoint.startsWith('ws://') &&
                       !lowerEndpoint.startsWith('wss://') &&
