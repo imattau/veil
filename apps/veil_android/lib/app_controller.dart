@@ -76,6 +76,7 @@ class VeilAppController extends ChangeNotifier {
   String torSocksHost = '127.0.0.1';
   int torSocksPort = 9050;
   String quicTrustedCertHex = '';
+  bool _quicAutoPinInFlight = false;
 
   VeilClient? _client;
   VeilLane? _lane;
@@ -1217,6 +1218,7 @@ class VeilAppController extends ChangeNotifier {
     quicEndpoint = value.trim();
     _persistPrefs();
     notifyListeners();
+    _maybeAutoPinQuic();
   }
 
   void setTorEnabled(bool value) {
@@ -1282,6 +1284,26 @@ class VeilAppController extends ChangeNotifier {
     await _persistPrefs();
     _events.insert(0, 'Pinned QUIC certificate');
     _notify();
+  }
+
+  void _maybeAutoPinQuic() {
+    if (_quicAutoPinInFlight) return;
+    if (quicEndpoint.isEmpty || quicTrustedCertHex.isNotEmpty) return;
+    _quicAutoPinInFlight = true;
+    Future.microtask(() async {
+      if (!await QuicLane.isSupported()) {
+        _quicAutoPinInFlight = false;
+        return;
+      }
+      final cert = await QuicLane.fetchPinnedCertHex(quicEndpoint);
+      if (cert != null && cert.isNotEmpty) {
+        quicTrustedCertHex = cert;
+        await _persistPrefs();
+        _events.insert(0, 'Pinned QUIC certificate');
+        _notify();
+      }
+      _quicAutoPinInFlight = false;
+    });
   }
 
   void generateIdentity() {

@@ -69,7 +69,6 @@ class _NetworkViewState extends State<NetworkView> {
     final theme = Theme.of(context);
     final rawEndpoint = _wsAddController.text.trim();
     final lowerEndpoint = rawEndpoint.toLowerCase();
-    final wsError = rawEndpoint.isNotEmpty ? controller.wsUrlError : null;
     final wsEndpoints = controller.wsEndpoints;
     if (_quicController.text != controller.quicEndpointValue) {
       _quicController.text = controller.quicEndpointValue;
@@ -81,28 +80,86 @@ class _NetworkViewState extends State<NetworkView> {
       padding: const EdgeInsets.all(16),
       children: [
         Panel(
-          title: 'Overview',
+          title: 'Quick connect',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Row(
+                children: [
+                  const Icon(Icons.qr_code_scanner, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Scan a veil://vps profile to import endpoints.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => openScanner(
+                      context,
+                      onResult: controller.handleScanValue,
+                    ),
+                    child: const Text('Scan'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              InputField(
+                label: 'Paste profile or endpoint',
+                controller: _wsAddController,
+                onChanged: (_) {},
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () {
+                        final raw = _wsAddController.text.trim();
+                        if (raw.isEmpty) return;
+                        controller.handleScanValue(raw);
+                        _wsAddController.clear();
+                        setState(() {});
+                      },
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: () async {
+                      final data = await Clipboard.getData('text/plain');
+                      final value = data?.text?.trim();
+                      if (value == null || value.isEmpty) return;
+                      _wsAddController.text = value;
+                      controller.handleScanValue(value);
+                      setState(() {});
+                    },
+                    child: const Text('Paste'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
               Text(
-                controller.connected ? 'Connected' : 'Offline',
+                'Network status: ${controller.connectionStatus}',
                 style: theme.textTheme.titleMedium,
               ),
-              const SizedBox(height: 8),
-              Text(
-                controller.relayReady
-                    ? 'Local relay ready'
-                    : 'Local relay starting…',
-              ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Text(
                 controller.quicEndpointValue.isNotEmpty
                     ? 'Primary lane: QUIC'
                     : 'Primary lane: WebSocket',
               ),
-              const SizedBox(height: 8),
-              Text('Ghost mode: ${controller.ghostMode ? 'On' : 'Off'}'),
+              if (!controller.relayReady)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'Local relay starting…',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: Colors.orangeAccent,
+                    ),
+                  ),
+                ),
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -134,26 +191,6 @@ class _NetworkViewState extends State<NetworkView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  const Icon(Icons.qr_code_scanner, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Scan or paste a veil://vps profile to import WS + QUIC.',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () => openScanner(
-                      context,
-                      onResult: controller.handleScanValue,
-                    ),
-                    child: const Text('Scan'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
               Text(
                 'Endpoints (priority order)',
                 style: theme.textTheme.labelLarge?.copyWith(
@@ -262,6 +299,17 @@ class _NetworkViewState extends State<NetworkView> {
                   label: const Text('Pin QUIC cert'),
                 ),
               ),
+              if (controller.quicEndpointValue.isNotEmpty &&
+                  controller.quicTrustedCertValue.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'QUIC is idle until a certificate is pinned.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: Colors.orangeAccent,
+                    ),
+                  ),
+                ),
               const SizedBox(height: 12),
               InputField(
                 label: 'Trusted cert (hex)',
@@ -295,67 +343,6 @@ class _NetworkViewState extends State<NetworkView> {
                     ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: () {
-                    controller.setQuicTrustedCert('');
-                    setState(() {
-                      _quicCertController.text = '';
-                    });
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Cleared QUIC cert pin')),
-                    );
-                  },
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                  label: const Text('Clear pinned cert'),
-                ),
-              ),
-              const SizedBox(height: 12),
-              InputField(
-                label: 'Scan or paste endpoint (wss://.../ws or veil://vps)',
-                controller: _wsAddController,
-                onChanged: (_) {},
-              ),
-              if (rawEndpoint.isNotEmpty &&
-                  !lowerEndpoint.startsWith('ws://') &&
-                  !lowerEndpoint.startsWith('wss://') &&
-                  !lowerEndpoint.startsWith('veil://') &&
-                  !lowerEndpoint.startsWith('veil:vps:') &&
-                  !lowerEndpoint.startsWith('vps:'))
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    'Endpoint must start with ws://, wss://, or veil://',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: Colors.orangeAccent,
-                    ),
-                  ),
-                ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton.icon(
-                  onPressed: () {
-                    final raw = _wsAddController.text.trim();
-                    final lower = raw.toLowerCase();
-                    if (lower.startsWith('veil://') ||
-                        lower.startsWith('veil:vps:') ||
-                        lower.startsWith('vps:')) {
-                      controller.handleScanValue(raw);
-                    } else if (lower.startsWith('quic://')) {
-                      controller.setQuicEndpoint(raw);
-                    } else {
-                      controller.addWsEndpoint(raw);
-                    }
-                    setState(() {
-                      _wsAddController.clear();
-                    });
-                  },
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add'),
-                ),
               ),
               const SizedBox(height: 12),
               InputField(
@@ -391,6 +378,7 @@ class _NetworkViewState extends State<NetworkView> {
           title: 'Lane health',
           child: Column(
             children: [
+              _LaneStatusNote(controller: controller),
               _LaneHealthTile(
                 title: 'QUIC Lane',
                 icon: Icons.bolt,
@@ -511,6 +499,49 @@ class _NetworkViewState extends State<NetworkView> {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _LaneStatusNote extends StatelessWidget {
+  final VeilAppController controller;
+
+  const _LaneStatusNote({required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    final quic = controller.quicLaneHealth;
+    if (controller.quicEndpointValue.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    if (quic == null) {
+      return Text(
+        'QUIC pending. Pin the certificate to enable.',
+        style: Theme.of(context)
+            .textTheme
+            .bodySmall
+            ?.copyWith(color: Colors.orangeAccent),
+      );
+    }
+    final ok = quic.outboundSendOk;
+    final err = quic.outboundSendErr;
+    String status = 'Stable';
+    if (ok == 0 && err > 0) {
+      status = 'Unreachable';
+    } else if (err > ok) {
+      status = 'Unstable';
+    } else if (quic.outboundQueued > 5) {
+      status = 'Congested';
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        'QUIC status: $status',
+        style: Theme.of(context)
+            .textTheme
+            .bodySmall
+            ?.copyWith(color: Colors.white70),
+      ),
     );
   }
 }
