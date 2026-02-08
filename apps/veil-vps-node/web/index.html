@@ -178,19 +178,16 @@
       const isSecure = window.location.protocol === "https:";
       const ws = `${isSecure ? "wss" : "ws"}://${host}/ws`;
       const quicPort = window.VEIL_VPS_QUIC_PORT || 5000;
-      const quicCertHex = window.VEIL_VPS_QUIC_CERT_HEX || "";
+      const quicCertB64 = window.VEIL_VPS_QUIC_CERT_B64 || "";
       const quic = `quic://${host.split(":")[0]}:${quicPort}`;
-      const params = new URLSearchParams({
-        ws,
-        quic,
-      });
-      if (quicCertHex) {
-        params.set("cert", quicCertHex);
+      const params = new URLSearchParams({ ws, quic });
+      if (quicCertB64) {
+        params.set("certb64", quicCertB64);
       }
       const profile = `veil://vps?${params.toString()}`;
 
       document.getElementById("wsEndpoint").textContent = `WebSocket: ${ws}`;
-      document.getElementById("quicEndpoint").textContent = quicCertHex
+      document.getElementById("quicEndpoint").textContent = quicCertB64
         ? `QUIC: ${quic} (cert embedded)`
         : `QUIC: ${quic}`;
 

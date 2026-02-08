@@ -335,17 +335,15 @@ if [[ -d apps/veil-vps-node/web ]]; then
   quic_bind_value="${VEIL_VPS_QUIC_BIND:-0.0.0.0:5000}"
   quic_port="${quic_bind_value##*:}"
   quic_cert_path="${VEIL_VPS_QUIC_CERT_PATH:-${PREFIX}/data/quic_cert.der}"
-  quic_cert_hex=""
+  quic_cert_b64=""
   if [[ -f "${quic_cert_path}" ]]; then
-    if command -v xxd >/dev/null 2>&1; then
-      quic_cert_hex=$(xxd -p "${quic_cert_path}" | tr -d '\n')
-    else
-      quic_cert_hex=$(od -An -tx1 -v "${quic_cert_path}" | tr -d ' \n')
+    if command -v base64 >/dev/null 2>&1; then
+      quic_cert_b64=$(base64 -w0 "${quic_cert_path}" 2>/dev/null || base64 "${quic_cert_path}" | tr -d '\n')
     fi
   fi
   {
     echo "window.VEIL_VPS_QUIC_PORT = ${quic_port:-5000};"
-    echo "window.VEIL_VPS_QUIC_CERT_HEX = \"${quic_cert_hex}\";"
+    echo "window.VEIL_VPS_QUIC_CERT_B64 = \"${quic_cert_b64}\";"
   } > "${WEB_ROOT}/config.js"
   chown -R "$RUN_USER:$RUN_GROUP" "$WEB_ROOT" || true
 fi

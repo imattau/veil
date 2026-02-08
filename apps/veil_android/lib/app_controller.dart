@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -718,6 +719,7 @@ class VeilAppController extends ChangeNotifier {
     final tags = uri.queryParametersAll['tag'] ?? const [];
     final quic = uri.queryParameters['quic'];
     final cert = uri.queryParameters['cert'];
+    final certB64 = uri.queryParameters['certb64'];
 
     for (final ws in wsEndpoints) {
       addWsEndpoint(ws);
@@ -730,6 +732,13 @@ class VeilAppController extends ChangeNotifier {
     }
     if (cert != null && cert.isNotEmpty) {
       setQuicTrustedCert(cert);
+    } else if (certB64 != null && certB64.isNotEmpty) {
+      try {
+        final bytes = base64Decode(certB64);
+        setQuicTrustedCert(_bytesToHex(bytes));
+      } catch (_) {
+        _events.insert(0, 'Invalid QUIC cert (base64)');
+      }
     } else if (quic != null && quic.isNotEmpty) {
       _events.insert(0, 'Pinning QUIC cert from server…');
       Future.microtask(() async {
@@ -887,6 +896,14 @@ class VeilAppController extends ChangeNotifier {
     quicTrustedCertHex = value.trim();
     _persistPrefs();
     notifyListeners();
+  }
+
+  String _bytesToHex(List<int> bytes) {
+    final buffer = StringBuffer();
+    for (final b in bytes) {
+      buffer.write(b.toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
   }
 
   Future<void> pinQuicCertFromServer() async {
