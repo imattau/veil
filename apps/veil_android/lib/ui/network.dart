@@ -187,13 +187,18 @@ class _NetworkViewState extends State<NetworkView> {
                     controller: _wsAddController,
                     onChanged: (_) {},
                   ),
-                  if (_wsAddController.text.isNotEmpty &&
-                      !_wsAddController.text.startsWith('ws://') &&
-                      !_wsAddController.text.startsWith('wss://'))
+                  final rawEndpoint = _wsAddController.text.trim();
+                  final lowerEndpoint = rawEndpoint.toLowerCase();
+                  if (rawEndpoint.isNotEmpty &&
+                      !lowerEndpoint.startsWith('ws://') &&
+                      !lowerEndpoint.startsWith('wss://') &&
+                      !lowerEndpoint.startsWith('veil://') &&
+                      !lowerEndpoint.startsWith('veil:vps:') &&
+                      !lowerEndpoint.startsWith('vps:'))
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                        'Endpoint must start with ws:// or wss://',
+                        'Endpoint must start with ws://, wss://, or veil://',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: Colors.orangeAccent,
                         ),
@@ -203,7 +208,15 @@ class _NetworkViewState extends State<NetworkView> {
                     alignment: Alignment.centerLeft,
                     child: FilledButton.icon(
                       onPressed: () {
-                        controller.addWsEndpoint(_wsAddController.text);
+                        final raw = _wsAddController.text.trim();
+                        final lower = raw.toLowerCase();
+                        if (lower.startsWith('veil://') ||
+                            lower.startsWith('veil:vps:') ||
+                            lower.startsWith('vps:')) {
+                          controller.handleScanValue(raw);
+                        } else {
+                          controller.addWsEndpoint(raw);
+                        }
                         setState(() {
                           _wsAddController.clear();
                         });
