@@ -459,7 +459,7 @@ EOF
 ${PROXY_DOMAIN} {
   root * ${WEB_ROOT}
   file_server
-  reverse_proxy /ws/* 127.0.0.1:${PROXY_WS_PORT}
+  reverse_proxy /ws* 127.0.0.1:${PROXY_WS_PORT}
 ${health_auth_block}
   reverse_proxy /health 127.0.0.1:${PROXY_HEALTH_PORT}
   reverse_proxy /metrics 127.0.0.1:${PROXY_HEALTH_PORT}
