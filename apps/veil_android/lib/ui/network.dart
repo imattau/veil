@@ -86,256 +86,47 @@ class _NetworkViewState extends State<NetworkView> {
       padding: const EdgeInsets.all(16),
       children: [
         Panel(
-          title: 'Network Status',
+          title: 'Overview',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(controller.connected ? 'Connected' : 'Offline'),
+              Text(
+                controller.connected ? 'Connected' : 'Offline',
+                style: theme.textTheme.titleMedium,
+              ),
               const SizedBox(height: 8),
               Text(
-                controller.useLocalRelay
-                    ? 'Using internal relay'
-                    : 'Using external relay',
+                controller.relayReady
+                    ? 'Local relay ready'
+                    : 'Local relay starting…',
+              ),
+              const SizedBox(height: 8),
+              Text(
+                controller.quicEndpointValue.isNotEmpty
+                    ? 'Primary lane: QUIC'
+                    : 'Primary lane: WebSocket',
               ),
               const SizedBox(height: 8),
               Text('Ghost mode: ${controller.ghostMode ? 'On' : 'Off'}'),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Panel(
-          title: 'Lane Status',
-          child: Column(
-            children: [
-              _LaneHealthTile(
-                title: 'WebSocket Lane',
-                icon: controller.connected ? Icons.wifi : Icons.wifi_off,
-                label: 'WS',
-                enabled: controller.connected,
-                snapshot: controller.fastLaneHealth,
-              ),
-              _LaneHealthTile(
-                title: 'Bluetooth Lane',
-                icon: Icons.bluetooth,
-                label: 'BLE',
-                enabled: controller.bleEnabled,
-                snapshot: controller.bleLaneHealth,
-              ),
-              _LaneHealthTile(
-                title: 'Tor Lane',
-                icon: Icons.shield,
-                label: 'Tor',
-                enabled: controller.torEnabled,
-                snapshot: controller.torLaneHealth,
-              ),
-              _LaneHealthTile(
-                title: 'QUIC Lane',
-                icon: Icons.bolt,
-                label: 'QUIC',
-                enabled: controller.quicEndpointValue.isNotEmpty,
-                snapshot: controller.quicLaneHealth,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Panel(
-          title: 'Connection',
-          child: Column(
-            children: [
-              ListTile(
-                leading: Icon(
-                  controller.relayReady ? Icons.check_circle : Icons.sync,
-                ),
-                title: const Text('Local relay'),
-                subtitle: Text(
-                  controller.relayReady
-                      ? 'Internal relay is ready'
-                      : 'Starting internal relay...',
-                ),
-              ),
-              const SizedBox(height: 8),
-              ExpansionTile(
-                title: const Text('Advanced connection'),
-                subtitle: Text(
-                  'External relay endpoints and profile imports',
-                  style: theme.textTheme.bodySmall,
-                ),
-                childrenPadding: const EdgeInsets.only(top: 8),
+              const SizedBox(height: 12),
+              Row(
                 children: [
-                  Text(
-                    'Primary relay',
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      color: Colors.white70,
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: controller.connected
+                          ? null
+                          : controller.connect,
+                      child: const Text('Connect'),
                     ),
                   ),
-                  InputField(
-                    label: 'Primary WebSocket URL (wss://.../ws)',
-                    controller: _wsController,
-                    onChanged: (value) {
-                      controller.setWsUrl(value);
-                      setState(() {});
-                    },
-                    errorText: wsError,
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      const Icon(Icons.qr_code_scanner, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Scan or paste a veil://vps profile to import WS + QUIC.',
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () => openScanner(
-                          context,
-                          onResult: controller.handleScanValue,
-                        ),
-                        child: const Text('Scan'),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Additional WebSocket endpoints',
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      color: Colors.white70,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: controller.connected
+                          ? controller.disconnect
+                          : null,
+                      child: const Text('Disconnect'),
                     ),
-                  ),
-                  InputField(
-                    label: 'Add endpoint (wss://.../ws or veil://vps)',
-                    controller: _wsAddController,
-                    onChanged: (_) {},
-                  ),
-                  if (rawEndpoint.isNotEmpty &&
-                      !lowerEndpoint.startsWith('ws://') &&
-                      !lowerEndpoint.startsWith('wss://') &&
-                      !lowerEndpoint.startsWith('veil://') &&
-                      !lowerEndpoint.startsWith('veil:vps:') &&
-                      !lowerEndpoint.startsWith('vps:'))
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Text(
-                        'Endpoint must start with ws://, wss://, or veil://',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: Colors.orangeAccent,
-                        ),
-                      ),
-                    ),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FilledButton.icon(
-                      onPressed: () {
-                        final raw = _wsAddController.text.trim();
-                        final lower = raw.toLowerCase();
-                        if (lower.startsWith('veil://') ||
-                            lower.startsWith('veil:vps:') ||
-                            lower.startsWith('vps:')) {
-                          controller.handleScanValue(raw);
-                        } else {
-                          controller.addWsEndpoint(raw);
-                        }
-                        setState(() {
-                          _wsAddController.clear();
-                        });
-                      },
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add'),
-                    ),
-                  ),
-                  if (wsEndpoints.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Column(
-                      children: wsEndpoints
-                          .map(
-                            (endpoint) => ListTile(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.public, size: 18),
-                              title: Text(endpoint),
-                              trailing: Wrap(
-                                spacing: 4,
-                                children: [
-                                  IconButton(
-                                    tooltip: 'Copy',
-                                    icon: const Icon(Icons.copy, size: 18),
-                                    onPressed: () async {
-                                      await Clipboard.setData(
-                                        ClipboardData(text: endpoint),
-                                      );
-                                      if (!context.mounted) return;
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('Endpoint copied'),
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                  IconButton(
-                                    tooltip: 'Remove',
-                                    icon: const Icon(Icons.close, size: 18),
-                                    onPressed: () {
-                                      controller.removeWsEndpoint(endpoint);
-                                      setState(() {});
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
-                          )
-                          .toList(),
-                    ),
-                  ],
-                  InputField(
-                    label: 'Peer ID',
-                    controller: _peerController,
-                    onChanged: (value) {
-                      controller.setPeerId(value);
-                      setState(() {});
-                    },
-                  ),
-                  InputField(
-                    label: 'Channel',
-                    controller: _tagController,
-                    onChanged: controller.setChannelLabel,
-                    errorText: controller.channelError,
-                    onScan: () => openScanner(
-                      context,
-                      onResult: controller.handleScanValue,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: controller.connected
-                              ? null
-                              : controller.connect,
-                          child: const Text('Connect'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: controller.connected
-                              ? controller.disconnect
-                              : null,
-                          child: const Text('Disconnect'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton(
-                    onPressed: controller.connected
-                        ? () =>
-                              controller.updateSubscription(_tagController.text)
-                        : null,
-                    child: const Text('Update Channel'),
                   ),
                 ],
               ),
@@ -344,80 +135,49 @@ class _NetworkViewState extends State<NetworkView> {
         ),
         const SizedBox(height: 16),
         Panel(
-          title: 'Bluetooth Lane',
-          child: Column(
-            children: [
-              SwitchListTile(
-                value: controller.bleEnabled,
-                onChanged: (value) =>
-                    setState(() => controller.setBleEnabled(value)),
-                title: const Text('Enable BLE lane'),
-                subtitle: const Text('Requires a paired BLE device id.'),
-              ),
-              InputField(
-                label: 'BLE Device ID',
-                controller: _bleDeviceController,
-                onChanged: controller.setBleDeviceId,
-              ),
-              InputField(
-                label: 'Service UUID',
-                controller: _bleServiceController,
-                onChanged: controller.setBleServiceUuid,
-              ),
-              InputField(
-                label: 'Characteristic UUID',
-                controller: _bleCharController,
-                onChanged: controller.setBleCharacteristicUuid,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Panel(
-          title: 'Tor Lane',
+          title: 'Primary endpoints',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SwitchListTile(
-                value: controller.torEnabled,
-                onChanged: (value) =>
-                    setState(() => controller.setTorEnabled(value)),
-                title: const Text('Enable Tor lane'),
-                subtitle: const Text('Requires Orbot running on this device.'),
+              Row(
+                children: [
+                  const Icon(Icons.qr_code_scanner, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Scan or paste a veil://vps profile to import WS + QUIC.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => openScanner(
+                      context,
+                      onResult: controller.handleScanValue,
+                    ),
+                    child: const Text('Scan'),
+                  ),
+                ],
               ),
+              const SizedBox(height: 8),
               InputField(
-                label: 'Tor WebSocket URL (wss://.../ws)',
-                controller: _torWsController,
-                onChanged: controller.setTorWsUrl,
+                label: 'Primary WebSocket URL (wss://.../ws)',
+                controller: _wsController,
+                onChanged: (value) {
+                  controller.setWsUrl(value);
+                  setState(() {});
+                },
+                errorText: wsError,
               ),
-              InputField(
-                label: 'Tor SOCKS host',
-                controller: _torHostController,
-                onChanged: controller.setTorSocksHost,
-              ),
-              InputField(
-                label: 'Tor SOCKS port',
-                controller: _torPortController,
-                onChanged: controller.setTorSocksPort,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Panel(
-          title: 'QUIC Lane',
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+              const SizedBox(height: 12),
               Text(
-                'Pinned certs are required for secure QUIC transport.',
-                style: theme.textTheme.bodySmall?.copyWith(
+                'QUIC endpoint (primary)',
+                style: theme.textTheme.labelLarge?.copyWith(
                   color: Colors.white70,
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 6),
               InputField(
-                label: 'QUIC endpoint (quic://host:port)',
+                label: 'quic://host:port',
                 controller: _quicController,
                 onChanged: controller.setQuicEndpoint,
               ),
@@ -440,6 +200,25 @@ class _NetworkViewState extends State<NetworkView> {
                           },
                     icon: const Icon(Icons.copy, size: 16),
                     label: const Text('Copy endpoint'),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: () async {
+                      await controller.pinQuicCertFromServer();
+                      if (!mounted) return;
+                      setState(() {
+                        _quicCertController.text =
+                            controller.quicTrustedCertValue;
+                      });
+                      final message = controller.quicTrustedCertValue.isEmpty
+                          ? 'Failed to pin QUIC cert'
+                          : 'Pinned QUIC certificate';
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text(message)));
+                    },
+                    icon: const Icon(Icons.shield, size: 16),
+                    label: const Text('Pin cert'),
                   ),
                 ],
               ),
@@ -481,27 +260,6 @@ class _NetworkViewState extends State<NetworkView> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
-                  onPressed: () async {
-                    await controller.pinQuicCertFromServer();
-                    if (!mounted) return;
-                    setState(() {
-                      _quicCertController.text =
-                          controller.quicTrustedCertValue;
-                    });
-                    final message = controller.quicTrustedCertValue.isEmpty
-                        ? 'Failed to pin QUIC cert'
-                        : 'Pinned QUIC certificate';
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(SnackBar(content: Text(message)));
-                  },
-                  icon: const Icon(Icons.shield, size: 18),
-                  label: const Text('Pin from server'),
-                ),
-              ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
                   onPressed: () {
                     controller.setQuicTrustedCert('');
                     setState(() {
@@ -515,8 +273,234 @@ class _NetworkViewState extends State<NetworkView> {
                   label: const Text('Clear pinned cert'),
                 ),
               ),
+              const SizedBox(height: 12),
+              Text(
+                'Additional WebSocket endpoints',
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: Colors.white70,
+                ),
+              ),
+              const SizedBox(height: 6),
+              InputField(
+                label: 'Add endpoint (wss://.../ws or veil://vps)',
+                controller: _wsAddController,
+                onChanged: (_) {},
+              ),
+              if (rawEndpoint.isNotEmpty &&
+                  !lowerEndpoint.startsWith('ws://') &&
+                  !lowerEndpoint.startsWith('wss://') &&
+                  !lowerEndpoint.startsWith('veil://') &&
+                  !lowerEndpoint.startsWith('veil:vps:') &&
+                  !lowerEndpoint.startsWith('vps:'))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'Endpoint must start with ws://, wss://, or veil://',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: Colors.orangeAccent,
+                    ),
+                  ),
+                ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.icon(
+                  onPressed: () {
+                    final raw = _wsAddController.text.trim();
+                    final lower = raw.toLowerCase();
+                    if (lower.startsWith('veil://') ||
+                        lower.startsWith('veil:vps:') ||
+                        lower.startsWith('vps:')) {
+                      controller.handleScanValue(raw);
+                    } else {
+                      controller.addWsEndpoint(raw);
+                    }
+                    setState(() {
+                      _wsAddController.clear();
+                    });
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add'),
+                ),
+              ),
+              if (wsEndpoints.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Column(
+                  children: wsEndpoints
+                      .map(
+                        (endpoint) => ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.public, size: 18),
+                          title: Text(endpoint),
+                          trailing: Wrap(
+                            spacing: 4,
+                            children: [
+                              IconButton(
+                                tooltip: 'Copy',
+                                icon: const Icon(Icons.copy, size: 18),
+                                onPressed: () async {
+                                  await Clipboard.setData(
+                                    ClipboardData(text: endpoint),
+                                  );
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Endpoint copied'),
+                                    ),
+                                  );
+                                },
+                              ),
+                              IconButton(
+                                tooltip: 'Remove',
+                                icon: const Icon(Icons.close, size: 18),
+                                onPressed: () {
+                                  controller.removeWsEndpoint(endpoint);
+                                  setState(() {});
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ],
+              const SizedBox(height: 12),
+              InputField(
+                label: 'Peer ID',
+                controller: _peerController,
+                onChanged: (value) {
+                  controller.setPeerId(value);
+                  setState(() {});
+                },
+              ),
+              InputField(
+                label: 'Channel',
+                controller: _tagController,
+                onChanged: controller.setChannelLabel,
+                errorText: controller.channelError,
+                onScan: () => openScanner(
+                  context,
+                  onResult: controller.handleScanValue,
+                ),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton(
+                onPressed: controller.connected
+                    ? () => controller.updateSubscription(_tagController.text)
+                    : null,
+                child: const Text('Update Channel'),
+              ),
             ],
           ),
+        ),
+        const SizedBox(height: 16),
+        Panel(
+          title: 'Lane health',
+          child: Column(
+            children: [
+              _LaneHealthTile(
+                title: 'QUIC Lane',
+                icon: Icons.bolt,
+                label: 'QUIC',
+                enabled: controller.quicEndpointValue.isNotEmpty,
+                snapshot: controller.quicLaneHealth,
+              ),
+              _LaneHealthTile(
+                title: 'WebSocket Lane',
+                icon: controller.connected ? Icons.wifi : Icons.wifi_off,
+                label: 'WS',
+                enabled: controller.connected,
+                snapshot: controller.fastLaneHealth,
+              ),
+              _LaneHealthTile(
+                title: 'Tor Lane',
+                icon: Icons.shield,
+                label: 'Tor',
+                enabled: controller.torEnabled,
+                snapshot: controller.torLaneHealth,
+              ),
+              _LaneHealthTile(
+                title: 'Bluetooth Lane',
+                icon: Icons.bluetooth,
+                label: 'BLE',
+                enabled: controller.bleEnabled,
+                snapshot: controller.bleLaneHealth,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        ExpansionTile(
+          title: const Text('Advanced lanes'),
+          subtitle: Text(
+            'BLE and Tor settings',
+            style: theme.textTheme.bodySmall,
+          ),
+          childrenPadding: const EdgeInsets.only(top: 8),
+          children: [
+            Panel(
+              title: 'Bluetooth Lane',
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    value: controller.bleEnabled,
+                    onChanged: (value) =>
+                        setState(() => controller.setBleEnabled(value)),
+                    title: const Text('Enable BLE lane'),
+                    subtitle: const Text('Requires a paired BLE device id.'),
+                  ),
+                  InputField(
+                    label: 'BLE Device ID',
+                    controller: _bleDeviceController,
+                    onChanged: controller.setBleDeviceId,
+                  ),
+                  InputField(
+                    label: 'Service UUID',
+                    controller: _bleServiceController,
+                    onChanged: controller.setBleServiceUuid,
+                  ),
+                  InputField(
+                    label: 'Characteristic UUID',
+                    controller: _bleCharController,
+                    onChanged: controller.setBleCharacteristicUuid,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Panel(
+              title: 'Tor Lane',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SwitchListTile(
+                    value: controller.torEnabled,
+                    onChanged: (value) =>
+                        setState(() => controller.setTorEnabled(value)),
+                    title: const Text('Enable Tor lane'),
+                    subtitle:
+                        const Text('Requires Orbot running on this device.'),
+                  ),
+                  InputField(
+                    label: 'Tor WebSocket URL (wss://.../ws)',
+                    controller: _torWsController,
+                    onChanged: controller.setTorWsUrl,
+                  ),
+                  InputField(
+                    label: 'Tor SOCKS host',
+                    controller: _torHostController,
+                    onChanged: controller.setTorSocksHost,
+                  ),
+                  InputField(
+                    label: 'Tor SOCKS port',
+                    controller: _torPortController,
+                    onChanged: controller.setTorSocksPort,
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 16),
         Panel(
