@@ -141,7 +141,7 @@ class _NetworkViewState extends State<NetworkView> {
               ),
               const SizedBox(height: 12),
               Text(
-                'Network status: ${controller.connectionStatus}',
+                'Connection strength: ${controller.connectionStrengthLabel}',
                 style: theme.textTheme.titleMedium,
               ),
               const SizedBox(height: 6),
@@ -181,6 +181,15 @@ class _NetworkViewState extends State<NetworkView> {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => _openDiagnostics(context, controller),
+                  icon: const Icon(Icons.insights, size: 18),
+                  label: const Text('Diagnostics'),
+                ),
               ),
             ],
           ),
@@ -369,43 +378,6 @@ class _NetworkViewState extends State<NetworkView> {
                     ? () => controller.updateSubscription(_tagController.text)
                     : null,
                 child: const Text('Update Channel'),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        Panel(
-          title: 'Lane health',
-          child: Column(
-            children: [
-              _LaneStatusNote(controller: controller),
-              _LaneHealthTile(
-                title: 'QUIC Lane',
-                icon: Icons.bolt,
-                label: 'QUIC',
-                enabled: controller.quicEndpointValue.isNotEmpty,
-                snapshot: controller.quicLaneHealth,
-              ),
-              _LaneHealthTile(
-                title: 'WebSocket Lane',
-                icon: controller.connected ? Icons.wifi : Icons.wifi_off,
-                label: 'WS',
-                enabled: controller.connected,
-                snapshot: controller.fastLaneHealth,
-              ),
-              _LaneHealthTile(
-                title: 'Tor Lane',
-                icon: Icons.shield,
-                label: 'Tor',
-                enabled: controller.torEnabled,
-                snapshot: controller.torLaneHealth,
-              ),
-              _LaneHealthTile(
-                title: 'Bluetooth Lane',
-                icon: Icons.bluetooth,
-                label: 'BLE',
-                enabled: controller.bleEnabled,
-                snapshot: controller.bleLaneHealth,
               ),
             ],
           ),
@@ -647,4 +619,62 @@ class _EndpointRow extends StatelessWidget {
       ),
     );
   }
+}
+
+void _openDiagnostics(BuildContext context, VeilAppController controller) {
+  showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: const BoxDecoration(
+          color: Color(0xFF0B1220),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Panel(
+              title: 'Lane diagnostics',
+              child: Column(
+                children: [
+                  _LaneStatusNote(controller: controller),
+                  _LaneHealthTile(
+                    title: 'QUIC Lane',
+                    icon: Icons.bolt,
+                    label: 'QUIC',
+                    enabled: controller.quicEndpointValue.isNotEmpty,
+                    snapshot: controller.quicLaneHealth,
+                  ),
+                  _LaneHealthTile(
+                    title: 'WebSocket Lane',
+                    icon: controller.connected ? Icons.wifi : Icons.wifi_off,
+                    label: 'WS',
+                    enabled: controller.connected,
+                    snapshot: controller.fastLaneHealth,
+                  ),
+                  _LaneHealthTile(
+                    title: 'Tor Lane',
+                    icon: Icons.shield,
+                    label: 'Tor',
+                    enabled: controller.torEnabled,
+                    snapshot: controller.torLaneHealth,
+                  ),
+                  _LaneHealthTile(
+                    title: 'Bluetooth Lane',
+                    icon: Icons.bluetooth,
+                    label: 'BLE',
+                    enabled: controller.bleEnabled,
+                    snapshot: controller.bleLaneHealth,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }

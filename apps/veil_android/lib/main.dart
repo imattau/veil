@@ -337,7 +337,7 @@ class _RootShellState extends State<RootShell> {
                 },
               ),
               Chip(
-                label: Text(_controller.connectionStatus),
+                label: Text(_controller.connectionStrengthLabel),
                 backgroundColor: _controller.connectionStatus == 'LIVE'
                     ? const Color(0xFF134E4A)
                     : _controller.connectionStatus == 'DEGRADED'
@@ -362,6 +362,16 @@ class _RootShellState extends State<RootShell> {
                     showProtocolDetails: _showProtocolDetails,
                     onOpenNetwork: () => setState(() => _tabIndex = 3),
                     onOpenDiscovery: () => setState(() => _tabIndex = 4),
+                    onQuickStart: () async {
+                      await _controller.quickStartSuggestedChannels();
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Quick start enabled'),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
                   ),
                   ChannelsView(controller: _controller),
                   VaultView(

@@ -225,6 +225,17 @@ class VeilAppController extends ChangeNotifier {
     return 'DEGRADED';
   }
 
+  String get connectionStrengthLabel {
+    switch (connectionStatus) {
+      case 'LIVE':
+        return 'Strong';
+      case 'DEGRADED':
+        return 'Moderate';
+      default:
+        return 'Offline';
+    }
+  }
+
   bool _laneHealthy(LaneHealthSnapshot? snapshot) {
     if (snapshot == null) return false;
     return snapshot.outboundSendErr < 3 || snapshot.outboundSendOk > 0;
@@ -396,6 +407,21 @@ class VeilAppController extends ChangeNotifier {
     _events.insert(0, 'Trusted feeds: ${_trustedFeeds.length}');
     _persistPrefs();
     notifyListeners();
+  }
+
+  Future<void> quickStartSuggestedChannels() async {
+    if (_suggestedFeeds.isEmpty) return;
+    for (final feed in _suggestedFeeds) {
+      await addChannelLabel(feed);
+    }
+    if (channelLabel.isEmpty && _suggestedFeeds.isNotEmpty) {
+      await setDefaultChannel(_suggestedFeeds.first);
+    }
+    if (!_connected) {
+      connect();
+    }
+    _events.insert(0, 'Quick start enabled');
+    _notify();
   }
 
   Future<void> _loadPrefs() async {

@@ -6,6 +6,7 @@ import 'package:veil_sdk/veil_sdk.dart';
 
 import '../app_controller.dart';
 import '../helpers/hashtags.dart';
+import '../helpers/scan_helpers.dart';
 import '../helpers/media_viewer.dart';
 import '../models.dart';
 import 'inspect.dart';
@@ -16,6 +17,7 @@ class HomeFeed extends StatelessWidget {
   final bool showProtocolDetails;
   final VoidCallback onOpenNetwork;
   final VoidCallback onOpenDiscovery;
+  final VoidCallback onQuickStart;
 
   const HomeFeed({
     super.key,
@@ -23,6 +25,7 @@ class HomeFeed extends StatelessWidget {
     required this.showProtocolDetails,
     required this.onOpenNetwork,
     required this.onOpenDiscovery,
+    required this.onQuickStart,
   });
 
   @override
@@ -34,9 +37,11 @@ class HomeFeed extends StatelessWidget {
       itemBuilder: (context, index) {
         if (items.isEmpty) {
           return _EmptyFeedState(
+            controller: controller,
             status: controller.connectionStatus,
             onOpenNetwork: onOpenNetwork,
             onOpenDiscovery: onOpenDiscovery,
+            onQuickStart: onQuickStart,
           );
         }
         final entry = items[index];
@@ -67,14 +72,18 @@ class HomeFeed extends StatelessWidget {
 }
 
 class _EmptyFeedState extends StatelessWidget {
+  final VeilAppController controller;
   final String status;
   final VoidCallback onOpenNetwork;
   final VoidCallback onOpenDiscovery;
+  final VoidCallback onQuickStart;
 
   const _EmptyFeedState({
+    required this.controller,
     required this.status,
     required this.onOpenNetwork,
     required this.onOpenDiscovery,
+    required this.onQuickStart,
   });
 
   @override
@@ -122,6 +131,19 @@ class _EmptyFeedState extends StatelessWidget {
             spacing: 12,
             runSpacing: 8,
             children: [
+              FilledButton.icon(
+                onPressed: onQuickStart,
+                icon: const Icon(Icons.auto_awesome),
+                label: const Text('Quick Start'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => openScanner(
+                  context,
+                  onResult: controller.handleScanValue,
+                ),
+                icon: const Icon(Icons.qr_code_scanner),
+                label: const Text('Scan VPS'),
+              ),
               OutlinedButton.icon(
                 onPressed: onOpenNetwork,
                 icon: const Icon(Icons.network_check),
@@ -462,14 +484,16 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      'Collecting shards',
+                      widget.showProtocolDetails
+                          ? 'Collecting shards'
+                          : 'Securing content…',
                       style: Theme.of(
                         context,
                       ).textTheme.bodySmall?.copyWith(color: Colors.white70),
                     ),
                   ],
                 ),
-                if (entry.requestingMissing) ...[
+                if (entry.requestingMissing && widget.showProtocolDetails) ...[
                   const SizedBox(height: 8),
                   Row(
                     children: [
