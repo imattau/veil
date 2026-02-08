@@ -36,8 +36,7 @@ services:
 
     ports:
       - "5000:5000/udp"
-    expose:
-      - "8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - veil-vps-node-data:/opt/veil-vps-node/data
     restart: unless-stopped
