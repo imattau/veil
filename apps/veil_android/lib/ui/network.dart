@@ -155,67 +155,82 @@ class _NetworkViewState extends State<NetworkView> {
               ),
               const SizedBox(height: 8),
               Text(
-                'WebSocket endpoints (priority order)',
+                'Endpoints (priority order)',
                 style: theme.textTheme.labelLarge?.copyWith(
                   color: Colors.white70,
                 ),
               ),
               const SizedBox(height: 6),
-              if (wsEndpoints.isNotEmpty) ...[
+              if (controller.quicEndpointValue.isNotEmpty || wsEndpoints.isNotEmpty) ...[
                 Column(
-                  children: wsEndpoints
-                      .asMap()
-                      .entries
-                      .map(
-                        (entry) => ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          leading: Text(
-                            '#${entry.key + 1}',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: Colors.white60,
-                            ),
-                          ),
-                          title: Text(entry.value),
-                          trailing: Wrap(
-                            spacing: 4,
-                            children: [
-                              IconButton(
-                                tooltip: 'Edit',
-                                icon: const Icon(Icons.edit, size: 18),
-                                onPressed: () {
-                                  _wsAddController.text = entry.value;
-                                  setState(() {});
-                                },
+                  children: (() {
+                    final rows = <_EndpointRow>[];
+                    if (controller.quicEndpointValue.isNotEmpty) {
+                      rows.add(
+                        _EndpointRow(
+                          index: rows.length + 1,
+                          label: 'QUIC',
+                          value: controller.quicEndpointValue,
+                          onEdit: () {
+                            _quicController.text =
+                                controller.quicEndpointValue;
+                            controller.setQuicEndpoint(
+                              controller.quicEndpointValue,
+                            );
+                            setState(() {});
+                          },
+                          onCopy: () async {
+                            await Clipboard.setData(
+                              ClipboardData(
+                                text: controller.quicEndpointValue,
                               ),
-                              IconButton(
-                                tooltip: 'Copy',
-                                icon: const Icon(Icons.copy, size: 18),
-                                onPressed: () async {
-                                  await Clipboard.setData(
-                                    ClipboardData(text: entry.value),
-                                  );
-                                  if (!context.mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Endpoint copied'),
-                                    ),
-                                  );
-                                },
+                            );
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Endpoint copied'),
                               ),
-                              IconButton(
-                                tooltip: 'Remove',
-                                icon: const Icon(Icons.close, size: 18),
-                                onPressed: () {
-                                  controller.removeWsEndpoint(entry.value);
-                                  setState(() {});
-                                },
-                              ),
-                            ],
-                          ),
+                            );
+                          },
+                          onRemove: () {
+                            controller.setQuicEndpoint('');
+                            setState(() {
+                              _quicController.text = '';
+                            });
+                          },
                         ),
-                      )
-                      .toList(),
+                      );
+                    }
+                    for (final endpoint in wsEndpoints) {
+                      rows.add(
+                        _EndpointRow(
+                          index: rows.length + 1,
+                          label: 'WS',
+                          value: endpoint,
+                          onEdit: () {
+                            _wsAddController.text = endpoint;
+                            setState(() {});
+                          },
+                          onCopy: () async {
+                            await Clipboard.setData(
+                              ClipboardData(text: endpoint),
+                            );
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Endpoint copied'),
+                              ),
+                            );
+                          },
+                          onRemove: () {
+                            controller.removeWsEndpoint(endpoint);
+                            setState(() {});
+                          },
+                        ),
+                      );
+                    }
+                    return rows;
+                  })(),
                 ),
               ] else
                 Text(
@@ -225,58 +240,27 @@ class _NetworkViewState extends State<NetworkView> {
                   ),
                 ),
               const SizedBox(height: 12),
-              Text(
-                'QUIC endpoint (primary)',
-                style: theme.textTheme.labelLarge?.copyWith(
-                  color: Colors.white70,
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () async {
+                    await controller.pinQuicCertFromServer();
+                    if (!mounted) return;
+                    setState(() {
+                      _quicCertController.text =
+                          controller.quicTrustedCertValue;
+                    });
+                    final message = controller.quicTrustedCertValue.isEmpty
+                        ? 'Failed to pin QUIC cert'
+                        : 'Pinned QUIC certificate';
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text(message)));
+                  },
+                  icon: const Icon(Icons.shield, size: 16),
+                  label: const Text('Pin QUIC cert'),
                 ),
-              ),
-              const SizedBox(height: 6),
-              InputField(
-                label: 'quic://host:port',
-                controller: _quicController,
-                onChanged: controller.setQuicEndpoint,
-              ),
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  TextButton.icon(
-                    onPressed: controller.quicEndpointValue.isEmpty
-                        ? null
-                        : () async {
-                            await Clipboard.setData(
-                              ClipboardData(text: controller.quicEndpointValue),
-                            );
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('QUIC endpoint copied'),
-                              ),
-                            );
-                          },
-                    icon: const Icon(Icons.copy, size: 16),
-                    label: const Text('Copy endpoint'),
-                  ),
-                  const SizedBox(width: 8),
-                  TextButton.icon(
-                    onPressed: () async {
-                      await controller.pinQuicCertFromServer();
-                      if (!mounted) return;
-                      setState(() {
-                        _quicCertController.text =
-                            controller.quicTrustedCertValue;
-                      });
-                      final message = controller.quicTrustedCertValue.isEmpty
-                          ? 'Failed to pin QUIC cert'
-                          : 'Pinned QUIC certificate';
-                      ScaffoldMessenger.of(
-                        context,
-                      ).showSnackBar(SnackBar(content: Text(message)));
-                    },
-                    icon: const Icon(Icons.shield, size: 16),
-                    label: const Text('Pin cert'),
-                  ),
-                ],
               ),
               const SizedBox(height: 12),
               InputField(
@@ -360,6 +344,8 @@ class _NetworkViewState extends State<NetworkView> {
                         lower.startsWith('veil:vps:') ||
                         lower.startsWith('vps:')) {
                       controller.handleScanValue(raw);
+                    } else if (lower.startsWith('quic://')) {
+                      controller.setQuicEndpoint(raw);
                     } else {
                       controller.addWsEndpoint(raw);
                     }
@@ -368,7 +354,7 @@ class _NetworkViewState extends State<NetworkView> {
                     });
                   },
                   icon: const Icon(Icons.add),
-                  label: const Text('Add endpoint'),
+                  label: const Text('Add'),
                 ),
               ),
               const SizedBox(height: 12),
@@ -575,6 +561,59 @@ class _LaneHealthTile extends StatelessWidget {
         ],
       ),
       trailing: Text(label),
+    );
+  }
+}
+
+class _EndpointRow extends StatelessWidget {
+  final int index;
+  final String label;
+  final String value;
+  final VoidCallback onEdit;
+  final VoidCallback onCopy;
+  final VoidCallback onRemove;
+
+  const _EndpointRow({
+    required this.index,
+    required this.label,
+    required this.value,
+    required this.onEdit,
+    required this.onCopy,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      leading: Text(
+        '#$index',
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Colors.white60,
+            ),
+      ),
+      title: Text('$label · $value'),
+      trailing: Wrap(
+        spacing: 4,
+        children: [
+          IconButton(
+            tooltip: 'Edit',
+            icon: const Icon(Icons.edit, size: 18),
+            onPressed: onEdit,
+          ),
+          IconButton(
+            tooltip: 'Copy',
+            icon: const Icon(Icons.copy, size: 18),
+            onPressed: onCopy,
+          ),
+          IconButton(
+            tooltip: 'Remove',
+            icon: const Icon(Icons.close, size: 18),
+            onPressed: onRemove,
+          ),
+        ],
+      ),
     );
   }
 }
