@@ -11,6 +11,7 @@ This project uses the workspace SDK at `packages/veil-sdk-dart`.
 ```bash
 cd apps/veil_android
 flutter pub get
+./../../scripts/build_android_quic.sh
 flutter run
 ```
 
