@@ -332,6 +332,11 @@ if [[ -d apps/veil-vps-node/web ]]; then
     rm -rf "${WEB_ROOT:?}/"*
     cp -a apps/veil-vps-node/web/. "$WEB_ROOT"/
   fi
+  quic_bind_value="${VEIL_VPS_QUIC_BIND:-0.0.0.0:5000}"
+  quic_port="${quic_bind_value##*:}"
+  if [[ -n "${quic_port}" ]]; then
+    echo "window.VEIL_VPS_QUIC_PORT = ${quic_port};" > "${WEB_ROOT}/config.js"
+  fi
   chown -R "$RUN_USER:$RUN_GROUP" "$WEB_ROOT" || true
 fi
 

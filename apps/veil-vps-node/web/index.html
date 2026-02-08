@@ -172,11 +172,13 @@
       </section>
     </main>
     <footer>Powered by VEIL — shard‑native, privacy‑preserving delivery.</footer>
+    <script src="config.js"></script>
     <script>
       const host = window.location.host;
       const isSecure = window.location.protocol === "https:";
       const ws = `${isSecure ? "wss" : "ws"}://${host}/ws`;
-      const quic = `quic://${host.split(":")[0]}:5000`;
+      const quicPort = window.VEIL_VPS_QUIC_PORT || 5000;
+      const quic = `quic://${host.split(":")[0]}:${quicPort}`;
       const profile = `veil://vps?ws=${encodeURIComponent(ws)}&quic=${encodeURIComponent(quic)}`;
 
       document.getElementById("wsEndpoint").textContent = `WebSocket: ${ws}`;
