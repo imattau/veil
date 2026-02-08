@@ -229,7 +229,7 @@ impl TransportAdapter for CombinedFallbackAdapter {
         #[cfg(feature = "ble")]
         if let Some(ble) = self.ble_mut() {
             if let Some((peer, bytes)) = ble.recv() {
-                return Some((FallbackPeer::Ble(FallbackPeer::Ble(peer).peer_ble()), bytes));
+                return Some((FallbackPeer::Ble(peer), bytes));
             }
         }
         None
@@ -811,8 +811,10 @@ fn main() {
     });
 
     let ws_server_adapter = ws_listen.map(|addr| {
-        WebSocketServerAdapter::listen(WebSocketServerAdapterConfig::new(addr))
-            .expect("websocket server should start")
+        let adapter = WebSocketServerAdapter::listen(WebSocketServerAdapterConfig::new(&addr))
+            .expect("websocket server should start");
+        eprintln!("websocket server listening on {addr}");
+        adapter
     });
 
     let tor_adapter = tor_socks_addr.map(|addr| {

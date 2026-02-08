@@ -5,7 +5,7 @@
 :80 {
     root * /srv
 
-    handle_path /ws/* {
+    handle_path /ws* {
         reverse_proxy veil-vps-node:8080
     }
 

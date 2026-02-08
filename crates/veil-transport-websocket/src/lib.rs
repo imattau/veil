@@ -439,7 +439,8 @@ async fn run_server_worker(
 ) {
     let listener = match tokio::net::TcpListener::bind(&config.bind_addr).await {
         Ok(l) => l,
-        Err(_) => {
+        Err(err) => {
+            eprintln!("websocket server bind failed on {}: {}", config.bind_addr, err);
             running.store(false, Ordering::Relaxed);
             return;
         }

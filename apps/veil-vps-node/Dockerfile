@@ -22,6 +22,7 @@ ENV VEIL_VPS_QUIC_KEY_PATH=/opt/veil-vps-node/data/quic_key.der
 ENV VEIL_VPS_QUIC_BIND=0.0.0.0:5000
 
 EXPOSE 5000/udp
+EXPOSE 8080
 
 VOLUME ["/opt/veil-vps-node/data"]
 
