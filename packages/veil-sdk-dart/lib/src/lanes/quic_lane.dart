@@ -30,18 +30,25 @@ class QuicLane implements VeilLane {
     this.bindAddr = "0.0.0.0:0",
     this.trustedPeerCertHex,
   }) {
-    _handle = _bindings.start(
-      bindAddr,
-      _serverNameFromEndpoint(endpoint),
-      trustedPeerCertHex ?? "",
-    );
-    if (_handle == 0) {
+    final bindings = _getBindings();
+    if (bindings == null) {
+      _handle = 0;
       _outboundErr += 1;
+    } else {
+      _handle = bindings.start(
+        bindAddr,
+        _serverNameFromEndpoint(endpoint),
+        trustedPeerCertHex ?? "",
+      );
+      if (_handle == 0) {
+        _outboundErr += 1;
+      }
     }
   }
 
   static bool isSupportedSync() {
-    return _bindings.isSupported();
+    final bindings = _getBindings();
+    return bindings?.isSupported() ?? false;
   }
 
   static Future<bool> isSupported() async {
@@ -49,8 +56,12 @@ class QuicLane implements VeilLane {
   }
 
   static Future<String?> fetchPinnedCertHex(String endpoint) async {
+    final bindings = _getBindings();
+    if (bindings == null) {
+      return null;
+    }
     final serverName = _serverNameFromEndpoint(endpoint);
-    final cert = _bindings.fetchPeerCert(endpoint, serverName);
+    final cert = bindings.fetchPeerCert(endpoint, serverName);
     if (cert == null || cert.isEmpty) {
       return null;
     }
@@ -62,7 +73,13 @@ class QuicLane implements VeilLane {
     if (_closed) {
       throw StateError("lane is closed");
     }
-    final result = _bindings.send(peer, bytes);
+    final bindings = _getBindings();
+    if (bindings == null || _handle == 0) {
+      _outboundErr += 1;
+      _outboundQueued += 1;
+      return;
+    }
+    final result = bindings.send(peer, bytes);
     if (result == 0) {
       _outboundOk += 1;
     } else {
@@ -76,7 +93,11 @@ class QuicLane implements VeilLane {
     if (_inbox.isNotEmpty) {
       return _inbox.removeAt(0);
     }
-    final msg = _bindings.recv();
+    final bindings = _getBindings();
+    if (bindings == null || _handle == 0) {
+      return null;
+    }
+    final msg = bindings.recv();
     if (msg == null) {
       return null;
     }
@@ -98,7 +119,11 @@ class QuicLane implements VeilLane {
 
   Future<void> close() async {
     _closed = true;
-    _bindings.stop(_handle);
+    final bindings = _getBindings();
+    if (bindings == null || _handle == 0) {
+      return;
+    }
+    bindings.stop(_handle);
   }
 }
 
@@ -195,7 +220,19 @@ class _QuicBindings {
   }
 }
 
-final _QuicBindings _bindings = _QuicBindings(_openLib());
+_QuicBindings? _bindings;
+
+_QuicBindings? _getBindings() {
+  if (_bindings != null) {
+    return _bindings;
+  }
+  try {
+    _bindings = _QuicBindings(_openLib());
+  } catch (_) {
+    _bindings = null;
+  }
+  return _bindings;
+}
 
 ffi.DynamicLibrary _openLib() {
   if (Platform.isAndroid) {
