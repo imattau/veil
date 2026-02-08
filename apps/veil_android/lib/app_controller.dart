@@ -1566,6 +1566,7 @@ class VeilAppController extends ChangeNotifier {
     }
     _events.insert(0, 'Fetching QUIC certificate...');
     _notify();
+    print("AppController: Calling QuicLane.fetchPinnedCertHex for $target");
     final cert = await QuicLane.fetchPinnedCertHex(target);
     if (cert == null || cert.isEmpty) {
       _events.insert(0, 'Failed to fetch QUIC cert');
@@ -1663,7 +1664,10 @@ class VeilAppController extends ChangeNotifier {
     }
     final wsLanes = endpoints
         .map(
-          (endpoint) => WebSocketLane(url: Uri.parse(endpoint), peerId: peerId),
+          (endpoint) {
+            print("AppController: Creating WebSocketLane with endpoint: $endpoint");
+            return WebSocketLane(url: Uri.parse(endpoint), peerId: peerId);
+          },
         )
         .toList();
     final VeilLane wsLane = wsLanes.length > 1
