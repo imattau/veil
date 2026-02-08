@@ -173,7 +173,10 @@ class _RootShellState extends State<RootShell> {
               : _controller.tagHex.isNotEmpty
                   ? 'Custom tag'
                   : 'General',
-          onPublish: (text, attachments) {
+          onPublish: (text, attachments, channelLabel) {
+            if (channelLabel.isNotEmpty) {
+              _controller.setChannelLabel(channelLabel);
+            }
             _controller.publishLocalPost(text, attachments: attachments);
             Navigator.of(context).pop();
           },

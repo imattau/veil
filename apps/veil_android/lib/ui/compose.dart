@@ -9,7 +9,11 @@ import 'package:veil_sdk/veil_sdk.dart';
 
 import '../models.dart';
 class ComposeScreen extends StatefulWidget {
-  final void Function(String text, List<Attachment> attachments) onPublish;
+  final void Function(
+    String text,
+    List<Attachment> attachments,
+    String channelLabel,
+  ) onPublish;
   final String channelLabel;
 
   const ComposeScreen({
@@ -24,13 +28,21 @@ class ComposeScreen extends StatefulWidget {
 
 class _ComposeScreenState extends State<ComposeScreen> {
   final _controller = TextEditingController();
+  final _channelController = TextEditingController();
   final _picker = ImagePicker();
   final List<Attachment> _attachments = [];
   bool _attachMenuOpen = false;
 
   @override
+  void initState() {
+    super.initState();
+    _channelController.text = widget.channelLabel;
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
+    _channelController.dispose();
     super.dispose();
   }
 
@@ -41,7 +53,11 @@ class _ComposeScreenState extends State<ComposeScreen> {
         title: const Text('Compose'),
         actions: [
           TextButton(
-            onPressed: () => widget.onPublish(_controller.text, _attachments),
+            onPressed: () => widget.onPublish(
+              _controller.text,
+              _attachments,
+              _channelController.text.trim(),
+            ),
             child: const Text('Publish'),
           ),
         ],
@@ -62,12 +78,21 @@ class _ComposeScreenState extends State<ComposeScreen> {
                   const Icon(Icons.tag, size: 16, color: Color(0xFF60A5FA)),
                   const SizedBox(width: 6),
                   Text(
-                    'Posting to ${widget.channelLabel}',
+                    'Posting to',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Colors.white70,
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _channelController,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(
+                  prefixText: '#',
+                  hintText: 'general',
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
