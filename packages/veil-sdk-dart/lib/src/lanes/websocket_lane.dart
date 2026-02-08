@@ -36,30 +36,35 @@ class WebSocketLane implements VeilLane {
   }
 
   void _connect() {
-    _socket = WebSocketChannel.connect(url);
-    _socket!.stream.listen(
-      (event) {
-        try {
-          if (event is List<int>) {
-            _inbox.add(LaneMessage(peer: peerId, bytes: event));
-          } else if (event is String) {
-            _inbox.add(LaneMessage(peer: peerId, bytes: event.codeUnits));
-          } else {
+    try {
+      _socket = WebSocketChannel.connect(url);
+      _socket!.stream.listen(
+        (event) {
+          try {
+            if (event is List<int>) {
+              _inbox.add(LaneMessage(peer: peerId, bytes: event));
+            } else if (event is String) {
+              _inbox.add(LaneMessage(peer: peerId, bytes: event.codeUnits));
+            } else {
+              _inboundDropped += 1;
+              return;
+            }
+            _inboundReceived += 1;
+          } catch (_) {
             _inboundDropped += 1;
-            return;
           }
-          _inboundReceived += 1;
-        } catch (_) {
-          _inboundDropped += 1;
-        }
-      },
-      onError: (_) {
-        _scheduleReconnect();
-      },
-      onDone: () {
-        _scheduleReconnect();
-      },
-    );
+        },
+        onError: (_) {
+          _scheduleReconnect();
+        },
+        onDone: () {
+          _scheduleReconnect();
+        },
+      );
+    } catch (_) {
+      _outboundErr += 1;
+      _scheduleReconnect();
+    }
   }
 
   void _scheduleReconnect() {
