@@ -362,7 +362,10 @@ class _RootShellState extends State<RootShell> {
                     showProtocolDetails: _showProtocolDetails,
                   ),
                   ChannelsView(controller: _controller),
-                  VaultView(controller: _controller),
+                  VaultView(
+                    controller: _controller,
+                    onFindPeers: () => setState(() => _tabIndex = 3),
+                  ),
                   NetworkView(controller: _controller),
                   DiscoveryView(controller: _controller),
                 ],

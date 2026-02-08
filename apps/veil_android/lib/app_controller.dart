@@ -60,6 +60,8 @@ class VeilAppController extends ChangeNotifier {
   final List<String> _wsEndpoints = [];
   String tagHex = '';
   String channelLabel = '';
+  String privateIdHex = '';
+  final List<String> _privateContacts = [];
   static const String _channelPublisherKey =
       '0000000000000000000000000000000000000000000000000000000000000000';
   final List<String> _extraTags = [];
@@ -176,6 +178,7 @@ class VeilAppController extends ChangeNotifier {
   LaneHealthSnapshot? get fallbackLaneHealth =>
       _client?.fallbackLane?.healthSnapshot() ??
       _fallbackLane?.healthSnapshot();
+  List<String> get privateContacts => List.unmodifiable(_privateContacts);
   List<ChannelInfo> get channels {
     final labels = <String>{
       if (channelLabel.isNotEmpty) channelLabel,
@@ -420,6 +423,10 @@ class VeilAppController extends ChangeNotifier {
     }
     tagHex = prefs.getString('tagHex') ?? tagHex;
     channelLabel = prefs.getString('channelLabel') ?? channelLabel;
+    privateIdHex = prefs.getString('privateIdHex') ?? privateIdHex;
+    _privateContacts
+      ..clear()
+      ..addAll(prefs.getStringList('privateContacts') ?? const []);
     _channelLabels
       ..clear()
       ..addAll(prefs.getStringList('channelLabels') ?? const []);
@@ -484,6 +491,7 @@ class VeilAppController extends ChangeNotifier {
       await _persistPrefs();
     }
     await _refreshChannelTags();
+    _ensurePrivateId();
     notifyListeners();
   }
 
@@ -497,6 +505,8 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setStringList('wsEndpoints', _wsEndpoints);
     await prefs.setString('tagHex', tagHex);
     await prefs.setString('channelLabel', channelLabel);
+    await prefs.setString('privateIdHex', privateIdHex);
+    await prefs.setStringList('privateContacts', _privateContacts);
     await prefs.setStringList('channelLabels', _channelLabels);
     await prefs.setString('bleDeviceId', bleDeviceId);
     await prefs.setString('bleServiceUuid', bleServiceUuid);
@@ -823,6 +833,38 @@ class VeilAppController extends ChangeNotifier {
     }();
     _persistPrefs();
     notifyListeners();
+  }
+
+  void _ensurePrivateId() {
+    if (privateIdHex.isNotEmpty) return;
+    final rand = Random.secure();
+    final bytes = List<int>.generate(32, (_) => rand.nextInt(256));
+    privateIdHex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    _persistPrefs();
+  }
+
+  void addPrivateContact(String value) {
+    final cleaned = value.trim().toLowerCase();
+    if (cleaned.isEmpty) return;
+    final hex = cleaned.startsWith('tag:') ? cleaned.substring(4) : cleaned;
+    if (hex.length != 64) {
+      _events.insert(0, 'Invalid private ID');
+      _notify();
+      return;
+    }
+    if (!_privateContacts.contains(hex)) {
+      _privateContacts.add(hex);
+      _events.insert(0, 'Added private contact');
+      _persistPrefs();
+      _notify();
+    }
+  }
+
+  void removePrivateContact(String value) {
+    _privateContacts.remove(value);
+    _events.insert(0, 'Removed private contact');
+    _persistPrefs();
+    _notify();
   }
 
   Future<void> addChannelLabel(String value) async {
