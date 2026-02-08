@@ -50,6 +50,8 @@ pub enum WebSocketAdapterError {
     QueueFull,
     #[error("payload exceeds max payload hint ({hint} bytes)")]
     PayloadTooLarge { hint: usize },
+    #[error("server bind failed: {0}")]
+    BindFailed(String),
 }
 
 pub struct WebSocketAdapter {
@@ -353,7 +355,7 @@ impl WebSocketServerAdapter {
 
         match startup_rx.recv_timeout(Duration::from_secs(2)) {
             Ok(Ok(())) => {}
-            Ok(Err(err)) => return Err(WebSocketAdapterError::Closed), // or map to bind error
+            Ok(Err(err)) => return Err(WebSocketAdapterError::BindFailed(err)),
             Err(_) => return Err(WebSocketAdapterError::Closed),
         }
 
