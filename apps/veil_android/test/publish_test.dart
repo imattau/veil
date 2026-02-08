@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:veil_sdk/veil_sdk.dart';
-
+import 'package:veil_sdk/src/bridge/api.dart' as bridge_api;
 import 'package:veil_sdk/src/bridge/frb_generated.dart';
 
 class _MockBridgeApi extends VeilBridgeApiApi {
@@ -15,12 +15,16 @@ class _MockBridgeApi extends VeilBridgeApiApi {
   }
 
   @override
-  Future<ObjectMeta> crateApiDecodeObjectMeta({required List<int> bytes}) async {
+  Future<bridge_api.ObjectMeta> crateApiDecodeObjectMeta({
+    required List<int> bytes,
+  }) async {
     throw UnimplementedError();
   }
 
   @override
-  Future<ShardMeta> crateApiDecodeShardMeta({required List<int> bytes}) async {
+  Future<bridge_api.ShardMeta> crateApiDecodeShardMeta({
+    required List<int> bytes,
+  }) async {
     throw UnimplementedError();
   }
 
