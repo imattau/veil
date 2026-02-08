@@ -266,23 +266,22 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                   ),
-                  if (entry.authorKey.isNotEmpty)
-                    _TrustActions(
-                      controller: controller,
-                      authorKey: entry.authorKey,
-                    ),
-                  if (entry.reconstructed)
-                    Row(
-                      children: const [
-                        Icon(
-                          Icons.verified,
-                          size: 16,
-                          color: Color(0xFF34D399),
-                        ),
-                        SizedBox(width: 4),
-                        Text('Reconstructed'),
+                  Flexible(
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      alignment: WrapAlignment.end,
+                      children: [
+                        if (entry.authorKey.isNotEmpty)
+                          _TrustActions(
+                            controller: controller,
+                            authorKey: entry.authorKey,
+                          ),
+                        if (entry.reconstructed)
+                          const _ReconstructedChip(),
                       ],
                     ),
+                  ),
                 ],
               ),
               const SizedBox(height: 12),
@@ -429,6 +428,26 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ReconstructedChip extends StatelessWidget {
+  const _ReconstructedChip();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: const [
+        Icon(
+          Icons.verified,
+          size: 16,
+          color: Color(0xFF34D399),
+        ),
+        SizedBox(width: 4),
+        Text('Reconstructed'),
+      ],
     );
   }
 }
