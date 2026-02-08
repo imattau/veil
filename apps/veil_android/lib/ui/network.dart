@@ -504,9 +504,18 @@ class _LaneStatusNote extends StatelessWidget {
             ?.copyWith(color: Colors.redAccent),
       );
     }
+    if (controller.quicTrustedCertValue.isEmpty) {
+      return Text(
+        'QUIC certificate missing. Please pin it to connect.',
+        style: Theme.of(context)
+            .textTheme
+            .bodySmall
+            ?.copyWith(color: Colors.redAccent),
+      );
+    }
     if (quic == null) {
       return Text(
-        'QUIC pending. Pin the certificate to enable.',
+        'QUIC pending...',
         style: Theme.of(context)
             .textTheme
             .bodySmall
