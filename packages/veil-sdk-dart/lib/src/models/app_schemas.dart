@@ -84,6 +84,20 @@ class FileChunkV1 {
   });
 }
 
+class DirectMessageV1 {
+  final String body;
+  final List<String>? mentions;
+  final String? threadRoot;
+  final Map<String, dynamic>? extensions;
+
+  const DirectMessageV1({
+    required this.body,
+    this.mentions,
+    this.threadRoot,
+    this.extensions,
+  });
+}
+
 const int maxObjectSize = 256 * 1024;
 const int maxInlinePayload = 250000;
 
@@ -115,6 +129,37 @@ AppEnvelope decodeAppEnvelope(Uint8List bytes) {
     version: version,
     payload: payload,
     extensions: extensions is Map<String, dynamic> ? extensions : null,
+  );
+}
+
+Uint8List encodeDirectMessage(DirectMessageV1 message) {
+  return encodeAppEnvelope(
+    AppEnvelope(
+      type: "dm",
+      version: 1,
+      payload: {
+        "body": message.body,
+        if (message.mentions != null) "mentions": message.mentions,
+        if (message.threadRoot != null) "thread_root": message.threadRoot,
+      },
+      extensions: message.extensions,
+    ),
+  );
+}
+
+DirectMessageV1 decodeDirectMessage(Uint8List bytes) {
+  final envelope = decodeAppEnvelope(bytes);
+  if (envelope.type != "dm") {
+    throw ArgumentError("not a dm envelope");
+  }
+  final payload = envelope.payload;
+  return DirectMessageV1(
+    body: payload["body"] as String? ?? "",
+    mentions: (payload["mentions"] as List<dynamic>?)
+        ?.map((e) => e.toString())
+        .toList(),
+    threadRoot: payload["thread_root"] as String?,
+    extensions: envelope.extensions,
   );
 }
 

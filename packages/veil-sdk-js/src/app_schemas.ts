@@ -51,6 +51,15 @@ export type FileChunkV1 = {
   extensions?: Record<string, unknown>;
 };
 
+export type DirectMessageV1 = {
+  type: "dm";
+  version: 1;
+  body: string;
+  mentions?: string[];
+  thread_root?: string;
+  extensions?: Record<string, unknown>;
+};
+
 const MAX_OBJECT_SIZE = 256 * 1024;
 const MAX_INLINE_PAYLOAD = 250_000;
 
@@ -148,6 +157,19 @@ export function encodeFileChunk(chunk: FileChunkV1): Uint8Array {
   });
 }
 
+export function encodeDirectMessage(message: DirectMessageV1): Uint8Array {
+  return encodeAppEnvelope({
+    type: message.type,
+    version: message.version,
+    payload: sortObject({
+      body: message.body,
+      mentions: message.mentions,
+      thread_root: message.thread_root,
+      extensions: message.extensions,
+    }) as Record<string, unknown>,
+  });
+}
+
 export function splitIntoFileChunks(bytes: Uint8Array): FileChunkV1[] {
   if (bytes.length <= MAX_INLINE_PAYLOAD) {
     return [
@@ -230,6 +252,10 @@ export function extractReferences(envelope: AppEnvelope): {
         }
       }
     }
+  }
+  if (envelope.type === "dm" && isRecord(envelope.payload)) {
+    const thread = envelope.payload.thread_root;
+    if (typeof thread === "string") threadRoots.push(thread);
   }
   if (envelope.type === "profile" && isRecord(envelope.payload)) {
     const avatar = envelope.payload.avatar;

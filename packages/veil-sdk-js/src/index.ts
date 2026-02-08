@@ -36,6 +36,7 @@ export {
   encodeAppEnvelope,
   encodeCanonicalMap,
   encodeFileChunk,
+  encodeDirectMessage,
   encodeMediaDescriptor,
   encodeSocialPost,
   encodeProfile,
@@ -46,6 +47,7 @@ export {
 export type {
   AppEnvelope,
   FileChunkV1,
+  DirectMessageV1,
   MediaDescriptorV1,
   SocialPostV1,
   ProfileV1,
@@ -131,6 +133,7 @@ export {
   buildObject,
   buildPostWithAttachments,
   buildSocialPost,
+  buildDirectMessage,
   PublishQueue,
 } from "./publisher";
 export type { PublishBatch, PublishObject } from "./publisher";

@@ -2,11 +2,13 @@ import { bytesToHex } from "@noble/hashes/utils";
 import { blake3 } from "@noble/hashes/blake3";
 import {
   encodeFileChunk,
+  encodeDirectMessage,
   encodeMediaDescriptor,
   encodeProfile,
   encodeSocialPost,
   splitIntoFileChunks,
   type MediaDescriptorV1,
+  type DirectMessageV1,
   type ProfileV1,
 } from "./app_schemas";
 
@@ -57,6 +59,10 @@ export function buildMediaDescriptor(media: MediaDescriptorV1): PublishObject {
 
 export function buildProfile(profile: ProfileV1): PublishObject {
   return buildObject(encodeProfile(profile));
+}
+
+export function buildDirectMessage(message: DirectMessageV1): PublishObject {
+  return buildObject(encodeDirectMessage(message));
 }
 
 export function buildFileChunks(bytes: Uint8Array): PublishObject[] {

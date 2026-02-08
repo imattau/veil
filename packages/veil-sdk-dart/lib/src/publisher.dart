@@ -56,6 +56,11 @@ class VeilPublisher {
     return buildObject(bytes);
   }
 
+  Future<PublishObject> buildDirectMessage(DirectMessageV1 message) async {
+    final bytes = encodeDirectMessage(message);
+    return buildObject(bytes);
+  }
+
   Future<List<PublishObject>> buildFileChunks(Uint8List bytes) async {
     final chunks = splitIntoFileChunks(bytes);
     final out = <PublishObject>[];
