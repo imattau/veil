@@ -631,7 +631,23 @@ class VeilAppController extends ChangeNotifier {
     if (cert != null && cert.isNotEmpty) {
       setQuicTrustedCert(cert);
     } else if (quic != null && quic.isNotEmpty) {
-      _events.insert(0, 'Pin QUIC cert to enable secure QUIC lane');
+      _events.insert(0, 'Pinning QUIC cert from server…');
+      Future.microtask(() async {
+        if (!await QuicLane.isSupported()) {
+          _events.insert(0, 'QUIC not supported on this device');
+          _notify();
+          return;
+        }
+        final cert = await QuicLane.fetchPinnedCertHex(quic);
+        if (cert.isEmpty) {
+          _events.insert(0, 'Failed to pin QUIC cert');
+        } else {
+          quicTrustedCertHex = cert;
+          await _persistPrefs();
+          _events.insert(0, 'Pinned QUIC certificate');
+        }
+        _notify();
+      });
     }
     for (final peer in peers) {
       addForwardPeer(peer);
