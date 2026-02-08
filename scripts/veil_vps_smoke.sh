@@ -3,11 +3,12 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/veil_vps_smoke.sh <base_url|host> [--ws <ws_url>] [--health <health_url>] [--quic-port <port>]
+Usage: scripts/veil_vps_smoke.sh <base_url|host> [--ws <ws_url>] [--health <health_url>] [--quic-port <port>] [--auth <user:pass>]
 
 Examples:
   scripts/veil_vps_smoke.sh https://veilnode.example.com
   scripts/veil_vps_smoke.sh veilnode.example.com --ws wss://veilnode.example.com/ws --quic-port 5000
+  scripts/veil_vps_smoke.sh https://veilnode.example.com --auth user:pass
 
 Checks:
   - /health (HTTP)
@@ -28,6 +29,7 @@ fi
 WS_URL=""
 HEALTH_URL=""
 QUIC_PORT="5000"
+AUTH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,6 +43,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --quic-port)
       QUIC_PORT="${2:-}"
+      shift 2
+      ;;
+    --auth)
+      AUTH="${2:-}"
       shift 2
       ;;
     *)
@@ -79,14 +85,25 @@ echo "Base:   ${base}"
 echo "Health: ${HEALTH_URL}"
 echo "WS:     ${WS_URL}"
 echo "QUIC:   ${QUIC_PORT}"
+if [[ -n "${AUTH}" ]]; then
+  echo "Auth:   (basic)"
+fi
 echo
 
 echo "-- HTTP health"
-curl -fsS "${HEALTH_URL}" >/dev/null
+if [[ -n "${AUTH}" ]]; then
+  curl -fsS -u "${AUTH}" "${HEALTH_URL}" >/dev/null
+else
+  curl -fsS "${HEALTH_URL}" >/dev/null
+fi
 echo "OK"
 
 echo "-- HTTP peers"
-curl -fsS "${base%/}/peers?limit=5" >/dev/null || echo "WARN: /peers not reachable"
+if [[ -n "${AUTH}" ]]; then
+  curl -fsS -u "${AUTH}" "${base%/}/peers?limit=5" >/dev/null || echo "WARN: /peers not reachable"
+else
+  curl -fsS "${base%/}/peers?limit=5" >/dev/null || echo "WARN: /peers not reachable"
+fi
 
 echo "-- WebSocket handshake"
 if command -v websocat >/dev/null 2>&1; then
