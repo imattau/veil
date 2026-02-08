@@ -1,6 +1,6 @@
 use std::env;
 use std::io::Read;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -78,6 +78,10 @@ fn main() {
         std::process::exit(2);
     }
 
+    let resolved_quic_peer = quic_peer
+        .as_deref()
+        .and_then(|peer| resolve_quic_peer(peer).ok());
+
     let tag = match parse_hex_tag(&tag_hex) {
         Ok(tag) => tag,
         Err(err) => {
@@ -108,7 +112,7 @@ fn main() {
     if let Some(ws) = &ws_url {
         println!("WS: {ws}");
     }
-    if let Some(quic) = &quic_peer {
+    if let Some(quic) = &resolved_quic_peer {
         println!("QUIC: {quic}");
     }
 
@@ -123,7 +127,7 @@ fn main() {
     let mut quic_receiver = None;
     install_rustls_crypto_provider();
 
-    if let Some(peer) = quic_peer.as_ref() {
+    if let Some(peer) = resolved_quic_peer.as_ref() {
         match build_quic_adapter(
             peer,
             quic_cert_hex.clone(),
@@ -166,7 +170,7 @@ fn main() {
         }
     }
 
-    if let (Some(adapter), Some(peer)) = (quic_receiver.as_mut(), quic_peer.as_ref()) {
+    if let (Some(adapter), Some(peer)) = (quic_receiver.as_mut(), resolved_quic_peer.as_ref()) {
         if let Err(err) = adapter.send(peer, &quic_warmup) {
             eprintln!("QUIC warmup enqueue failed: {err}");
         }
@@ -174,7 +178,7 @@ fn main() {
     if quic_peer.is_some() {
         thread::sleep(Duration::from_millis(200));
     }
-    if let (Some(adapter), Some(peer)) = (quic_sender.as_mut(), quic_peer.as_ref()) {
+    if let (Some(adapter), Some(peer)) = (quic_sender.as_mut(), resolved_quic_peer.as_ref()) {
         match adapter.send(peer, &quic_shard) {
             Ok(_) => {
                 println!("QUIC: sent test shard");
@@ -221,7 +225,7 @@ fn main() {
     }
 
     if (ws_url.is_some() && (!sent_ws || !received_ws))
-        || (quic_peer.is_some() && (!sent_quic || !received_quic))
+        || (resolved_quic_peer.is_some() && (!sent_quic || !received_quic))
     {
         eprintln!("Probe failed: one or more lanes did not round-trip.");
         std::process::exit(1);
@@ -392,6 +396,20 @@ fn fetch_cert_from_url(url: &str) -> Result<Vec<u8>, String> {
         return Err("cert fetch returned empty body".to_string());
     }
     Ok(bytes)
+}
+
+fn resolve_quic_peer(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    let without_scheme = trimmed.strip_prefix("quic://").unwrap_or(trimmed);
+    if without_scheme.parse::<SocketAddr>().is_ok() {
+        return Ok(without_scheme.to_string());
+    }
+    let resolved = without_scheme
+        .to_socket_addrs()
+        .map_err(|err| format!("failed to resolve QUIC peer: {err}"))?
+        .next()
+        .ok_or_else(|| "no QUIC peer addresses resolved".to_string())?;
+    Ok(resolved.to_string())
 }
 
 fn install_rustls_crypto_provider() {
