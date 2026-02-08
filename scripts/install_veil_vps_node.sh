@@ -96,12 +96,20 @@ pick_free_port() {
 
 resolve_ports() {
   if port_in_use "$PROXY_HTTP_PORT"; then
-    echo "HTTP port ${PROXY_HTTP_PORT} is in use. Please free it to use standard ports."
-    exit 1
+    if [[ "$REVERSE_PROXY" == "caddy" || "$REVERSE_PROXY" == "auto" ]] && systemctl is-active --quiet caddy; then
+      echo "HTTP port ${PROXY_HTTP_PORT} already in use by Caddy; continuing."
+    else
+      echo "HTTP port ${PROXY_HTTP_PORT} is in use. Please free it to use standard ports."
+      exit 1
+    fi
   fi
   if port_in_use "$PROXY_HTTPS_PORT"; then
-    echo "HTTPS port ${PROXY_HTTPS_PORT} is in use. Please free it to use standard ports."
-    exit 1
+    if [[ "$REVERSE_PROXY" == "caddy" || "$REVERSE_PROXY" == "auto" ]] && systemctl is-active --quiet caddy; then
+      echo "HTTPS port ${PROXY_HTTPS_PORT} already in use by Caddy; continuing."
+    else
+      echo "HTTPS port ${PROXY_HTTPS_PORT} is in use. Please free it to use standard ports."
+      exit 1
+    fi
   fi
   if port_in_use "$PROXY_HEALTH_PORT"; then
     PROXY_HEALTH_PORT=$(pick_free_port "$PROXY_HEALTH_PORT" 9091 19090)
