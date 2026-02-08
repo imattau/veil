@@ -28,11 +28,14 @@ use veil_transport_ble::MockBleLink;
 use veil_transport_ble::{BleAdapter, BleAdapterConfig, BlePeer};
 use veil_transport_quic::{QuicAdapter, QuicAdapterConfig, QuicIdentity};
 use veil_transport_tor::{TorSocksAdapter, TorSocksAdapterConfig};
-use veil_transport_websocket::{WebSocketAdapter, WebSocketAdapterConfig};
+use veil_transport_websocket::{
+    WebSocketAdapter, WebSocketAdapterConfig, WebSocketServerAdapter, WebSocketServerAdapterConfig,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum FallbackPeer {
     WebSocket(String),
+    WebSocketServer(String),
     Tor(String),
     #[cfg(feature = "ble")]
     Ble(BlePeer),
@@ -42,6 +45,7 @@ impl std::fmt::Display for FallbackPeer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FallbackPeer::WebSocket(peer) => write!(f, "ws:{peer}"),
+            FallbackPeer::WebSocketServer(peer) => write!(f, "wssrv:{peer}"),
             FallbackPeer::Tor(peer) => write!(f, "tor:{peer}"),
             #[cfg(feature = "ble")]
             FallbackPeer::Ble(peer) => write!(f, "ble:{}", peer.addr),
@@ -52,8 +56,10 @@ impl std::fmt::Display for FallbackPeer {
 #[derive(Debug)]
 enum FallbackSendError {
     WebSocket,
+    WebSocketServer,
     Tor,
     MissingWebSocket,
+    MissingWebSocketServer,
     MissingTor,
     #[cfg(feature = "ble")]
     Ble,
@@ -68,6 +74,7 @@ type BleLinkImpl = MockBleLink;
 
 struct CombinedFallbackAdapter {
     ws: Option<WebSocketAdapter>,
+    ws_server: Option<WebSocketServerAdapter>,
     tor: Option<TorSocksAdapter>,
     #[cfg(feature = "ble")]
     ble: Option<BleAdapter<BleLinkImpl>>,
@@ -76,11 +83,13 @@ struct CombinedFallbackAdapter {
 impl CombinedFallbackAdapter {
     fn new(
         ws: Option<WebSocketAdapter>,
+        ws_server: Option<WebSocketServerAdapter>,
         tor: Option<TorSocksAdapter>,
         #[cfg(feature = "ble")] ble: Option<BleAdapter<BleLinkImpl>>,
     ) -> Self {
         Self {
             ws,
+            ws_server,
             tor,
             #[cfg(feature = "ble")]
             ble,
@@ -89,6 +98,10 @@ impl CombinedFallbackAdapter {
 
     fn ws_mut(&mut self) -> Option<&mut WebSocketAdapter> {
         self.ws.as_mut()
+    }
+
+    fn ws_server_mut(&mut self) -> Option<&mut WebSocketServerAdapter> {
+        self.ws_server.as_mut()
     }
 
     fn tor_mut(&mut self) -> Option<&mut TorSocksAdapter> {
@@ -102,12 +115,17 @@ impl CombinedFallbackAdapter {
 
     fn combined_max_payload_hint(&self) -> Option<usize> {
         let ws_hint = self.ws.as_ref().and_then(|w| w.max_payload_hint());
+        let ws_srv_hint = self.ws_server.as_ref().and_then(|w| w.max_payload_hint());
         let tor_hint = self.tor.as_ref().and_then(|t| t.max_payload_hint());
-        let hint = match (ws_hint, tor_hint) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (Some(a), None) => Some(a),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
+        let hint = match (ws_hint, ws_srv_hint, tor_hint) {
+            (Some(a), Some(b), Some(c)) => Some(a.min(b).min(c)),
+            (Some(a), Some(b), None) => Some(a.min(b)),
+            (Some(a), None, Some(c)) => Some(a.min(c)),
+            (None, Some(b), Some(c)) => Some(b.min(c)),
+            (Some(a), None, None) => Some(a),
+            (None, Some(b), None) => Some(b),
+            (None, None, Some(c)) => Some(c),
+            (None, None, None) => None,
         };
         #[cfg(feature = "ble")]
         {
@@ -125,6 +143,15 @@ impl CombinedFallbackAdapter {
     fn combined_health_snapshot(&self) -> TransportHealthSnapshot {
         let mut out = TransportHealthSnapshot::default();
         if let Some(ws) = &self.ws {
+            let h = ws.health_snapshot();
+            out.outbound_queued += h.outbound_queued;
+            out.outbound_send_ok += h.outbound_send_ok;
+            out.outbound_send_err += h.outbound_send_err;
+            out.inbound_received += h.inbound_received;
+            out.inbound_dropped += h.inbound_dropped;
+            out.reconnect_attempts += h.reconnect_attempts;
+        }
+        if let Some(ws) = &self.ws_server {
             let h = ws.health_snapshot();
             out.outbound_queued += h.outbound_queued;
             out.outbound_send_ok += h.outbound_send_ok;
@@ -167,6 +194,13 @@ impl TransportAdapter for CombinedFallbackAdapter {
                 ws.send(ws_peer, bytes)
                     .map_err(|_| FallbackSendError::WebSocket)
             }
+            FallbackPeer::WebSocketServer(ws_peer) => {
+                let ws = self
+                    .ws_server_mut()
+                    .ok_or(FallbackSendError::MissingWebSocketServer)?;
+                ws.send(ws_peer, bytes)
+                    .map_err(|_| FallbackSendError::WebSocketServer)
+            }
             FallbackPeer::Tor(tor_peer) => {
                 let tor = self.tor_mut().ok_or(FallbackSendError::MissingTor)?;
                 tor.send(tor_peer, bytes)
@@ -187,10 +221,15 @@ impl TransportAdapter for CombinedFallbackAdapter {
                 return Some((FallbackPeer::WebSocket(peer), bytes));
             }
         }
+        if let Some(ws) = self.ws_server_mut() {
+            if let Some((peer, bytes)) = ws.recv() {
+                return Some((FallbackPeer::WebSocketServer(peer), bytes));
+            }
+        }
         #[cfg(feature = "ble")]
         if let Some(ble) = self.ble_mut() {
             if let Some((peer, bytes)) = ble.recv() {
-                return Some((FallbackPeer::Ble(peer), bytes));
+                return Some((FallbackPeer::Ble(FallbackPeer::Ble(peer).peer_ble()), bytes));
             }
         }
         None
@@ -202,6 +241,7 @@ impl TransportAdapter for CombinedFallbackAdapter {
 
     fn can_send(&self) -> bool {
         let ok = self.ws.as_ref().map(|w| w.can_send()).unwrap_or(false)
+            || self.ws_server.as_ref().map(|w| w.can_send()).unwrap_or(false)
             || self.tor.as_ref().map(|t| t.can_send()).unwrap_or(false);
         #[cfg(feature = "ble")]
         {
@@ -211,7 +251,8 @@ impl TransportAdapter for CombinedFallbackAdapter {
     }
 
     fn can_recv(&self) -> bool {
-        let ok = self.ws.as_ref().map(|w| w.can_recv()).unwrap_or(false);
+        let ok = self.ws.as_ref().map(|w| w.can_recv()).unwrap_or(false)
+            || self.ws_server.as_ref().map(|w| w.can_recv()).unwrap_or(false);
         #[cfg(feature = "ble")]
         {
             return ok || self.ble.as_ref().map(|b| b.can_recv()).unwrap_or(false);
@@ -221,6 +262,16 @@ impl TransportAdapter for CombinedFallbackAdapter {
 
     fn health_snapshot(&self) -> TransportHealthSnapshot {
         self.combined_health_snapshot()
+    }
+}
+
+#[cfg(feature = "ble")]
+impl FallbackPeer {
+    fn peer_ble(self) -> BlePeer {
+        match self {
+            FallbackPeer::Ble(p) => p,
+            _ => panic!("not a ble peer"),
+        }
     }
 }
 
@@ -665,6 +716,7 @@ fn main() {
 
     let quic_bind = env_var("VEIL_VPS_QUIC_BIND", "0.0.0.0:5000");
     let ws_url = env::var("VEIL_VPS_WS_URL").ok();
+    let ws_listen = env::var("VEIL_VPS_WS_LISTEN").ok();
     let ws_peer = env::var("VEIL_VPS_WS_PEER").ok();
     let ws_peer_id = ws_peer.clone().unwrap_or_else(|| "ws-peer".to_string());
     let tor_socks_addr = env::var("VEIL_VPS_TOR_SOCKS_ADDR").ok();
@@ -758,6 +810,11 @@ fn main() {
         .expect("websocket adapter should start")
     });
 
+    let ws_server_adapter = ws_listen.map(|addr| {
+        WebSocketServerAdapter::listen(WebSocketServerAdapterConfig::new(addr))
+            .expect("websocket server should start")
+    });
+
     let tor_adapter = tor_socks_addr.map(|addr| {
         TorSocksAdapter::connect(TorSocksAdapterConfig {
             socks_proxy_addr: addr,
@@ -799,6 +856,7 @@ fn main() {
 
     let fallback_adapter = CombinedFallbackAdapter::new(
         ws_adapter,
+        ws_server_adapter,
         tor_adapter,
         #[cfg(feature = "ble")]
         ble_adapter,

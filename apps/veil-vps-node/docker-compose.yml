@@ -17,6 +17,7 @@ services:
       # Optional lanes and policy
       VEIL_VPS_WS_URL: ${VEIL_VPS_WS_URL:-}
       VEIL_VPS_WS_PEER: ${VEIL_VPS_WS_PEER:-}
+      VEIL_VPS_WS_LISTEN: 0.0.0.0:8080
       VEIL_VPS_TOR_SOCKS_ADDR: ${VEIL_VPS_TOR_SOCKS_ADDR:-}
       VEIL_VPS_TOR_PEERS: ${VEIL_VPS_TOR_PEERS:-}
       VEIL_VPS_FAST_PEERS: ${VEIL_VPS_FAST_PEERS:-}

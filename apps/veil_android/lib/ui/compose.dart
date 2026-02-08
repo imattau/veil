@@ -108,17 +108,28 @@ class _ComposeScreenState extends State<ComposeScreen> {
                 onManage: widget.onManageChannels,
               ),
               const SizedBox(height: 12),
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: _pickImage,
+                    icon: const Icon(Icons.image_outlined),
+                    tooltip: 'Attach Image',
+                  ),
+                  IconButton(
+                    onPressed: _pickFile,
+                    icon: const Icon(Icons.insert_drive_file_outlined),
+                    tooltip: 'Attach File',
+                  ),
+                  const Spacer(),
+                ],
+              ),
+              const SizedBox(height: 8),
               TextField(
                 controller: _controller,
                 maxLines: 8,
                 autofocus: true,
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   hintText: 'Share an update...',
-                  suffixIcon: IconButton(
-                    tooltip: 'Attach',
-                    icon: const Icon(Icons.attach_file),
-                    onPressed: _openAttachMenu,
-                  ),
                 ),
               ),
               const SizedBox(height: 16),

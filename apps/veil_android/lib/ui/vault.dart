@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_controller.dart';
+import '../helpers/strings.dart';
 import 'widgets.dart';
+
 class VaultView extends StatelessWidget {
   final VeilAppController controller;
   final VoidCallback onFindPeers;
@@ -23,7 +25,7 @@ class VaultView extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       children: [
         Panel(
-          title: 'Private Vault',
+          title: VeilStrings.navVault,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -32,7 +34,7 @@ class VaultView extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                'Next privacy rotation in $hours:$minutes:$seconds',
+                'Next rotation: $hours:$minutes:$seconds',
                 style: Theme.of(
                   context,
                 ).textTheme.bodyMedium?.copyWith(color: Colors.white70),
@@ -48,7 +50,7 @@ class VaultView extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      'Smooth transition window active',
+                      'Transition active',
                       style: Theme.of(
                         context,
                       ).textTheme.bodySmall?.copyWith(color: Colors.white60),
@@ -73,8 +75,8 @@ class VaultView extends StatelessWidget {
                           ),
                         );
                       },
-                      icon: const Icon(Icons.vpn_key),
-                      label: const Text('Copy Private ID'),
+                      icon: const Icon(Icons.copy),
+                      label: const Text('Copy ID'),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -182,27 +184,28 @@ class _ContactAddRowState extends State<_ContactAddRow> {
     return Row(
       children: [
         Expanded(
-          child: TextField(
+          child: InputField(
+            label: 'Add contact (tag:HEX or HEX)',
             controller: _controller,
-            decoration: const InputDecoration(
-              labelText: 'Add contact ID',
-              hintText: 'tag:HEX or HEX',
-            ),
           ),
         ),
         const SizedBox(width: 8),
-        IconButton(
-          onPressed: () {
-            widget.controller.addPrivateContact(_controller.text);
-            _controller.clear();
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Private contact added'),
-                behavior: SnackBarBehavior.floating,
-              ),
-            );
-          },
-          icon: const Icon(Icons.add_circle_outline),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: IconButton.filled(
+            onPressed: () {
+              widget.controller.addPrivateContact(_controller.text);
+              _controller.clear();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Private contact added'),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            },
+            icon: const Icon(Icons.add),
+            tooltip: 'Add',
+          ),
         ),
       ],
     );

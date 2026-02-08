@@ -5,6 +5,7 @@ import 'package:flutter_blurhash/flutter_blurhash.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
 import '../app_controller.dart';
+import '../helpers/strings.dart';
 import '../helpers/hashtags.dart';
 import '../helpers/scan_helpers.dart';
 import '../helpers/media_viewer.dart';
@@ -90,69 +91,62 @@ class _EmptyFeedState extends StatelessWidget {
   Widget build(BuildContext context) {
     final isOffline = status == 'OFFLINE';
     return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF0B1220), Color(0xFF0F172A)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF1F2937)),
-      ),
+      padding: const EdgeInsets.all(32),
+      alignment: Alignment.center,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Row(
-            children: [
-              Icon(
-                isOffline ? Icons.cloud_off : Icons.auto_awesome,
-                color: Colors.white70,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                isOffline ? 'Feed offline' : 'Feed ready',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            isOffline
-                ? 'Connect to a peer to start receiving posts.'
-                : 'No posts yet. Join channels to fill your feed.',
-            style: Theme.of(context)
-                .textTheme
-                .bodyMedium
-                ?.copyWith(color: Colors.white70),
+          Icon(
+            isOffline ? Icons.cloud_off : Icons.auto_awesome,
+            size: 48,
+            color: Theme.of(context).colorScheme.primary.withOpacity(0.8),
           ),
           const SizedBox(height: 16),
-          Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            children: [
-              FilledButton.icon(
+          Text(
+            isOffline ? VeilStrings.feedEmptyOffline : VeilStrings.feedEmptyReady,
+            style: Theme.of(context).textTheme.headlineSmall,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            isOffline
+                ? VeilStrings.feedConnectPrompt
+                : VeilStrings.feedEmptyPrompt,
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: Theme.of(context).textTheme.bodySmall?.color,
+                ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 32),
+          if (!isOffline)
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
                 onPressed: onQuickStart,
-                icon: const Icon(Icons.auto_awesome),
-                label: const Text('Quick Start'),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+                icon: const Icon(Icons.rocket_launch),
+                label: const Text(VeilStrings.quickStart),
               ),
-              OutlinedButton.icon(
+            ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 8,
+            alignment: WrapAlignment.center,
+            children: [
+              TextButton.icon(
                 onPressed: () => openScanner(
                   context,
                   onResult: controller.handleScanValue,
                 ),
-                icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('Scan VPS'),
+                icon: const Icon(Icons.qr_code_scanner, size: 18),
+                label: const Text(VeilStrings.scanCode),
               ),
-              OutlinedButton.icon(
-                onPressed: onOpenNetwork,
-                icon: const Icon(Icons.network_check),
-                label: const Text('Network'),
-              ),
-              OutlinedButton.icon(
+              TextButton.icon(
                 onPressed: onOpenDiscovery,
-                icon: const Icon(Icons.explore),
-                label: const Text('Discover'),
+                icon: const Icon(Icons.explore, size: 18),
+                label: const Text(VeilStrings.explore),
               ),
             ],
           ),
@@ -178,47 +172,52 @@ class PostCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (entry.isGhost) {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: Container(
-          height: 160,
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF0F172A), Color(0xFF0B1220)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFF1F2937)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.22),
-                blurRadius: 12,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              BlurPlaceholder(blurHash: entry.blurHash),
-              Align(
-                alignment: Alignment.bottomRight,
-                child: ShardProgressRing(
-                  have: entry.shardsHave,
-                  total: entry.shardsTotal,
+    return ValueListenableBuilder<ShardProgress>(
+      valueListenable: entry.progressNotifier,
+      builder: (context, progress, _) {
+        if (entry.isGhost) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Container(
+              height: 160,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF0F172A), Color(0xFF0B1220)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFF1F2937)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.22),
+                    blurRadius: 12,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
-      );
-    }
-    return _PostCardAnimated(
-      controller: controller,
-      entry: entry,
-      showProtocolDetails: showProtocolDetails,
-      onTapHashtag: onTapHashtag,
+              child: Stack(
+                children: [
+                  BlurPlaceholder(blurHash: entry.blurHash),
+                  Align(
+                    alignment: Alignment.bottomRight,
+                    child: ShardProgressRing(
+                      have: progress.have,
+                      total: progress.total,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        return _PostCardAnimated(
+          controller: controller,
+          entry: entry,
+          showProtocolDetails: showProtocolDetails,
+          onTapHashtag: onTapHashtag,
+        );
+      },
     );
   }
 }
@@ -235,14 +234,16 @@ class _TrustActions extends StatelessWidget {
     final isTrusted = tier == TrustTier.trusted;
     final isMuted = tier == TrustTier.muted;
     final isBlocked = tier == TrustTier.blocked;
+
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
         IconButton(
           visualDensity: VisualDensity.compact,
           icon: Icon(
             isTrusted ? Icons.favorite : Icons.favorite_border,
-            color: isTrusted ? Colors.greenAccent : Colors.white70,
-            size: 18,
+            color: isTrusted ? Colors.redAccent : Colors.white70,
+            size: 20,
           ),
           onPressed: () {
             if (isTrusted) {
@@ -253,37 +254,64 @@ class _TrustActions extends StatelessWidget {
           },
           tooltip: isTrusted ? 'Unfollow' : 'Follow',
         ),
-        IconButton(
-          visualDensity: VisualDensity.compact,
-          icon: Icon(
-            isMuted ? Icons.volume_off : Icons.volume_up,
-            color: isMuted ? Colors.amber : Colors.white70,
-            size: 18,
-          ),
-          onPressed: () {
-            if (isMuted) {
-              controller.unmuteUser(authorKey);
-            } else {
-              controller.muteUser(authorKey);
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert, size: 20, color: Colors.white70),
+          tooltip: 'More options',
+          onSelected: (value) {
+            switch (value) {
+              case 'mute':
+                if (isMuted) {
+                  controller.unmuteUser(authorKey);
+                } else {
+                  controller.muteUser(authorKey);
+                }
+                break;
+              case 'block':
+                if (isBlocked) {
+                  controller.unblockUser(authorKey);
+                } else {
+                  controller.blockUser(authorKey);
+                }
+                break;
             }
           },
-          tooltip: isMuted ? 'Unmute' : 'Mute',
-        ),
-        IconButton(
-          visualDensity: VisualDensity.compact,
-          icon: Icon(
-            isBlocked ? Icons.block : Icons.block_outlined,
-            color: isBlocked ? Colors.redAccent : Colors.white70,
-            size: 18,
-          ),
-          onPressed: () {
-            if (isBlocked) {
-              controller.unblockUser(authorKey);
-            } else {
-              controller.blockUser(authorKey);
-            }
-          },
-          tooltip: isBlocked ? 'Unblock' : 'Block',
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              value: 'mute',
+              child: Row(
+                children: [
+                  Icon(
+                    isMuted ? Icons.volume_up : Icons.volume_off,
+                    size: 18,
+                    color: Theme.of(context).iconTheme.color,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(isMuted ? 'Unmute' : 'Mute'),
+                ],
+              ),
+            ),
+            PopupMenuItem(
+              value: 'block',
+              child: Row(
+                children: [
+                  Icon(
+                    isBlocked ? Icons.circle_outlined : Icons.block,
+                    size: 18,
+                    color: isBlocked
+                        ? Theme.of(context).iconTheme.color
+                        : Colors.redAccent,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    isBlocked ? 'Unblock' : 'Block',
+                    style: TextStyle(
+                      color: isBlocked ? null : Colors.redAccent,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -485,8 +513,8 @@ class _PostCardAnimatedState extends State<_PostCardAnimated>
                     const SizedBox(width: 8),
                     Text(
                       widget.showProtocolDetails
-                          ? 'Collecting shards'
-                          : 'Securing content…',
+                          ? VeilStrings.collectingShards
+                          : VeilStrings.loadingContent,
                       style: Theme.of(
                         context,
                       ).textTheme.bodySmall?.copyWith(color: Colors.white70),

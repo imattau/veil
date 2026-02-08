@@ -360,7 +360,7 @@ fn current_epoch() -> Epoch {
 
 fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
     let cleaned = hex.trim().trim_start_matches("0x").replace(':', "");
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return Err("invalid hex length".to_string());
     }
     let mut out = Vec::with_capacity(cleaned.len() / 2);

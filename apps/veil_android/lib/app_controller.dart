@@ -58,7 +58,7 @@ class VeilAppController extends ChangeNotifier {
   String recoveryPhrase = '';
   String namespaceChoice = 'Public Square';
   String peerId = 'android-client';
-  String wsUrl = 'ws://127.0.0.1:9001';
+  String wsUrl = 'ws://10.0.2.2:9001';
   final List<String> _wsEndpoints = [];
   String tagHex = '';
   String channelLabel = '';
@@ -80,6 +80,7 @@ class VeilAppController extends ChangeNotifier {
   int torSocksPort = 9050;
   String quicTrustedCertHex = '';
   bool _quicAutoPinInFlight = false;
+  bool _quicSupported = false;
 
   VeilClient? _client;
   VeilLane? _lane;
@@ -121,6 +122,7 @@ class VeilAppController extends ChangeNotifier {
   int get maxPublishQueue => _maxPublishQueue;
   String get quicEndpointValue => quicEndpoint;
   List<String> get quicEndpoints => List.unmodifiable(_quicEndpoints);
+  bool get isQuicSupported => _quicSupported;
   bool get torEnabled => _torEnabled;
   String get torWsUrlValue => torWsUrl;
   String get torSocksHostValue => torSocksHost;
@@ -138,6 +140,22 @@ class VeilAppController extends ChangeNotifier {
     return null;
   }
 
+  String get wsLastError {
+    final lane = _lane;
+    if (lane is WebSocketLane) {
+      return lane.lastError ?? '';
+    }
+    if (lane is MultiLane) {
+      // Check first WebSocketLane found
+      for (final sub in lane.lanes) {
+        if (sub is WebSocketLane && sub.lastError != null) {
+          return sub.lastError!;
+        }
+      }
+    }
+    return '';
+  }
+
   String? _normalizeWsEndpoint(String raw) {
     final trimmed = raw.trim();
     if (trimmed.isEmpty) return null;
@@ -147,6 +165,7 @@ class VeilAppController extends ChangeNotifier {
       if (uri == null || uri.host.isEmpty) return null;
       return Uri(
         scheme: uri.scheme,
+        userInfo: uri.userInfo,
         host: uri.host,
         port: uri.hasPort && uri.port != 0 ? uri.port : null,
         path: uri.path.isEmpty ? '/ws' : uri.path,
@@ -161,6 +180,7 @@ class VeilAppController extends ChangeNotifier {
       final path = (uri.path.isEmpty || uri.path == '/') ? '/ws' : uri.path;
       final normalized = Uri(
         scheme: scheme,
+        userInfo: uri.userInfo,
         host: uri.host,
         port: port,
         path: path,
@@ -251,8 +271,13 @@ class VeilAppController extends ChangeNotifier {
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
+    _quicSupported = await QuicLane.isSupported();
+    if (!_quicSupported) {
+      _events.insert(0, 'QUIC not supported (missing lib or arch mismatch)');
+    }
     await _loadPrefs();
     await _openDb();
+    await _loadAvatar();
     await _loadPublishQueue();
     await _loadFeedEntries();
     await _loadPrivateMessages();
@@ -268,6 +293,60 @@ class VeilAppController extends ChangeNotifier {
     _healthTimer?.cancel();
     _db?.close();
     super.dispose();
+  }
+
+  // ... (rest of class)
+
+  Future<void> _loadAvatar() async {
+    final db = _db;
+    if (db == null) return;
+    final rows = await db.query('profile_data');
+    if (rows.isEmpty) return;
+    
+    Uint8List? bytes;
+    String mime = 'image/*';
+    String name = 'avatar';
+
+    for (final row in rows) {
+      final key = row['key'] as String;
+      final val = row['value'] as List<int>;
+      if (key == 'avatar_bytes') {
+        bytes = Uint8List.fromList(val);
+      } else if (key == 'avatar_mime') {
+        mime = utf8.decode(val);
+      } else if (key == 'avatar_name') {
+        name = utf8.decode(val);
+      }
+    }
+
+    if (bytes != null) {
+      _profileAvatar = Attachment(
+        name: name,
+        mime: mime,
+        bytes: bytes,
+        hashHex: sha256.convert(bytes).toString(),
+        size: bytes.length,
+        isImage: true,
+        isVideo: false,
+        chunkCount: (bytes.length / (32 * 1024)).ceil(),
+      );
+    }
+  }
+
+  Future<void> _persistAvatar() async {
+    final db = _db;
+    if (db == null) return;
+    final avatar = _profileAvatar;
+    if (avatar == null) {
+      await db.delete('profile_data', where: 'key LIKE "avatar_%"');
+      return;
+    }
+    await db.insert('profile_data', {'key': 'avatar_bytes', 'value': avatar.bytes},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('profile_data', {'key': 'avatar_mime', 'value': utf8.encode(avatar.mime)},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.insert('profile_data', {'key': 'avatar_name', 'value': utf8.encode(avatar.name)},
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<void> _startLocalRelay() async {
@@ -345,12 +424,14 @@ class VeilAppController extends ChangeNotifier {
       isVideo: false,
       chunkCount: splitIntoFileChunks(bytes).length,
     );
+    await _persistAvatar();
     _persistPrefs();
     notifyListeners();
   }
 
   void clearProfileAvatar() {
     _profileAvatar = null;
+    _persistAvatar();
     _persistPrefs();
     notifyListeners();
   }
@@ -622,6 +703,9 @@ class VeilAppController extends ChangeNotifier {
     );
     await _db!.execute(
       'CREATE TABLE IF NOT EXISTS private_messages (id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at INTEGER)',
+    );
+    await _db!.execute(
+      'CREATE TABLE IF NOT EXISTS profile_data (key TEXT PRIMARY KEY, value BLOB)',
     );
   }
 
@@ -1052,6 +1136,9 @@ class VeilAppController extends ChangeNotifier {
       }
     }
   }
+
+  String tagHexFor(String label) =>
+      _channelTags[_normalizeChannelLabel(label)] ?? '';
 
   Future<void> addSubscription(String value) async {
     final cleaned = value.trim();
@@ -1581,7 +1668,7 @@ class VeilAppController extends ChangeNotifier {
     final quicTargets = _quicEndpoints.isNotEmpty
         ? List<String>.from(_quicEndpoints)
         : (quicEndpoint.isNotEmpty ? [quicEndpoint] : <String>[]);
-    if (quicTargets.isNotEmpty && await QuicLane.isSupported()) {
+    if (quicTargets.isNotEmpty && _quicSupported) {
       final lanes = quicTargets.map((endpoint) {
         final cert = _quicCertsByEndpoint[endpoint] ?? '';
         return QuicLane(
@@ -1641,14 +1728,12 @@ class VeilAppController extends ChangeNotifier {
         onShardMeta: (peer, meta) {
           _events.insert(0, 'Shard from $peer tag=${meta.tagHex}');
           _updateProgressFromShard(meta);
-          _notify();
         },
         onReconstructable: (root, have, need) {
           if (need > have && have >= need - 1) {
             _events.insert(0, 'Requesting missing shard for $root');
           }
           _markRequesting(root, need, have);
-          _notify();
         },
         onPayload: (root, payload) {
           _events.insert(0, 'Payload $root (${payload.length} bytes)');
@@ -1861,7 +1946,16 @@ class VeilAppController extends ChangeNotifier {
     return mentions.toList();
   }
 
-  Future<void> _drainPublishQueue() async {
+  final _errorController = StreamController<String>.broadcast();
+  Stream<String> get onUserError => _errorController.stream;
+
+  void _reportError(String message) {
+    _events.insert(0, message);
+    _errorController.add(message);
+    notifyListeners();
+  }
+
+  void _drainPublishQueue() async {
     if (_publishInFlight) return;
     final client = _client;
     if (client == null) return;
@@ -1878,7 +1972,11 @@ class VeilAppController extends ChangeNotifier {
           _publishQueue.enqueue(next);
           _publishAttempts += 1;
           final delayMs = _backoffForAttempt(_publishAttempts);
-          _events.insert(0, 'Publish retry in ${delayMs}ms');
+          if (_publishAttempts >= 3) {
+            _reportError('Publish failed (retry $_publishAttempts)');
+          } else {
+             _events.insert(0, 'Publish retry in ${delayMs}ms');
+          }
           notifyListeners();
           await Future.delayed(Duration(milliseconds: delayMs));
         }
@@ -1928,7 +2026,6 @@ class VeilAppController extends ChangeNotifier {
       }
     }
     _refreshVisibleFeed();
-    _notify();
   }
 
   void _markRequesting(String root, int need, int have) {

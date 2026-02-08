@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:veil_sdk/veil_sdk.dart';
 
 import 'app_controller.dart';
+import 'helpers/strings.dart';
 import 'ui/compose.dart';
 import 'ui/channels.dart';
 import 'ui/discovery.dart';
@@ -12,7 +15,9 @@ import 'ui/settings.dart';
 import 'ui/vault.dart';
 import 'ui/widgets.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await const VeilBridge().init();
   runApp(const VeilAndroidApp());
 }
 
@@ -38,7 +43,7 @@ class VeilAndroidApp extends StatelessWidget {
       surfaceContainerHighest: const Color(0xFFE2E8F0),
     );
     return MaterialApp(
-      title: 'VEIL Android',
+      title: VeilStrings.appName,
       themeMode: ThemeMode.system,
       theme: _buildTheme(colorSchemeLight, Brightness.light),
       darkTheme: _buildTheme(colorSchemeDark, Brightness.dark),
@@ -151,15 +156,27 @@ class _RootShellState extends State<RootShell> {
   int _tabIndex = 0;
   bool _showProtocolDetails = false;
   late final Future<void> _initFuture;
+  late final StreamSubscription<String> _errorSub;
 
   @override
   void initState() {
     super.initState();
     _initFuture = _controller.init();
+    _errorSub = _controller.onUserError.listen((message) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ),
+      );
+    });
   }
 
   @override
   void dispose() {
+    _errorSub.cancel();
     _controller.dispose();
     super.dispose();
   }
@@ -303,7 +320,9 @@ class _RootShellState extends State<RootShell> {
                           overflow: TextOverflow.ellipsis,
                         ),
                         Text(
-                          _controller.namespaceChoice,
+                          _controller.channelLabel.isNotEmpty
+                              ? '#${_controller.channelLabel}'
+                              : _controller.namespaceChoice,
                           style: Theme.of(context)
                               .textTheme
                               .bodySmall
@@ -337,12 +356,16 @@ class _RootShellState extends State<RootShell> {
                 },
               ),
               Chip(
-                label: Text(_controller.connectionStrengthLabel),
+                label: Text(
+                  _controller.connectionStrengthLabel,
+                  style: const TextStyle(color: Colors.white),
+                ),
                 backgroundColor: _controller.connectionStatus == 'LIVE'
-                    ? const Color(0xFF134E4A)
+                    ? const Color(0xFF047857) // Emerald 700
                     : _controller.connectionStatus == 'DEGRADED'
-                        ? const Color(0xFF3F2F0B)
-                        : const Color(0xFF3B1D1D),
+                        ? const Color(0xFFB45309) // Amber 700
+                        : const Color(0xFFB91C1C), // Red 700
+                side: BorderSide.none,
               ),
               const SizedBox(width: 8),
               IconButton(
@@ -396,23 +419,23 @@ class _RootShellState extends State<RootShell> {
             destinations: const [
               NavigationDestination(
                 icon: Icon(Icons.dynamic_feed),
-                label: '',
+                label: VeilStrings.navFeed,
               ),
               NavigationDestination(
                 icon: Icon(Icons.tag),
-                label: '',
+                label: VeilStrings.navChannels,
               ),
               NavigationDestination(
                 icon: Icon(Icons.lock),
-                label: '',
+                label: VeilStrings.navVault,
               ),
               NavigationDestination(
                 icon: Icon(Icons.network_check),
-                label: '',
+                label: VeilStrings.navNetwork,
               ),
               NavigationDestination(
                 icon: Icon(Icons.explore),
-                label: '',
+                label: VeilStrings.navDiscover,
               ),
             ],
           ),

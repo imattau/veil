@@ -55,58 +55,78 @@ class SettingsSheet extends StatelessWidget {
                   controller: scrollController,
                   padding: const EdgeInsets.all(16),
                   children: [
-                    const SizedBox(height: 8),
-                    SwitchListTile(
-                      value: showProtocolDetails,
-                      onChanged: onToggleDetails,
-                      title: const Text('Show protocol details'),
-                      subtitle: const Text(
-                        'Reveal object_root and lane metadata.',
-                      ),
-                    ),
-                    SwitchListTile(
-                      value: ghostMode,
-                      onChanged: onToggleGhostMode,
-                      title: const Text('Ghost mode'),
-                      subtitle: const Text('Prefer privacy lanes (preview).'),
-                    ),
-                    SwitchListTile(
-                      value: requireSignedPublic,
-                      onChanged: onToggleRequireSigned,
-                      title: const Text('Require signed public posts'),
-                      subtitle: const Text(
-                        'Drop unsigned objects in public namespaces.',
-                      ),
-                    ),
-                    TextFormField(
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Clock skew seconds',
-                        helperText:
-                            'Adjust for device clock drift (max +/-3600).',
-                      ),
-                      initialValue: clockSkewSeconds.toString(),
-                      onFieldSubmitted: onClockSkewChanged,
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Cache entry limit',
-                        helperText: 'Approx shard cache size cap.',
-                      ),
-                      initialValue: maxCacheEntries.toString(),
-                      onFieldSubmitted: onMaxCacheEntriesChanged,
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Publish queue limit',
-                        helperText: 'Max queued objects pending send.',
-                      ),
-                      initialValue: maxPublishQueue.toString(),
-                      onFieldSubmitted: onMaxPublishQueueChanged,
+                    ExpansionTile(
+                      title: const Text('Advanced Settings'),
+                      children: [
+                        SwitchListTile(
+                          value: showProtocolDetails,
+                          onChanged: onToggleDetails,
+                          title: const Text('Show protocol details'),
+                          subtitle: const Text(
+                            'Reveal object_root and lane metadata.',
+                          ),
+                        ),
+                        SwitchListTile(
+                          value: ghostMode,
+                          onChanged: onToggleGhostMode,
+                          title: const Text('Ghost mode'),
+                          subtitle: const Text('Prefer privacy lanes (preview).'),
+                        ),
+                        SwitchListTile(
+                          value: requireSignedPublic,
+                          onChanged: onToggleRequireSigned,
+                          title: const Text('Require signed public posts'),
+                          subtitle: const Text(
+                            'Drop unsigned objects in public namespaces.',
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          child: TextFormField(
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Clock skew seconds',
+                              helperText:
+                                  'Adjust for device clock drift (max +/-3600).',
+                            ),
+                            initialValue: clockSkewSeconds.toString(),
+                            onFieldSubmitted: onClockSkewChanged,
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          child: TextFormField(
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Cache entry limit',
+                              helperText: 'Approx shard cache size cap.',
+                            ),
+                            initialValue: maxCacheEntries.toString(),
+                            onFieldSubmitted: onMaxCacheEntriesChanged,
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          child: TextFormField(
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Publish queue limit',
+                              helperText: 'Max queued objects pending send.',
+                            ),
+                            initialValue: maxPublishQueue.toString(),
+                            onFieldSubmitted: onMaxPublishQueueChanged,
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 16),
                     Text(

@@ -165,35 +165,39 @@ class ShardProgressRing extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final progress = total == 0 ? 0.0 : have / total;
-    return Container(
-      margin: const EdgeInsets.all(12),
-      padding: const EdgeInsets.all(6),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0B1220).withOpacity(0.85),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFF1F2937)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 28,
-            height: 28,
-            child: CircularProgressIndicator(
-              value: progress,
-              strokeWidth: 3,
-              color: const Color(0xFF34D399),
-              backgroundColor: const Color(0xFF1F2937),
+    return Semantics(
+      label: 'Loading progress',
+      value: '${(progress * 100).toInt()} percent',
+      child: Container(
+        margin: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0B1220).withOpacity(0.85),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: const Color(0xFF1F2937)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(
+                value: progress,
+                strokeWidth: 3,
+                color: const Color(0xFF34D399),
+                backgroundColor: const Color(0xFF1F2937),
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            '$have/$total',
-            style: Theme.of(
-              context,
-            ).textTheme.labelMedium?.copyWith(color: Colors.white70),
-          ),
-        ],
+            const SizedBox(width: 8),
+            Text(
+              '$have/$total',
+              style: Theme.of(
+                context,
+              ).textTheme.labelMedium?.copyWith(color: Colors.white70),
+            ),
+          ],
+        ),
       ),
     );
   }

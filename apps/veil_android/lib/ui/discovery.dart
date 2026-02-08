@@ -35,6 +35,7 @@ class _DiscoveryViewState extends State<DiscoveryView> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final controller = widget.controller;
     final rawEndpoint = _peerController.text.trim();
     final lowerEndpoint = rawEndpoint.toLowerCase();
@@ -43,51 +44,52 @@ class _DiscoveryViewState extends State<DiscoveryView> {
       padding: const EdgeInsets.all(16),
       children: [
         Panel(
-          title: 'Suggested Feeds',
+          title: 'Suggested Communities',
           child: Column(
-            children: controller.suggestedFeeds
-                .map(
-                  (feed) => ListTile(
-                    dense: true,
-                    title: Text(feed),
-                    subtitle: Text(
-                      controller.trustedFeeds.contains(feed)
-                          ? 'Trusted by you'
-                          : 'Bootstrap recommendation',
-                    ),
-                    trailing: controller.trustedFeeds.contains(feed)
-                        ? const Icon(Icons.verified, color: Color(0xFF34D399))
-                        : const Icon(Icons.add_circle_outline),
-                    onTap: () => controller.toggleTrustedFeed(feed),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Join communities to start receiving specific topic feeds.',
+                style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
+              ),
+              const SizedBox(height: 12),
+              ...controller.suggestedFeeds.map(
+                (feed) => ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('#$feed'),
+                  subtitle: Text(
+                    controller.extraTags.contains(controller.tagHexFor(feed))
+                        ? 'Joined'
+                        : 'Tap to join',
                   ),
-                )
-                .toList(),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Panel(
-          title: 'Suggested Channels',
-          child: Column(
-            children: controller.suggestedFeeds
-                .map(
-                  (feed) => ListTile(
-                    dense: true,
-                    title: Text(feed),
-                    subtitle: const Text('Tap to add as a channel'),
-                    trailing: const Icon(Icons.add),
-                    onTap: () async {
+                  trailing: controller.extraTags.contains(controller.tagHexFor(feed))
+                      ? const Icon(Icons.check_circle, color: Color(0xFF34D399))
+                      : const Icon(Icons.add_circle_outline),
+                  onTap: () async {
+                    if (controller.extraTags.contains(controller.tagHexFor(feed))) {
+                      controller.removeChannelLabel(feed);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Left #$feed'),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    } else {
                       await controller.addChannelLabel(feed);
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                          content: Text('Added channel $feed'),
+                          content: Text('Joined #$feed'),
                           behavior: SnackBarBehavior.floating,
                         ),
                       );
-                    },
-                  ),
-                )
-                .toList(),
+                    }
+                    setState(() {});
+                  },
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 16),

@@ -6,6 +6,27 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
+class ShardProgress {
+  final int have;
+  final int total;
+  final bool requesting;
+  final bool reconstructed;
+
+  const ShardProgress({
+    required this.have,
+    required this.total,
+    required this.requesting,
+    required this.reconstructed,
+  });
+
+  factory ShardProgress.initial(int have, int total) => ShardProgress(
+        have: have,
+        total: total,
+        requesting: false,
+        reconstructed: false,
+      );
+}
+
 class FeedEntry {
   final String id;
   final String author;
@@ -14,13 +35,14 @@ class FeedEntry {
   final String? blurHash;
   final List<Attachment> attachments;
   final List<LinkPreview> linkPreviews;
-  bool reconstructed;
+  bool _reconstructed;
   bool isGhost;
   final DateTime timestamp;
-  int shardsHave;
-  int shardsTotal;
-  bool requestingMissing;
+  int _shardsHave;
+  int _shardsTotal;
+  bool _requestingMissing;
   bool fadedIn;
+  final ValueNotifier<ShardProgress> progressNotifier;
 
   FeedEntry({
     required this.id,
@@ -30,23 +52,71 @@ class FeedEntry {
     this.blurHash,
     this.attachments = const [],
     List<LinkPreview> linkPreviews = const [],
-    required this.reconstructed,
+    required bool reconstructed,
     required this.timestamp,
     this.isGhost = false,
-    this.shardsHave = 0,
-    this.shardsTotal = 16,
-    this.requestingMissing = false,
+    int shardsHave = 0,
+    int shardsTotal = 16,
+    bool requestingMissing = false,
     this.fadedIn = false,
-  }) : linkPreviews = linkPreviews;
+  })  : linkPreviews = linkPreviews,
+        _reconstructed = reconstructed,
+        _shardsHave = shardsHave,
+        _shardsTotal = shardsTotal,
+        _requestingMissing = requestingMissing,
+        progressNotifier = ValueNotifier(ShardProgress(
+          have: shardsHave,
+          total: shardsTotal,
+          requesting: requestingMissing,
+          reconstructed: reconstructed,
+        ));
+
+  bool get reconstructed => _reconstructed;
+  int get shardsHave => _shardsHave;
+  int get shardsTotal => _shardsTotal;
+  bool get requestingMissing => _requestingMissing;
+
+  set reconstructed(bool value) {
+    if (_reconstructed == value) return;
+    _reconstructed = value;
+    _notify();
+  }
+
+  set shardsHave(int value) {
+    if (_shardsHave == value) return;
+    _shardsHave = value;
+    _notify();
+  }
+
+  set shardsTotal(int value) {
+    if (_shardsTotal == value) return;
+    _shardsTotal = value;
+    _notify();
+  }
+
+  set requestingMissing(bool value) {
+    if (_requestingMissing == value) return;
+    _requestingMissing = value;
+    _notify();
+  }
+
+  void _notify() {
+    progressNotifier.value = ShardProgress(
+      have: _shardsHave,
+      total: _shardsTotal,
+      requesting: _requestingMissing,
+      reconstructed: _reconstructed,
+    );
+  }
 
   factory FeedEntry.empty() => FeedEntry(
-    id: 'empty',
-    author: '',
-    authorKey: '',
-    body: '',
-    reconstructed: false,
-    timestamp: DateTime.now(),
-  );
+        id: 'empty',
+        author: '',
+        authorKey: '',
+        body: '',
+        reconstructed: false,
+        timestamp: DateTime.now(),
+      );
 }
 
 class Attachment {

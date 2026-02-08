@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:veil_sdk/veil_sdk.dart';
 
 import '../app_controller.dart';
+import '../helpers/strings.dart';
 import '../helpers/scan_helpers.dart';
 import 'widgets.dart';
 
@@ -112,6 +113,10 @@ class _NetworkViewState extends State<NetworkView> {
                 label: 'Paste profile, domain, or endpoint',
                 controller: _wsAddController,
                 onChanged: (_) {},
+              ),
+              const Text(
+                'e.g. wss://user:pass@node.com/ws',
+                style: TextStyle(fontSize: 10, color: Colors.white38),
               ),
               const SizedBox(height: 8),
               Row(
@@ -311,7 +316,7 @@ class _NetworkViewState extends State<NetworkView> {
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
-                    'QUIC is idle until a certificate is pinned.',
+                    VeilStrings.quicInstruction,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: Colors.orangeAccent,
                     ),
@@ -490,6 +495,15 @@ class _LaneStatusNote extends StatelessWidget {
     if (controller.quicEndpointValue.isEmpty) {
       return const SizedBox.shrink();
     }
+    if (!controller.isQuicSupported) {
+      return Text(
+        'QUIC not supported on this device',
+        style: Theme.of(context)
+            .textTheme
+            .bodySmall
+            ?.copyWith(color: Colors.redAccent),
+      );
+    }
     if (quic == null) {
       return Text(
         'QUIC pending. Pin the certificate to enable.',
@@ -528,6 +542,7 @@ class _LaneHealthTile extends StatelessWidget {
   final String label;
   final bool enabled;
   final LaneHealthSnapshot? snapshot;
+  final String? lastError;
 
   const _LaneHealthTile({
     required this.title,
@@ -535,6 +550,7 @@ class _LaneHealthTile extends StatelessWidget {
     required this.label,
     required this.enabled,
     required this.snapshot,
+    this.lastError,
   });
 
   @override
@@ -549,25 +565,104 @@ class _LaneHealthTile extends StatelessWidget {
     final sendTotal = sendOk + sendErr;
     final okRatio = sendTotal == 0 ? 1.0 : sendOk / sendTotal;
 
+    Color statusColor = Colors.grey;
+    String statusText = 'Disabled';
+
+    if (enabled) {
+      if (sendErr > 0 && sendOk == 0) {
+        statusColor = Colors.redAccent;
+        statusText = 'Failing';
+      } else if (okRatio < 0.8) {
+        statusColor = Colors.orangeAccent;
+        statusText = 'Degraded';
+      } else if (sendOk > 0) {
+        statusColor = Colors.greenAccent;
+        statusText = 'Active';
+      } else {
+        statusColor = Colors.blueAccent;
+        statusText = 'Standby';
+      }
+    }
+
     return ListTile(
       dense: true,
-      leading: Icon(icon, size: 18),
-      title: Text(title),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      leading: Icon(icon, size: 20, color: statusColor),
+      title: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(enabled ? 'Healthy' : 'Idle'),
-          const SizedBox(height: 4),
-          Text(
-            'ok ${(okRatio * 100).toStringAsFixed(0)}% · '
-            'queued $queued · in $inbound · drop $dropped · retry $reconnects',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+          Flexible(
+            child: Text(
+              title,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: statusColor.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: statusColor.withOpacity(0.3)),
+            ),
+            child: Text(
+              statusText.toUpperCase(),
+              style: TextStyle(
+                color: statusColor,
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ],
       ),
-      trailing: Text(label),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 4),
+          Text(
+            'Success Rate: ${(okRatio * 100).toStringAsFixed(0)}% · '
+            'Inbound: $inbound · Retries: $reconnects',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: Colors.white60),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 2,
+          ),
+          if (queued > 0 || dropped > 0)
+            Text(
+              'Queued: $queued · Dropped: $dropped',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: Colors.orangeAccent.withOpacity(0.8)),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          if (lastError != null && lastError!.isNotEmpty)
+            InkWell(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: lastError!));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Error copied')),
+                );
+              },
+              child: Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Error: $lastError',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.redAccent),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 4,
+                ),
+              ),
+            ),
+        ],
+      ),
+      trailing: Text(
+        label,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white38),
+      ),
     );
   }
 }
@@ -637,46 +732,49 @@ void _openDiagnostics(BuildContext context, VeilAppController controller) {
           color: Color(0xFF0B1220),
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Panel(
-              title: 'Lane diagnostics',
-              child: Column(
-                children: [
-                  _LaneStatusNote(controller: controller),
-                  _LaneHealthTile(
-                    title: 'QUIC Lane',
-                    icon: Icons.bolt,
-                    label: 'QUIC',
-                    enabled: controller.quicEndpointValue.isNotEmpty,
-                    snapshot: controller.quicLaneHealth,
-                  ),
-                  _LaneHealthTile(
-                    title: 'WebSocket Lane',
-                    icon: controller.connected ? Icons.wifi : Icons.wifi_off,
-                    label: 'WS',
-                    enabled: controller.connected,
-                    snapshot: controller.fastLaneHealth,
-                  ),
-                  _LaneHealthTile(
-                    title: 'Tor Lane',
-                    icon: Icons.shield,
-                    label: 'Tor',
-                    enabled: controller.torEnabled,
-                    snapshot: controller.torLaneHealth,
-                  ),
-                  _LaneHealthTile(
-                    title: 'Bluetooth Lane',
-                    icon: Icons.bluetooth,
-                    label: 'BLE',
-                    enabled: controller.bleEnabled,
-                    snapshot: controller.bleLaneHealth,
-                  ),
-                ],
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Panel(
+                title: 'Lane diagnostics',
+                child: Column(
+                  children: [
+                    _LaneStatusNote(controller: controller),
+                    _LaneHealthTile(
+                      title: 'QUIC Lane',
+                      icon: Icons.bolt,
+                      label: 'QUIC',
+                      enabled: controller.quicEndpointValue.isNotEmpty &&
+                          controller.isQuicSupported,
+                      snapshot: controller.quicLaneHealth,
+                    ),
+                                      _LaneHealthTile(
+                                        title: 'WebSocket Lane',
+                                        icon: controller.connected ? Icons.wifi : Icons.wifi_off,
+                                        label: 'WS',
+                                        enabled: controller.connected,
+                                        snapshot: controller.fastLaneHealth,
+                                        lastError: controller.wsLastError,
+                                      ),                    _LaneHealthTile(
+                      title: 'Tor Lane',
+                      icon: Icons.shield,
+                      label: 'Tor',
+                      enabled: controller.torEnabled,
+                      snapshot: controller.torLaneHealth,
+                    ),
+                    _LaneHealthTile(
+                      title: 'Bluetooth Lane',
+                      icon: Icons.bluetooth,
+                      label: 'BLE',
+                      enabled: controller.bleEnabled,
+                      snapshot: controller.bleLaneHealth,
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
     },

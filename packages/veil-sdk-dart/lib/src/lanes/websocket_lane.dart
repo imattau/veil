@@ -1,5 +1,7 @@
 import "dart:async";
+import "dart:convert";
 import "dart:io";
+import "dart:typed_data";
 
 import "package:web_socket_channel/web_socket_channel.dart";
 import "package:web_socket_channel/io.dart";
@@ -9,6 +11,7 @@ import "lane.dart";
 class WebSocketLane implements VeilLane {
   final Uri url;
   final String peerId;
+  final String? trustedPeerCertHex;
   final Duration reconnectInitial;
   final Duration reconnectMax;
   final double backoffMultiplier;
@@ -26,10 +29,14 @@ class WebSocketLane implements VeilLane {
   int _outboundErr = 0;
   int _inboundReceived = 0;
   int _inboundDropped = 0;
+  String? _lastError;
+
+  String? get lastError => _lastError;
 
   WebSocketLane({
     required this.url,
     required this.peerId,
+    this.trustedPeerCertHex,
     this.reconnectInitial = const Duration(milliseconds: 250),
     this.reconnectMax = const Duration(seconds: 10),
     this.backoffMultiplier = 2.0,
@@ -39,7 +46,32 @@ class WebSocketLane implements VeilLane {
 
   Future<void> _connect() async {
     try {
-      final socket = await WebSocket.connect(url.toString());
+      final Map<String, String> headers = {};
+      if (url.userInfo.isNotEmpty) {
+        final auth = base64Encode(utf8.encode(url.userInfo));
+        headers["Authorization"] = "Basic $auth";
+      }
+
+      final cleanUrl = Uri(
+        scheme: url.scheme,
+        host: url.host,
+        port: url.port,
+        path: url.path,
+        query: url.query,
+      );
+
+      HttpClient? customClient;
+      if (trustedPeerCertHex != null && trustedPeerCertHex!.isNotEmpty) {
+        final ctx = SecurityContext(withTrustedRoots: false);
+        ctx.setTrustedCertificatesBytes(_hexToBytes(trustedPeerCertHex!));
+        customClient = HttpClient(context: ctx);
+        customClient.badCertificateCallback = (cert, host, port) => true;
+      }
+      final socket = await WebSocket.connect(
+        cleanUrl.toString(),
+        customClient: customClient,
+        headers: headers,
+      );
       _socket = IOWebSocketChannel(socket);
       _socket!.stream.listen(
         (event) {
@@ -64,10 +96,19 @@ class WebSocketLane implements VeilLane {
           _scheduleReconnect();
         },
       );
-    } catch (_) {
+    } catch (err) {
+      _lastError = err.toString();
       _outboundErr += 1;
       _scheduleReconnect();
     }
+  }
+
+  List<int> _hexToBytes(String hex) {
+    final buffer = <int>[];
+    for (var i = 0; i < hex.length; i += 2) {
+      buffer.add(int.parse(hex.substring(i, i + 2), radix: 16));
+    }
+    return Uint8List.fromList(buffer);
   }
 
   void _scheduleReconnect() {

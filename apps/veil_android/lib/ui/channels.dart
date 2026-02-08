@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
+import '../helpers/strings.dart';
 import 'widgets.dart';
 
 class ChannelsView extends StatefulWidget {
@@ -31,7 +32,7 @@ class _ChannelsViewState extends State<ChannelsView> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Panel(
-            title: 'Channels',
+            title: VeilStrings.navChannels,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -42,24 +43,33 @@ class _ChannelsViewState extends State<ChannelsView> {
                       .bodySmall
                       ?.copyWith(color: Colors.white70),
                 ),
-                const SizedBox(height: 12),
-                InputField(
-                  label: 'Add channel',
-                  controller: _addController,
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: InputField(
+                        label: 'Channel name',
+                        controller: _addController,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: IconButton.filled(
+                        onPressed: () async {
+                          final value = _addController.text.trim();
+                          if (value.isEmpty) return;
+                          await controller.addChannelLabel(value);
+                          _addController.clear();
+                          setState(() {});
+                        },
+                        icon: const Icon(Icons.add),
+                        tooltip: 'Add',
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 8),
-                FilledButton.icon(
-                  onPressed: () async {
-                    final value = _addController.text.trim();
-                    if (value.isEmpty) return;
-                    await controller.addChannelLabel(value);
-                    _addController.clear();
-                    setState(() {});
-                  },
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add'),
-                ),
-                const SizedBox(height: 16),
                 if (channels.isEmpty)
                   Text(
                     'No channels yet.',
@@ -140,13 +150,14 @@ class _ChannelTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
+            if (!channel.isDefault)
+              IconButton(
+                tooltip: 'Set as Default',
+                onPressed: onMakeDefault,
+                icon: const Icon(Icons.star_border),
+              ),
             IconButton(
-              tooltip: 'Make default',
-              onPressed: channel.isDefault ? null : onMakeDefault,
-              icon: const Icon(Icons.check_circle_outline),
-            ),
-            IconButton(
-              tooltip: 'Remove',
+              tooltip: 'Unsubscribe',
               onPressed: onRemove,
               icon: const Icon(Icons.close),
             ),
