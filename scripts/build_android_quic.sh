@@ -44,13 +44,14 @@ toolchain="$(rustup show active-toolchain 2>/dev/null | awk '{print $1}')"
 if [[ -z "${toolchain}" ]]; then
   toolchain="stable"
 fi
+if [[ -z "${RUSTUP_TOOLCHAIN:-}" ]]; then
+  export RUSTUP_TOOLCHAIN="${toolchain}"
+fi
 for target in "${TARGET_LIST[@]}"; do
   echo "Ensuring Rust target ${target}"
   rustup target add "${target}"
-  if [[ -n "${toolchain}" ]]; then
-    echo "Ensuring Rust target ${target} (${toolchain})"
-    rustup target add "${target}" --toolchain "${toolchain}"
-  fi
+  echo "Ensuring Rust target ${target} (${RUSTUP_TOOLCHAIN})"
+  rustup target add "${target}" --toolchain "${RUSTUP_TOOLCHAIN}"
 done
 
 for abi in "${ABI_LIST[@]}"; do
