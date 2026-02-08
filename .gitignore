@@ -18,3 +18,4 @@ apps/*/dist/
 packages/veil-sdk-dart/.dart_tool/
 packages/veil-sdk-dart/build/
 packages/veil-sdk-dart/pubspec.lock
+apps/veil_android/android/app/src/main/jniLibs/
