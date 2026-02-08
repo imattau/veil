@@ -63,7 +63,7 @@ class WebSocketLane implements VeilLane {
         scheme: url.scheme,
         host: url.host,
         port: effectivePort,
-        path: url.path,
+        path: url.path.endsWith('/') ? url.path : '${url.path}/',
         query: url.query,
       );
       print("WebSocketLane: Connecting to cleaned URL: ${cleanUrl.toString()}");
