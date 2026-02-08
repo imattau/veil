@@ -149,32 +149,38 @@ fn main() {
     let mut sent_quic = false;
 
     if let Some(adapter) = ws_receiver.as_mut() {
-        if adapter.can_send() {
-            let _ = adapter.send(&"server".to_string(), &ws_warmup);
+        if let Err(err) = adapter.send(&"server".to_string(), &ws_warmup) {
+            eprintln!("WS warmup enqueue failed: {err}");
         }
     }
     if ws_url.is_some() {
         thread::sleep(Duration::from_millis(200));
     }
     if let Some(adapter) = ws_sender.as_mut() {
-        if adapter.can_send() {
-            if adapter.send(&"server".to_string(), &ws_shard).is_ok() {
+        match adapter.send(&"server".to_string(), &ws_shard) {
+            Ok(_) => {
                 println!("WS: sent test shard");
                 sent_ws = true;
             }
+            Err(err) => eprintln!("WS send failed: {err}"),
         }
     }
 
     if let (Some(adapter), Some(peer)) = (quic_receiver.as_mut(), quic_peer.as_ref()) {
-        let _ = adapter.send(peer, &quic_warmup);
+        if let Err(err) = adapter.send(peer, &quic_warmup) {
+            eprintln!("QUIC warmup enqueue failed: {err}");
+        }
     }
     if quic_peer.is_some() {
         thread::sleep(Duration::from_millis(200));
     }
     if let (Some(adapter), Some(peer)) = (quic_sender.as_mut(), quic_peer.as_ref()) {
-        if adapter.send(peer, &quic_shard).is_ok() {
-            println!("QUIC: sent test shard");
-            sent_quic = true;
+        match adapter.send(peer, &quic_shard) {
+            Ok(_) => {
+                println!("QUIC: sent test shard");
+                sent_quic = true;
+            }
+            Err(err) => eprintln!("QUIC send failed: {err}"),
         }
     }
 

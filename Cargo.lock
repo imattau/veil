@@ -2431,6 +2431,7 @@ dependencies = [
  "base64",
  "futures-util",
  "rand 0.8.5",
+ "rustls",
  "serde",
  "serde_json",
  "tokio",
