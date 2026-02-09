@@ -137,6 +137,8 @@ export {
   PublishQueue,
 } from "./publisher";
 export type { PublishBatch, PublishObject } from "./publisher";
+export { buildVpsDiscoveryLink } from "./discovery_links";
+export { parseDiscoveryInput } from "./discovery_parse";
 export {
   configureTagBackend,
   currentEpoch,
@@ -158,10 +160,37 @@ export {
   generateEd25519KeyPair,
   hkdfSha256,
   importEd25519PublicKeyRaw,
+  exportEd25519PrivateKeyPkcs8,
+  importEd25519PrivateKeyPkcs8,
   randomBytes,
   signEd25519,
   verifyEd25519,
 } from "./keys";
+export {
+  AsyncKeyValueIdentityStore,
+  MemoryIdentityStore,
+  classifyContactBundle,
+  contactBundleFromQr,
+  contactBundleImportFromQr,
+  contactBundleSignedBytes,
+  contactBundleToQr,
+  decodeContactBundle,
+  encodeContactBundle,
+  generateIdentity,
+  loadOrCreateIdentity,
+  mergeContactBundleImport,
+  signContactBundle,
+  signMessage,
+  verifyContactBundle,
+  verifyMessage,
+} from "./identity";
+export type {
+  ContactBundle,
+  ContactBundleMergeResult,
+  ContactBundleImportResult,
+  IdentityKeypair,
+  IdentityStore,
+} from "./identity";
 export { defaultWotConfig, LocalWotPolicy, rankFeedItemsByTrust } from "./wot";
 export type {
   Endorsement,

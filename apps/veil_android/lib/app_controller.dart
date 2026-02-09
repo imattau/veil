@@ -60,6 +60,8 @@ class VeilAppController extends ChangeNotifier {
   String peerId = 'android-client';
   String wsUrl = 'ws://10.0.2.2:9001';
   final List<String> _wsEndpoints = [];
+  final Map<String, int> _wsEndpointScores = {};
+  final Map<String, LaneHealthSnapshot> _wsLastHealth = {};
   String tagHex = '';
   String channelLabel = '';
   String privateIdHex = '';
@@ -74,6 +76,8 @@ class VeilAppController extends ChangeNotifier {
   String quicEndpoint = '';
   final List<String> _quicEndpoints = [];
   final Map<String, String> _quicCertsByEndpoint = {};
+  final Map<String, int> _quicEndpointScores = {};
+  final Map<String, LaneHealthSnapshot> _quicLastHealth = {};
   bool _torEnabled = false;
   String torWsUrl = '';
   String torSocksHost = '127.0.0.1';
@@ -81,6 +85,7 @@ class VeilAppController extends ChangeNotifier {
   String quicTrustedCertHex = '';
   bool _quicAutoPinInFlight = false;
   bool _quicSupported = false;
+  IdentityKeypair? _sdkIdentity;
 
   VeilClient? _client;
   VeilLane? _lane;
@@ -100,6 +105,13 @@ class VeilAppController extends ChangeNotifier {
   Timer? _epochTimer;
   Timer? _healthTimer;
   int _epochRemainingSeconds = 0;
+  bool _scoresDirty = false;
+  DateTime? _lastScorePersist;
+  bool _initialized = false;
+  bool _lifecyclePaused = false;
+  bool _reconnectInFlight = false;
+  Timer? _resumeTimer;
+  LanDiscovery? _lanDiscovery;
 
   bool get onboardingComplete => displayName.isNotEmpty;
   Attachment? get profileAvatar => _profileAvatar;
@@ -120,8 +132,11 @@ class VeilAppController extends ChangeNotifier {
   int get clockSkewSeconds => _clockSkewSeconds;
   int get maxCacheEntries => _maxCacheEntries;
   int get maxPublishQueue => _maxPublishQueue;
+  List<String> get wsEndpoints => List.unmodifiable(_wsEndpoints);
+  int wsScoreFor(String endpoint) => _wsEndpointScores[endpoint] ?? 0;
   String get quicEndpointValue => quicEndpoint;
   List<String> get quicEndpoints => List.unmodifiable(_quicEndpoints);
+  int quicScoreFor(String endpoint) => _quicEndpointScores[endpoint] ?? 0;
   bool get isQuicSupported => _quicSupported;
   bool get torEnabled => _torEnabled;
   String get torWsUrlValue => torWsUrl;
@@ -139,6 +154,8 @@ class VeilAppController extends ChangeNotifier {
     }
     return null;
   }
+
+  bool get cacheReady => _db != null;
 
   String get wsLastError {
     final lane = _lane;
@@ -247,7 +264,6 @@ class VeilAppController extends ChangeNotifier {
   List<String> get blockedUsers => _wotPolicy.blocked;
   List<String> get extraTags => List.unmodifiable(_extraTags);
   List<String> get forwardPeers => List.unmodifiable(_forwardPeers);
-  List<String> get wsEndpoints => List.unmodifiable(_wsEndpoints);
 
   String get connectionStatus {
     if (!_connected) return 'OFFLINE';
@@ -273,6 +289,35 @@ class VeilAppController extends ChangeNotifier {
     }
   }
 
+  LaneHealthSnapshot? endpointHealth(String endpoint) {
+    if (endpoint.startsWith('quic://')) {
+      return _quicLastHealth[endpoint];
+    }
+    return _wsLastHealth[endpoint];
+  }
+
+  String endpointStatusLabel(String endpoint) {
+    if (!_connected) {
+      return 'Offline';
+    }
+    final health = endpointHealth(endpoint);
+    if (health == null) {
+      return 'Pending';
+    }
+    final ok = health.outboundSendOk;
+    final err = health.outboundSendErr;
+    if (ok == 0 && err > 0) {
+      return 'Unreachable';
+    }
+    if (err > ok) {
+      return 'Unstable';
+    }
+    if (ok > 0) {
+      return 'Healthy';
+    }
+    return 'Degraded';
+  }
+
   bool _laneHealthy(LaneHealthSnapshot? snapshot) {
     if (snapshot == null) return false;
     return snapshot.outboundSendErr < 3 || snapshot.outboundSendOk > 0;
@@ -284,6 +329,7 @@ class VeilAppController extends ChangeNotifier {
     if (!_quicSupported) {
       _events.insert(0, 'QUIC not supported (missing lib or arch mismatch)');
     }
+    await _loadSdkIdentity();
     await _loadPrefs();
     await _openDb();
     await _loadAvatar();
@@ -293,13 +339,16 @@ class VeilAppController extends ChangeNotifier {
     await _startLocalRelay();
     _startEpochTimer();
     connect();
+    _initialized = true;
   }
 
   void dispose() {
     _client?.stop();
     _relay?.stop();
+    _lanDiscovery?.stop();
     _epochTimer?.cancel();
     _healthTimer?.cancel();
+    _resumeTimer?.cancel();
     _db?.close();
     super.dispose();
   }
@@ -547,6 +596,9 @@ class VeilAppController extends ChangeNotifier {
             .map(_normalizeWsEndpoint)
             .whereType<String>(),
       );
+    _wsEndpointScores
+      ..clear()
+      ..addAll(_decodeScoreMap(prefs.getString('wsEndpointScores')));
     if ((prefs.getStringList('wsEndpoints') ?? []).length != _wsEndpoints.length) {
       wsChanged = true;
     }
@@ -575,6 +627,9 @@ class VeilAppController extends ChangeNotifier {
     _quicEndpoints
       ..clear()
       ..addAll(prefs.getStringList('quicEndpoints') ?? const []);
+    _quicEndpointScores
+      ..clear()
+      ..addAll(_decodeScoreMap(prefs.getString('quicEndpointScores')));
     final certMap = prefs.getString('quicCertsByEndpoint');
     if (certMap != null && certMap.isNotEmpty) {
       try {
@@ -659,6 +714,10 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setString('peerId', peerId);
     await prefs.setString('wsUrl', wsUrl);
     await prefs.setStringList('wsEndpoints', _wsEndpoints);
+    await prefs.setString(
+      'wsEndpointScores',
+      jsonEncode(_wsEndpointScores),
+    );
     await prefs.setString('tagHex', tagHex);
     await prefs.setString('channelLabel', channelLabel);
     await prefs.setString('privateIdHex', privateIdHex);
@@ -669,6 +728,10 @@ class VeilAppController extends ChangeNotifier {
     await prefs.setString('bleCharacteristicUuid', bleCharacteristicUuid);
     await prefs.setString('quicEndpoint', quicEndpoint);
     await prefs.setStringList('quicEndpoints', _quicEndpoints);
+    await prefs.setString(
+      'quicEndpointScores',
+      jsonEncode(_quicEndpointScores),
+    );
     await prefs.setString(
       'quicCertsByEndpoint',
       jsonEncode(_quicCertsByEndpoint),
@@ -980,6 +1043,7 @@ class VeilAppController extends ChangeNotifier {
     }
     if (!_wsEndpoints.contains(normalized)) {
       _wsEndpoints.add(normalized);
+      _wsEndpointScores.putIfAbsent(normalized, () => 0);
       _persistPrefs();
       _events.insert(0, 'Added WebSocket endpoint');
       _notify();
@@ -988,6 +1052,8 @@ class VeilAppController extends ChangeNotifier {
 
   void removeWsEndpoint(String value) {
     if (_wsEndpoints.remove(value)) {
+      _wsEndpointScores.remove(value);
+      _wsLastHealth.remove(value);
       _persistPrefs();
       _events.insert(0, 'Removed WebSocket endpoint');
       _notify();
@@ -1063,6 +1129,97 @@ class VeilAppController extends ChangeNotifier {
     final bytes = List<int>.generate(32, (_) => rand.nextInt(256));
     privateIdHex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
     _persistPrefs();
+  }
+
+  Future<void> _loadSdkIdentity() async {
+    try {
+      final store = SecureIdentityStore(storage: _secureStorage);
+      _sdkIdentity = await loadOrCreateIdentity(store);
+    } catch (_) {
+      _sdkIdentity = null;
+    }
+  }
+
+  void handleLifecycle(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _scheduleResumeReconnect();
+        break;
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        unawaited(_pauseForBackground());
+        break;
+    }
+  }
+
+  Future<void> _pauseForBackground() async {
+    if (_lifecyclePaused) return;
+    _lifecyclePaused = true;
+    _resumeTimer?.cancel();
+    await _lanDiscovery?.stop();
+    _client?.stop();
+    _connected = false;
+    _healthTimer?.cancel();
+    await _closeLane(_lane);
+    await _closeLane(_quicLane);
+    await _closeLane(_torLane);
+    await _closeLane(_bleLane);
+    await _closeLane(_fallbackLane);
+    _lane = null;
+    _quicLane = null;
+    _torLane = null;
+    _bleLane = null;
+    _fallbackLane = null;
+    _events.insert(0, 'App backgrounded');
+    notifyListeners();
+  }
+
+  void _scheduleResumeReconnect() {
+    if (!_initialized) return;
+    _lifecyclePaused = false;
+    _resumeTimer?.cancel();
+    _resumeTimer = Timer(const Duration(milliseconds: 250), () {
+      _resumeTimer = null;
+      _resumeFromBackground();
+    });
+  }
+
+  void _resumeFromBackground() async {
+    if (_reconnectInFlight) return;
+    _reconnectInFlight = true;
+    try {
+      await connect();
+      _startLanDiscovery();
+      _events.insert(0, 'App resumed');
+    } finally {
+      _reconnectInFlight = false;
+    }
+  }
+
+  Future<void> _closeLane(VeilLane? lane) async {
+    if (lane == null) return;
+    if (lane is MultiLane) {
+      for (final sub in lane.lanes) {
+        await _closeLane(sub);
+      }
+      return;
+    }
+    if (lane is WebSocketLane) {
+      await lane.close();
+      return;
+    }
+    if (lane is QuicLane) {
+      await lane.close();
+      return;
+    }
+    if (lane is TorLane) {
+      await lane.close();
+      return;
+    }
+    if (lane is BleLane) {
+      await lane.close();
+    }
   }
 
   void addPrivateContact(String value) {
@@ -1185,27 +1342,34 @@ class VeilAppController extends ChangeNotifier {
       });
       return;
     }
-    if (_importVpsProfile(raw)) {
-      _events.insert(0, 'Imported VPS profile');
+    final parsed = parseDiscoveryInput(raw);
+    if (parsed == null) {
+      _events.insert(0, 'Scan not recognized: $raw');
+      notifyListeners();
+      return;
+    }
+    if (parsed.contactBundle != null) {
+      _events.insert(0, 'Importing contact bundle…');
       _notify();
+      Future.microtask(() async {
+        final bundle = parsed.contactBundle!;
+        final ok = await bundle.verify();
+        if (!ok) {
+          _events.insert(0, 'Failed to import contact bundle');
+          _notify();
+          return;
+        }
+        _applyContactBundleImport(ContactBundleImport.fromBundle(bundle));
+        _events.insert(0, 'Imported contact bundle');
+        _notify();
+      });
       return;
     }
-    final lower = raw.toLowerCase();
-    if (lower.startsWith('peer:')) {
-      addForwardPeer(raw.substring(5));
-      return;
-    }
-    if (lower.startsWith('tag:')) {
-      addSubscription(raw.substring(4));
-      return;
-    }
-    if (lower.startsWith('http://') || lower.startsWith('https://')) {
-      final uri = Uri.tryParse(raw);
-      if (uri != null &&
-          uri.host.isNotEmpty &&
-          (uri.path.isEmpty ||
-              uri.path == '/' ||
-              uri.path.endsWith('/config.js'))) {
+    if (parsed.isVpsProfile) {
+      final uri = raw.startsWith('http://') || raw.startsWith('https://')
+          ? Uri.tryParse(raw)
+          : null;
+      if (uri != null && uri.host.isNotEmpty) {
         _events.insert(0, 'Fetching VPS profile…');
         _notify();
         Future.microtask(() async {
@@ -1217,25 +1381,94 @@ class VeilAppController extends ChangeNotifier {
         });
         return;
       }
-    }
-    if (lower.startsWith('ws://') ||
-        lower.startsWith('wss://') ||
-        lower.startsWith('http://') ||
-        lower.startsWith('https://')) {
-      addWsEndpoint(raw);
+      for (final ws in parsed.wsEndpoints) {
+        addWsEndpoint(ws);
+        if (wsUrl.isEmpty) {
+          wsUrl = ws;
+        }
+      }
+      String? firstQuic;
+      for (final quic in parsed.quicEndpoints) {
+        firstQuic ??= quic;
+        addQuicEndpoint(quic);
+      }
+      if (firstQuic != null && parsed.quicCertHex != null) {
+        setQuicCertFor(firstQuic, parsed.quicCertHex!);
+      } else if (firstQuic != null && parsed.quicCertB64 != null) {
+        try {
+          final bytes = base64Decode(parsed.quicCertB64!);
+          setQuicCertFor(firstQuic, _bytesToHex(bytes));
+        } catch (_) {
+          _events.insert(0, 'Invalid QUIC cert (base64)');
+        }
+      } else if (firstQuic != null) {
+        _events.insert(0, 'Pinning QUIC cert from server…');
+        Future.microtask(() async {
+          if (!await QuicLane.isSupported()) {
+            _events.insert(0, 'QUIC not supported on this device');
+            _notify();
+            return;
+          }
+          final cert = await QuicLane.fetchPinnedCertHex(firstQuic);
+          if (cert == null || cert.isEmpty) {
+            _events.insert(0, 'Failed to pin QUIC cert');
+          } else {
+            setQuicCertFor(firstQuic, cert);
+            await _persistPrefs();
+            _events.insert(0, 'Pinned QUIC certificate');
+          }
+          _notify();
+        });
+      }
+      for (final peer in parsed.peers) {
+        addForwardPeer(peer);
+      }
+      for (final tag in parsed.tags) {
+        addSubscription(tag);
+      }
+      _persistPrefs();
+      notifyListeners();
+      _events.insert(0, 'Imported VPS profile');
+      _notify();
       return;
     }
-    if (lower.startsWith('quic://')) {
-      setQuicEndpoint(raw);
-      return;
+    for (final ws in parsed.wsEndpoints) {
+      addWsEndpoint(ws);
     }
-    final hex = lower.replaceAll(RegExp(r'[^0-9a-f]'), '');
-    if (hex.length == 64) {
-      addSubscription(hex);
-      return;
+    String? firstQuic;
+    for (final quic in parsed.quicEndpoints) {
+      firstQuic ??= quic;
+      addQuicEndpoint(quic);
     }
-    _events.insert(0, 'Scan not recognized: $raw');
+    if (firstQuic != null && parsed.quicCertHex != null) {
+      setQuicCertFor(firstQuic, parsed.quicCertHex!);
+    }
+    if (firstQuic != null && parsed.quicCertB64 != null) {
+      try {
+        final bytes = base64Decode(parsed.quicCertB64!);
+        setQuicCertFor(firstQuic, _bytesToHex(bytes));
+      } catch (_) {
+        _events.insert(0, 'Invalid QUIC cert (base64)');
+      }
+    }
+    for (final peer in parsed.peers) {
+      addForwardPeer(peer);
+    }
+    for (final tag in parsed.tags) {
+      addSubscription(tag);
+    }
+    _persistPrefs();
     notifyListeners();
+  }
+
+  bool _looksLikeContactBundle(String value) {
+    if (!value.startsWith('veil://')) return false;
+    final uri = Uri.tryParse(value);
+    if (uri == null) return false;
+    if (uri.host == 'contact' || uri.path == '/contact' || uri.path == 'contact') {
+      return uri.queryParameters.containsKey('b');
+    }
+    return false;
   }
 
   bool _looksLikeDomain(String value) {
@@ -1243,6 +1476,85 @@ class VeilAppController extends ChangeNotifier {
     if (cleaned.contains('://')) return false;
     if (cleaned.contains('/')) return false;
     return cleaned.contains('.');
+  }
+
+  Future<String?> buildContactBundleString() async {
+    if (_sdkIdentity == null) {
+      await _loadSdkIdentity();
+    }
+    final identity = _sdkIdentity;
+    if (identity == null) return null;
+    final endpoints = _collectContactEndpoints();
+    final quicCert = _selectContactQuicCert(endpoints);
+    final bundle = ContactBundle(
+      version: 1,
+      pubkeyHex: identity.publicKeyHex,
+      quicCertHex: quicCert,
+      endpoints: endpoints,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    );
+    final signed = await bundle.sign(identity);
+    return signed.toQrString();
+  }
+
+  Future<bool> importContactBundleString(String value) async {
+    final result = await ContactBundleImport.fromQrString(value);
+    if (result == null) return false;
+    _applyContactBundleImport(result);
+    return true;
+  }
+
+  List<String> _collectContactEndpoints() {
+    final endpoints = <String>{};
+    if (wsUrl.isNotEmpty) {
+      endpoints.add(wsUrl);
+    }
+    endpoints.addAll(_wsEndpoints);
+    if (quicEndpoint.isNotEmpty) {
+      endpoints.add(quicEndpoint);
+    }
+    endpoints.addAll(_quicEndpoints);
+    return endpoints.toList();
+  }
+
+  String _selectContactQuicCert(List<String> endpoints) {
+    for (final endpoint in endpoints) {
+      if (endpoint.startsWith('quic://')) {
+        final cert = _quicCertsByEndpoint[endpoint] ?? '';
+        if (cert.isNotEmpty) {
+          return cert;
+        }
+      }
+    }
+    return quicTrustedCertHex;
+  }
+
+  void _applyContactBundleImport(ContactBundleImportResult result) {
+    final merged = mergeContactBundleImport(
+      result,
+      existingWs: _wsEndpoints,
+      existingQuic: _quicEndpoints,
+      existingQuicCerts: _quicCertsByEndpoint,
+    );
+    for (final endpoint in merged.wsEndpoints) {
+      if (!_wsEndpoints.contains(endpoint)) {
+        addWsEndpoint(endpoint);
+      }
+    }
+    for (final endpoint in merged.quicEndpoints) {
+      if (!_quicEndpoints.contains(endpoint)) {
+        addQuicEndpoint(endpoint);
+      }
+    }
+    merged.quicCertsByEndpoint.forEach((endpoint, cert) {
+      final current = _quicCertsByEndpoint[endpoint];
+      if (current != cert) {
+        setQuicCertFor(endpoint, cert);
+      }
+    });
+    if (merged.pubkeyHex.isNotEmpty) {
+      addPrivateContact(merged.pubkeyHex);
+    }
   }
 
   Future<bool> importVpsFromDomain(String value) async {
@@ -1450,6 +1762,7 @@ class VeilAppController extends ChangeNotifier {
     if (normalized == null) return;
     if (!_quicEndpoints.contains(normalized)) {
       _quicEndpoints.add(normalized);
+      _quicEndpointScores.putIfAbsent(normalized, () => 0);
     }
     if (quicEndpoint.isEmpty) {
       quicEndpoint = normalized;
@@ -1477,6 +1790,7 @@ class VeilAppController extends ChangeNotifier {
     } else {
       _quicEndpoints.insert(0, normalized);
     }
+    _quicEndpointScores.putIfAbsent(normalized, () => 0);
     _persistPrefs();
     notifyListeners();
     _maybeAutoPinQuic();
@@ -1485,6 +1799,8 @@ class VeilAppController extends ChangeNotifier {
   void removeQuicEndpoint(String value) {
     _quicEndpoints.remove(value);
     _quicCertsByEndpoint.remove(value);
+    _quicEndpointScores.remove(value);
+    _quicLastHealth.remove(value);
     if (quicEndpoint == value) {
       quicEndpoint = _quicEndpoints.isNotEmpty ? _quicEndpoints.first : '';
     }
@@ -1550,6 +1866,32 @@ class VeilAppController extends ChangeNotifier {
       buffer.write(b.toRadixString(16).padLeft(2, '0'));
     }
     return buffer.toString();
+  }
+
+  Map<String, int> _decodeScoreMap(String? raw) {
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return decoded.map((key, value) {
+        final numValue = value is num ? value : int.tryParse('$value');
+        return MapEntry(key, numValue?.toInt() ?? 0);
+      });
+    } catch (_) {
+      return {};
+    }
+  }
+
+  List<String> _sortByScore(List<String> endpoints, Map<String, int> scores) {
+    final indexed = endpoints.asMap().entries.toList();
+    indexed.sort((a, b) {
+      final scoreA = scores[a.value] ?? 0;
+      final scoreB = scores[b.value] ?? 0;
+      if (scoreA != scoreB) {
+        return scoreB.compareTo(scoreA);
+      }
+      return a.key.compareTo(b.key);
+    });
+    return indexed.map((entry) => entry.value).toList();
   }
 
   Future<void> pinQuicCertFromServer([String? endpoint]) async {
@@ -1633,10 +1975,14 @@ class VeilAppController extends ChangeNotifier {
     if (_useLocalRelay) {
       await _ensureLocalRelay();
     }
+    _maybeAutoPinQuic();
+    _startLanDiscovery();
 
-    final String primaryUrl;
+    final bool hasQuicTargets =
+        _quicEndpoints.isNotEmpty || quicEndpoint.isNotEmpty;
+    String primaryUrl;
     List<String> endpoints;
-    if (_relay != null) {
+    if (_relay != null && !hasQuicTargets) {
       primaryUrl = _relay!.url;
       endpoints = [primaryUrl, ..._wsEndpoints];
       if (endpoints.length == 1 && wsUrl.isNotEmpty) {
@@ -1655,6 +2001,10 @@ class VeilAppController extends ChangeNotifier {
         .whereType<String>()
         .where((value) => value.startsWith('ws://') || value.startsWith('wss://'))
         .toList();
+    endpoints = _sortByScore(endpoints, _wsEndpointScores);
+    if (endpoints.isNotEmpty) {
+      primaryUrl = endpoints.first;
+    }
     if (endpoints.isEmpty) {
       final fallback = _relay?.url ?? wsUrl;
       final normalizedFallback = _normalizeWsEndpoint(fallback);
@@ -1678,8 +2028,9 @@ class VeilAppController extends ChangeNotifier {
     final quicTargets = _quicEndpoints.isNotEmpty
         ? List<String>.from(_quicEndpoints)
         : (quicEndpoint.isNotEmpty ? [quicEndpoint] : <String>[]);
-    if (quicTargets.isNotEmpty && _quicSupported) {
-      final lanes = quicTargets.map((endpoint) {
+    final sortedQuicTargets = _sortByScore(quicTargets, _quicEndpointScores);
+    if (sortedQuicTargets.isNotEmpty && _quicSupported) {
+      final lanes = sortedQuicTargets.map((endpoint) {
         final cert = _quicCertsByEndpoint[endpoint] ?? '';
         return QuicLane(
           endpoint: endpoint,
@@ -1715,23 +2066,19 @@ class VeilAppController extends ChangeNotifier {
     }
     _torLane = torLane;
 
-    final primaryLane = _quicLane ?? wsLane;
-    final VeilLane fastLane;
-    final VeilLane? fallbackLane;
-    if (_ghostMode && torLane != null) {
-      fastLane = torLane;
-      fallbackLane = primaryLane;
-    } else if (_ghostMode && bleLane != null) {
-      fastLane = bleLane;
-      fallbackLane = primaryLane;
-    } else {
-      fastLane = primaryLane;
-      fallbackLane = torLane ?? bleLane;
-    }
+    final config = buildLaneConfig(
+      wsLane: wsLane,
+      quicLane: _quicLane,
+      torLane: torLane,
+      bleLane: bleLane,
+      ghostMode: _ghostMode,
+      p2pAnyLane: true,
+    );
 
     final client = VeilClient(
-      fastLane: fastLane,
-      fallbackLane: fallbackLane,
+      fastLane: config.fastLane,
+      fallbackLane: config.fallbackLane,
+      publishLane: config.publishLane,
       bridge: _bridge,
       cacheStore: store,
       hooks: VeilClientHooks(
@@ -1773,8 +2120,9 @@ class VeilAppController extends ChangeNotifier {
     client.start();
 
     _client = client;
-    _lane = wsLane;
-    _fallbackLane = fallbackLane;
+    _lane = config.wsLane;
+    _quicLane = config.quicLane;
+    _fallbackLane = config.fallbackLane;
     _connected = true;
     _events.insert(0, 'Connected via $primaryUrl');
     _startHealthTimer();
@@ -1784,6 +2132,7 @@ class VeilAppController extends ChangeNotifier {
 
   void disconnect() {
     _client?.stop();
+    _lanDiscovery?.stop();
     _connected = false;
     _events.insert(0, 'Disconnected');
     _healthTimer?.cancel();
@@ -2147,10 +2496,140 @@ class VeilAppController extends ChangeNotifier {
     _epochTimer = Timer.periodic(const Duration(seconds: 1), (_) => update());
   }
 
+  void _recordLaneHealth() {
+    _recordLaneHealthFor(_lane);
+    _recordLaneHealthFor(_quicLane);
+  }
+
+  void _recordLaneHealthFor(VeilLane? lane) {
+    if (lane == null) return;
+    if (lane is MultiLane) {
+      for (final sub in lane.lanes) {
+        _recordLaneHealthFor(sub);
+      }
+      return;
+    }
+    if (lane is WebSocketLane) {
+      final endpoint = lane.url.toString();
+      final snapshot = lane.healthSnapshot();
+      if (snapshot != null) {
+        _applyHealthSnapshot(
+          endpoint,
+          snapshot,
+          _wsLastHealth,
+          _wsEndpointScores,
+        );
+      }
+      return;
+    }
+    if (lane is QuicLane) {
+      final endpoint = lane.endpoint;
+      final snapshot = lane.healthSnapshot();
+      if (snapshot != null) {
+        _applyHealthSnapshot(
+          endpoint,
+          snapshot,
+          _quicLastHealth,
+          _quicEndpointScores,
+        );
+      }
+    }
+  }
+
+  void _applyHealthSnapshot(
+    String endpoint,
+    LaneHealthSnapshot snapshot,
+    Map<String, LaneHealthSnapshot> lastMap,
+    Map<String, int> scoreMap,
+  ) {
+    final previous = lastMap[endpoint];
+    lastMap[endpoint] = snapshot;
+    if (previous == null) return;
+    final deltaOk = _safeDelta(snapshot.outboundSendOk, previous.outboundSendOk);
+    final deltaErr =
+        _safeDelta(snapshot.outboundSendErr, previous.outboundSendErr);
+    final deltaIn =
+        _safeDelta(snapshot.inboundReceived, previous.inboundReceived);
+    final scoreDelta = deltaOk + deltaIn - (deltaErr * 2);
+    if (scoreDelta == 0) return;
+    final current = scoreMap[endpoint] ?? 0;
+    scoreMap[endpoint] = (current + scoreDelta).clamp(-50, 50);
+    _scoresDirty = true;
+  }
+
+  int _safeDelta(int current, int previous) {
+    if (current < previous) return 0;
+    return current - previous;
+  }
+
+  List<String> _discoverableWsEndpoints() {
+    final endpoints = <String>{};
+    if (wsUrl.isNotEmpty) {
+      endpoints.add(wsUrl);
+    }
+    endpoints.addAll(_wsEndpoints);
+    return endpoints
+        .where(
+          (value) =>
+              value.isNotEmpty &&
+              !value.contains("127.0.0.1") &&
+              !value.contains("localhost"),
+        )
+        .toList();
+  }
+
+  List<String> _discoverableQuicEndpoints() {
+    final endpoints = <String>{};
+    if (quicEndpoint.isNotEmpty) {
+      endpoints.add(quicEndpoint);
+    }
+    endpoints.addAll(_quicEndpoints);
+    return endpoints
+        .where(
+          (value) =>
+              value.isNotEmpty &&
+              !value.contains("127.0.0.1") &&
+              !value.contains("localhost"),
+        )
+        .toList();
+  }
+
+  void _startLanDiscovery() {
+    _lanDiscovery ??= LanDiscovery(peerId: peerId);
+    final ws = _discoverableWsEndpoints();
+    final quic = _discoverableQuicEndpoints();
+    if (ws.isEmpty && quic.isEmpty) return;
+    _lanDiscovery!
+        .start(
+          wsEndpoints: ws,
+          quicEndpoints: quic,
+          onMessage: (msg) {
+            for (final endpoint in msg.wsEndpoints) {
+              addWsEndpoint(endpoint);
+            }
+            for (final endpoint in msg.quicEndpoints) {
+              addQuicEndpoint(endpoint);
+            }
+          },
+        )
+        .catchError((_) {});
+  }
+
   void _startHealthTimer() {
     _healthTimer?.cancel();
     _healthTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (_connected) {
+        _recordLaneHealth();
+        if (_scoresDirty) {
+          final now = DateTime.now();
+          if (_lastScorePersist == null ||
+              now.difference(_lastScorePersist!) >
+                  const Duration(seconds: 10)) {
+            _lastScorePersist = now;
+            _scoresDirty = false;
+            _persistPrefs();
+          }
+        }
         notifyListeners();
       }
     });

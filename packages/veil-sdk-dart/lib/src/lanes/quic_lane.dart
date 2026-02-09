@@ -20,6 +20,7 @@ class QuicLane implements VeilLane {
   int _inboundReceived = 0;
   int _inboundDropped = 0;
   int _reconnectAttempts = 0;
+  int _lastSendResult = 0;
   bool _closed = false;
 
   late final int _handle;
@@ -79,7 +80,8 @@ class QuicLane implements VeilLane {
       _outboundQueued += 1;
       return;
     }
-    final result = bindings.send(peer, bytes);
+    final result = bindings.send(_handle, peer, bytes);
+    _lastSendResult = result;
     if (result == 0) {
       _outboundOk += 1;
     } else {
@@ -97,7 +99,7 @@ class QuicLane implements VeilLane {
     if (bindings == null || _handle == 0) {
       return null;
     }
-    final msg = bindings.recv();
+    final msg = bindings.recv(_handle);
     if (msg == null) {
       return null;
     }
@@ -125,6 +127,47 @@ class QuicLane implements VeilLane {
     }
     bindings.stop(_handle);
   }
+
+  int get debugHandle => _handle;
+
+  int get debugLastSendResult => _lastSendResult;
+
+  QuicLaneMetrics? metricsSnapshot() {
+    final bindings = _getBindings();
+    if (bindings == null || _handle == 0) {
+      return null;
+    }
+    final metrics = bindings.metrics(_handle);
+    if (metrics == null) {
+      return null;
+    }
+    return QuicLaneMetrics(
+      outboundQueued: metrics.outboundQueued,
+      sendAttempts: metrics.sendAttempts,
+      sendSuccess: metrics.sendSuccess,
+      sendErrors: metrics.sendErrors,
+      inboundReceived: metrics.inboundReceived,
+      inboundDropped: metrics.inboundDropped,
+    );
+  }
+}
+
+class QuicLaneMetrics {
+  final int outboundQueued;
+  final int sendAttempts;
+  final int sendSuccess;
+  final int sendErrors;
+  final int inboundReceived;
+  final int inboundDropped;
+
+  const QuicLaneMetrics({
+    required this.outboundQueued,
+    required this.sendAttempts,
+    required this.sendSuccess,
+    required this.sendErrors,
+    required this.inboundReceived,
+    required this.inboundDropped,
+  });
 }
 
 String _serverNameFromEndpoint(String endpoint) {
@@ -154,6 +197,9 @@ class _QuicBindings {
       _freeRecv = _lib.lookupFunction<_freeRecvNative, _freeRecvDart>(
         "veil_quic_free_recv",
       ),
+      _metrics = _lib.lookupFunction<_metricsNative, _metricsDart>(
+        "veil_quic_metrics",
+      ),
       _stop = _lib.lookupFunction<_stopNative, _stopDart>("veil_quic_stop");
 
   final ffi.DynamicLibrary _lib;
@@ -164,6 +210,7 @@ class _QuicBindings {
   final _fetchPeerCertDart _fetchPeerCert;
   final _freeStringDart _freeString;
   final _freeRecvDart _freeRecv;
+  final _metricsDart _metrics;
   final _stopDart _stop;
 
   bool isSupported() => _isSupported() == 1;
@@ -179,18 +226,18 @@ class _QuicBindings {
     return handle;
   }
 
-  int send(String peer, List<int> bytes) {
+  int send(int handle, String peer, List<int> bytes) {
     final peerPtr = peer.toNativeUtf8();
     final dataPtr = malloc<ffi.Uint8>(bytes.length);
     dataPtr.asTypedList(bytes.length).setAll(0, bytes);
-    final result = _send(peerPtr, dataPtr, bytes.length);
+    final result = _send(handle, peerPtr, dataPtr, bytes.length);
     malloc.free(peerPtr);
     malloc.free(dataPtr);
     return result;
   }
 
-  LaneMessage? recv() {
-    final ptr = _recv();
+  LaneMessage? recv(int handle) {
+    final ptr = _recv(handle);
     if (ptr == ffi.nullptr) {
       return null;
     }
@@ -199,6 +246,18 @@ class _QuicBindings {
     final bytes = Uint8List.fromList(recv.data.asTypedList(recv.len));
     _freeRecv(ptr);
     return LaneMessage(peer: peer, bytes: bytes);
+  }
+
+  _QuicMetrics? metrics(int handle) {
+    final out = malloc<_QuicMetrics>();
+    final rc = _metrics(handle, out);
+    if (rc != 0) {
+      malloc.free(out);
+      return null;
+    }
+    final value = out.ref;
+    malloc.free(out);
+    return value;
   }
 
   String? fetchPeerCert(String endpoint, String serverName) {
@@ -237,6 +296,12 @@ _QuicBindings? _getBindings() {
 }
 
 ffi.DynamicLibrary _openLib() {
+  final overridePath = Platform.environment["VEIL_SDK_BRIDGE_LIB"];
+  if (overridePath != null && overridePath.isNotEmpty) {
+    print("QuicLane: Using VEIL_SDK_BRIDGE_LIB=$overridePath");
+    return ffi.DynamicLibrary.open(overridePath);
+  }
+
   String libName;
   if (Platform.isAndroid) {
     libName = "libveil_sdk_bridge.so";
@@ -274,11 +339,16 @@ typedef _startNative =
 typedef _startDart =
     int Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
 typedef _sendNative =
-    ffi.Int32 Function(ffi.Pointer<Utf8>, ffi.Pointer<ffi.Uint8>, ffi.IntPtr);
+    ffi.Int32 Function(
+      ffi.Uint64,
+      ffi.Pointer<Utf8>,
+      ffi.Pointer<ffi.Uint8>,
+      ffi.IntPtr,
+    );
 typedef _sendDart =
-    int Function(ffi.Pointer<Utf8>, ffi.Pointer<ffi.Uint8>, int);
-typedef _recvNative = ffi.Pointer<_QuicRecv> Function();
-typedef _recvDart = ffi.Pointer<_QuicRecv> Function();
+    int Function(int, ffi.Pointer<Utf8>, ffi.Pointer<ffi.Uint8>, int);
+typedef _recvNative = ffi.Pointer<_QuicRecv> Function(ffi.Uint64);
+typedef _recvDart = ffi.Pointer<_QuicRecv> Function(int);
 typedef _fetchPeerCertNative =
     ffi.Pointer<Utf8> Function(ffi.Pointer<Utf8>, ffi.Pointer<Utf8>);
 typedef _fetchPeerCertDart =
@@ -287,6 +357,11 @@ typedef _freeStringNative = ffi.Void Function(ffi.Pointer<Utf8>);
 typedef _freeStringDart = void Function(ffi.Pointer<Utf8>);
 typedef _freeRecvNative = ffi.Void Function(ffi.Pointer<_QuicRecv>);
 typedef _freeRecvDart = void Function(ffi.Pointer<_QuicRecv>);
+typedef _metricsNative = ffi.Int32 Function(
+  ffi.Uint64,
+  ffi.Pointer<_QuicMetrics>,
+);
+typedef _metricsDart = int Function(int, ffi.Pointer<_QuicMetrics>);
 typedef _stopNative = ffi.Void Function(ffi.Uint64);
 typedef _stopDart = void Function(int);
 
@@ -297,4 +372,19 @@ final class _QuicRecv extends ffi.Struct {
 
   @ffi.IntPtr()
   external int len;
+}
+
+final class _QuicMetrics extends ffi.Struct {
+  @ffi.Uint64()
+  external int outboundQueued;
+  @ffi.Uint64()
+  external int sendAttempts;
+  @ffi.Uint64()
+  external int sendSuccess;
+  @ffi.Uint64()
+  external int sendErrors;
+  @ffi.Uint64()
+  external int inboundReceived;
+  @ffi.Uint64()
+  external int inboundDropped;
 }

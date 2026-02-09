@@ -130,6 +130,63 @@ class SettingsSheet extends StatelessWidget {
                     ),
                     const SizedBox(height: 16),
                     Text(
+                      'SDK Status',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    _StatusTile(
+                      label: 'Identity created',
+                      ok: controller.recoveryPhrase.isNotEmpty,
+                      detail: controller.recoveryPhrase.isNotEmpty
+                          ? 'Recovery phrase set.'
+                          : 'No recovery phrase yet.',
+                    ),
+                    _StatusTile(
+                      label: 'Cache ready',
+                      ok: controller.cacheReady,
+                      detail: controller.cacheReady
+                          ? 'Local shard cache initialized.'
+                          : 'Cache not initialized.',
+                    ),
+                    _StatusTile(
+                      label: 'WebSocket endpoints',
+                      ok: controller.wsUrl.isNotEmpty ||
+                          controller.wsEndpoints.isNotEmpty,
+                      detail: controller.wsEndpoints.isNotEmpty
+                          ? '${controller.wsEndpoints.length} endpoints configured.'
+                          : controller.wsUrl.isNotEmpty
+                              ? 'Primary WS endpoint set.'
+                              : 'No WS endpoints configured.',
+                    ),
+                    _StatusTile(
+                      label: 'QUIC enabled',
+                      ok: controller.isQuicSupported &&
+                          (controller.quicEndpoints.isNotEmpty ||
+                              controller.quicEndpointValue.isNotEmpty),
+                      detail: !controller.isQuicSupported
+                          ? 'QUIC not supported on device.'
+                          : controller.quicEndpoints.isNotEmpty
+                              ? '${controller.quicEndpoints.length} endpoints configured.'
+                              : controller.quicEndpointValue.isNotEmpty
+                                  ? 'Primary QUIC endpoint set.'
+                                  : 'No QUIC endpoints configured.',
+                    ),
+                    _StatusTile(
+                      label: 'Local relay',
+                      ok: controller.relayReady,
+                      detail: controller.relayReady
+                          ? 'Relay running.'
+                          : 'Relay not running.',
+                    ),
+                    _StatusTile(
+                      label: 'Connection',
+                      ok: controller.connected,
+                      detail: controller.connected
+                          ? 'Client connected.'
+                          : 'Client offline.',
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
                       'Trust & Safety',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
@@ -194,6 +251,29 @@ class _TrustList extends StatelessWidget {
             ),
           )
           .toList(),
+    );
+  }
+}
+
+class _StatusTile extends StatelessWidget {
+  final String label;
+  final bool ok;
+  final String detail;
+
+  const _StatusTile({
+    required this.label,
+    required this.ok,
+    required this.detail,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = ok ? const Color(0xFF047857) : const Color(0xFFB91C1C);
+    return ListTile(
+      dense: true,
+      leading: Icon(ok ? Icons.check_circle : Icons.error, color: color),
+      title: Text(label),
+      subtitle: Text(detail),
     );
   }
 }

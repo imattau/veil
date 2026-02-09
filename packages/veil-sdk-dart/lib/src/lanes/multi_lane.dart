@@ -1,16 +1,21 @@
 import "lane.dart";
+import "quic_lane.dart";
 
-enum MultiLaneSendMode { roundRobin, broadcast }
+enum MultiLaneSendMode { roundRobin, broadcast, primaryThenFallback }
 
 class MultiLane implements VeilLane {
   final List<VeilLane> lanes;
   final MultiLaneSendMode sendMode;
+  final Duration fallbackProbeTimeout;
+  final Duration fallbackProbeInterval;
   int _sendIndex = 0;
   int _recvIndex = 0;
 
   MultiLane({
     required List<VeilLane> lanes,
     this.sendMode = MultiLaneSendMode.roundRobin,
+    this.fallbackProbeTimeout = const Duration(milliseconds: 350),
+    this.fallbackProbeInterval = const Duration(milliseconds: 30),
   }) : lanes = List.unmodifiable(lanes);
 
   @override
@@ -21,6 +26,55 @@ class MultiLane implements VeilLane {
         await lane.send(peer, bytes);
       }
       return;
+    }
+    if (sendMode == MultiLaneSendMode.primaryThenFallback) {
+      Object? lastError;
+      for (final lane in lanes) {
+        try {
+          if (lane is QuicLane) {
+            final before = lane.metricsSnapshot();
+            await lane.send(peer, bytes);
+            if (lane.debugLastSendResult != 0) {
+              lastError = StateError("quic send failed");
+              continue;
+            }
+            if (before == null) {
+              return;
+            }
+            final deadline = DateTime.now().add(fallbackProbeTimeout);
+            while (DateTime.now().isBefore(deadline)) {
+              final after = lane.metricsSnapshot();
+              if (after == null) {
+                return;
+              }
+              if (after.sendSuccess > before.sendSuccess) {
+                return;
+              }
+              if (after.sendErrors > before.sendErrors) {
+                lastError = StateError("quic send failed");
+                break;
+              }
+              await Future<void>.delayed(fallbackProbeInterval);
+            }
+            if (lastError != null) {
+              continue;
+            }
+            lastError = StateError("quic send timeout");
+            continue;
+          } else {
+            await lane.send(peer, bytes);
+            return;
+          }
+        } catch (err) {
+          lastError = err;
+        }
+      }
+      if (lastError != null) {
+        // Propagate the most recent send failure.
+        // ignore: only_throw_errors
+        throw lastError;
+      }
+      throw StateError("all lanes failed to send");
     }
     final lane = lanes[_sendIndex % lanes.length];
     _sendIndex = (_sendIndex + 1) % lanes.length;

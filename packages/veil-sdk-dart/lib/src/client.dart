@@ -68,6 +68,7 @@ abstract class VeilClientPlugin {
 class VeilClient {
   final VeilLane fastLane;
   final VeilLane? fallbackLane;
+  final VeilLane? publishLane;
   final ShardCacheStore cacheStore;
   final VeilBridge bridge;
   final int pollIntervalMs;
@@ -94,6 +95,7 @@ class VeilClient {
   VeilClient({
     required this.fastLane,
     this.fallbackLane,
+    this.publishLane,
     ShardCacheStore? cacheStore,
     VeilBridge? bridge,
     this.pollIntervalMs = 50,
@@ -216,10 +218,13 @@ class VeilClient {
     final peers = _forwardPeers.isEmpty
         ? [selfPeer ?? "self"]
         : List<String>.from(_forwardPeers);
+    final lane = publishLane ?? fastLane;
     for (final peer in peers) {
-      await fastLane.send(peer, bytes);
+      await lane.send(peer, bytes);
     }
-    if (fallbackLane != null && options.fallbackFanout > 0) {
+    if (publishLane == null &&
+        fallbackLane != null &&
+        options.fallbackFanout > 0) {
       for (final peer in peers) {
         await fallbackLane!.send(peer, bytes);
       }

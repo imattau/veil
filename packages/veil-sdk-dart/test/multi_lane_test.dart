@@ -1,5 +1,6 @@
 import "package:test/test.dart";
-import "package:veil_sdk/veil_sdk.dart";
+import "package:veil_sdk/src/lanes/lane.dart";
+import "package:veil_sdk/src/lanes/multi_lane.dart";
 
 class FakeLane implements VeilLane {
   final List<List<int>> sent = [];

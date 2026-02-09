@@ -151,7 +151,7 @@ class RootShell extends StatefulWidget {
   State<RootShell> createState() => _RootShellState();
 }
 
-class _RootShellState extends State<RootShell> {
+class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   final _controller = VeilAppController();
   int _tabIndex = 0;
   bool _showProtocolDetails = false;
@@ -161,6 +161,7 @@ class _RootShellState extends State<RootShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initFuture = _controller.init();
     _errorSub = _controller.onUserError.listen((message) {
       if (!mounted) return;
@@ -176,9 +177,15 @@ class _RootShellState extends State<RootShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _errorSub.cancel();
     _controller.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _controller.handleLifecycle(state);
   }
 
   void _openCompose() {

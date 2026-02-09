@@ -194,6 +194,16 @@ pub struct QuicRecv {
     pub len: usize,
 }
 
+#[repr(C)]
+pub struct QuicMetrics {
+    pub outbound_queued: u64,
+    pub send_attempts: u64,
+    pub send_success: u64,
+    pub send_errors: u64,
+    pub inbound_received: u64,
+    pub inbound_dropped: u64,
+}
+
 fn decode_hex_vec(input: &str) -> Result<Vec<u8>, String> {
     let bytes = input.as_bytes();
     if !bytes.len().is_multiple_of(2) {
@@ -235,7 +245,13 @@ fn strip_scheme(input: &str) -> &str {
 
 #[no_mangle]
 pub extern "C" fn veil_quic_is_supported() -> c_int {
+    eprintln!("FFI: veil_quic_is_supported invoked");
     1
+}
+
+#[no_mangle]
+pub extern "C" fn veil_quic_test_ffi_call() {
+    eprintln!("FFI: veil_quic_test_ffi_call invoked successfully!");
 }
 
 #[no_mangle]
@@ -244,6 +260,7 @@ pub extern "C" fn veil_quic_start(
     server_name: *const c_char,
     trusted_peer_cert_hex: *const c_char,
 ) -> u64 {
+    let debug = std::env::var_os("VEIL_QUIC_DEBUG").is_some();
     let bind_addr = match cstr_to_string(bind_addr)
         .ok()
         .and_then(|s| strip_scheme(&s).parse::<SocketAddr>().ok())
@@ -265,6 +282,16 @@ pub extern "C" fn veil_quic_start(
     };
 
     let mut config = QuicAdapterConfig::new(bind_addr, &server_name, identity);
+    if let Ok(value) = std::env::var("VEIL_QUIC_CONNECT_TIMEOUT_MS") {
+        if let Ok(ms) = value.parse::<u64>() {
+            config.connect_timeout = Duration::from_millis(ms);
+        }
+    }
+    if let Ok(value) = std::env::var("VEIL_QUIC_SEND_TIMEOUT_MS") {
+        if let Ok(ms) = value.parse::<u64>() {
+            config.send_timeout = Duration::from_millis(ms);
+        }
+    }
     // If trusted_peer_cert_hex is provided, use it for pinning (e.g. self-signed)
     // Otherwise, QuicAdapter::connect will rely on system roots (for publicly trusted certs like Let's Encrypt)
     if !trusted_peer_cert_hex.is_null() {
@@ -287,6 +314,9 @@ pub extern "C" fn veil_quic_start(
 
     let id = QUIC_NEXT_ID.fetch_add(1, Ordering::Relaxed);
     if let Ok(mut map) = QUIC_HANDLES.lock() {
+        if debug {
+            eprintln!("FFI: inserting QUIC handle {id}");
+        }
         map.insert(id, adapter);
     }
     id
@@ -298,6 +328,7 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
     server_name: *const c_char,
 ) -> *mut c_char {
     eprintln!("FFI: veil_quic_fetch_peer_cert called");
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let endpoint_str = match cstr_to_string(endpoint) {
         Ok(value) => value,
         Err(e) => {
@@ -428,6 +459,7 @@ pub unsafe extern "C" fn veil_quic_send(
     data: *const u8,
     len: usize,
 ) -> c_int {
+    let debug = std::env::var_os("VEIL_QUIC_DEBUG").is_some();
     if handle == 0 || data.is_null() || len == 0 {
         return -1;
     }
@@ -442,7 +474,12 @@ pub unsafe extern "C" fn veil_quic_send(
     };
     let adapter = match map.get_mut(&handle) {
         Some(adapter) => adapter,
-        None => return -4,
+        None => {
+            if debug {
+                eprintln!("FFI: send missing handle {handle}");
+            }
+            return -4;
+        }
     };
     match adapter.send(&peer, bytes) {
         Ok(_) => 0,
@@ -480,6 +517,33 @@ pub extern "C" fn veil_quic_recv(handle: u64) -> *mut QuicRecv {
         len,
     };
     Box::into_raw(Box::new(recv))
+}
+
+/// # Safety
+/// `out` must be a valid pointer to a `QuicMetrics` struct.
+#[no_mangle]
+pub unsafe extern "C" fn veil_quic_metrics(handle: u64, out: *mut QuicMetrics) -> c_int {
+    if handle == 0 || out.is_null() {
+        return -1;
+    }
+    let mut map = match QUIC_HANDLES.lock() {
+        Ok(map) => map,
+        Err(_) => return -2,
+    };
+    let adapter = match map.get_mut(&handle) {
+        Some(adapter) => adapter,
+        None => return -3,
+    };
+    let metrics = adapter.metrics_snapshot();
+    *out = QuicMetrics {
+        outbound_queued: metrics.outbound_queued,
+        send_attempts: metrics.send_attempts,
+        send_success: metrics.send_success,
+        send_errors: metrics.send_errors,
+        inbound_received: metrics.inbound_received,
+        inbound_dropped: metrics.inbound_dropped,
+    };
+    0
 }
 
 /// # Safety

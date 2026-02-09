@@ -16,33 +16,98 @@ class DiscoveryView extends StatefulWidget {
 }
 
 class _DiscoveryViewState extends State<DiscoveryView> {
-  late final TextEditingController _peerController;
   late final TextEditingController _tagController;
+  String? _contactBundle;
+  bool _contactLoading = false;
 
   @override
   void initState() {
     super.initState();
-    _peerController = TextEditingController();
     _tagController = TextEditingController();
+    _refreshContactBundle();
   }
 
   @override
   void dispose() {
-    _peerController.dispose();
     _tagController.dispose();
     super.dispose();
+  }
+
+  Future<void> _refreshContactBundle() async {
+    setState(() {
+      _contactLoading = true;
+    });
+    final value = await widget.controller.buildContactBundleString();
+    if (!mounted) return;
+    setState(() {
+      _contactBundle = value;
+      _contactLoading = false;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final controller = widget.controller;
-    final rawEndpoint = _peerController.text.trim();
-    final lowerEndpoint = rawEndpoint.toLowerCase();
     final rawTag = _tagController.text.trim();
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Panel(
+          title: 'Share Contact',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Share your contact bundle as a QR code payload.',
+                style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
+              ),
+              const SizedBox(height: 12),
+              if (_contactLoading)
+                const Center(child: CircularProgressIndicator())
+              else if (_contactBundle == null || _contactBundle!.isEmpty)
+                Text(
+                  'Contact bundle unavailable. Try again.',
+                  style: theme.textTheme.bodySmall?.copyWith(color: Colors.orangeAccent),
+                )
+              else
+                SelectableText(
+                  _contactBundle!,
+                  style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+                ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: (_contactBundle == null || _contactBundle!.isEmpty)
+                          ? null
+                          : () async {
+                              await Clipboard.setData(
+                                ClipboardData(text: _contactBundle!),
+                              );
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Contact bundle copied'),
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            },
+                      child: const Text('Copy Bundle'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: _refreshContactBundle,
+                    child: const Text('Refresh'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
         Panel(
           title: 'Suggested Communities',
           child: Column(
@@ -92,78 +157,6 @@ class _DiscoveryViewState extends State<DiscoveryView> {
             ],
           ),
         ),
-        const SizedBox(height: 16),
-        Panel(
-          title: 'Add Endpoint',
-          child: Column(
-            children: [
-              InputField(
-                label: 'Endpoint (domain, wss://.../ws, or veil://vps)',
-                controller: _peerController,
-                onChanged: (_) {},
-                onScan: () => openScanner(
-                  context,
-                  onResult: controller.handleScanValue,
-                ),
-              ),
-              if (rawEndpoint.isNotEmpty &&
-                  !lowerEndpoint.startsWith('ws://') &&
-                  !lowerEndpoint.startsWith('wss://') &&
-                  !lowerEndpoint.startsWith('veil://') &&
-                  !lowerEndpoint.startsWith('veil:vps:') &&
-                  !lowerEndpoint.startsWith('vps:') &&
-                  !lowerEndpoint.startsWith('quic://'))
-                Padding(
-                  padding: const EdgeInsets.only(top: 6, bottom: 6),
-                  child: Text(
-                    'Endpoint should start with veil://, ws://, wss://, or quic://',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: Colors.orangeAccent),
-                  ),
-                ),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () {
-                        controller.handleScanValue(_peerController.text);
-                        _peerController.clear();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Endpoint added'),
-                            behavior: SnackBarBehavior.floating,
-                          ),
-                        );
-                      },
-                      child: const Text('Add Endpoint'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton(
-                    onPressed: () async {
-                      final data = await Clipboard.getData('text/plain');
-                      final value = data?.text?.trim();
-                      if (value == null || value.isEmpty) return;
-                      _peerController.text = value;
-                      controller.handleScanValue(value);
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Endpoint pasted'),
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    },
-                    child: const Text('Paste'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
         Panel(
           title: 'Subscribe to Channel',
           child: Column(

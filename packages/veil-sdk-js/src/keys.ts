@@ -113,3 +113,20 @@ export async function importEd25519PublicKeyRaw(bytes: Uint8Array): Promise<Cryp
     "verify",
   ]);
 }
+
+export async function exportEd25519PrivateKeyPkcs8(
+  privateKey: CryptoKey,
+): Promise<Uint8Array> {
+  const crypto = await getWebCrypto();
+  const bytes = await crypto.subtle.exportKey("pkcs8", privateKey);
+  return new Uint8Array(bytes);
+}
+
+export async function importEd25519PrivateKeyPkcs8(
+  bytes: Uint8Array,
+): Promise<CryptoKey> {
+  const crypto = await getWebCrypto();
+  return crypto.subtle.importKey("pkcs8", toArrayBuffer(bytes), { name: "Ed25519" }, true, [
+    "sign",
+  ]);
+}

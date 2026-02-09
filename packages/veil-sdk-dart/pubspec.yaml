@@ -13,6 +13,8 @@ dependencies:
   web_socket_channel: ^2.4.5
   sqflite: ^2.3.3
   flutter_reactive_ble: ^5.1.1
+  cryptography: ^2.7.0
+  flutter_secure_storage: ^9.2.2
 
 # Optional platform deps can be added by the app (sqflite, drift, flutter_reactive_ble).
 

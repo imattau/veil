@@ -3,7 +3,7 @@
 //! The adapter uses QUIC unidirectional streams for opaque byte payloads and
 //! supports both outbound sends and inbound receive callbacks.
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
@@ -27,7 +27,7 @@ impl QuicIdentity {
     pub fn generate_self_signed(server_name: &str) -> Result<Self, QuicAdapterError> {
         let mut params = rcgen::CertificateParams::new(vec![server_name.to_string()])
             .map_err(|_| QuicAdapterError::IdentityGenerationFailed)?;
-        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        params.is_ca = rcgen::IsCa::NoCa;
         let key_pair =
             rcgen::KeyPair::generate().map_err(|_| QuicAdapterError::IdentityGenerationFailed)?;
         let cert = params
@@ -221,7 +221,7 @@ impl TransportAdapter for QuicAdapter {
                 return Err(QuicAdapterError::PayloadTooLarge { hint });
             }
         }
-        let peer_addr = SocketAddr::from_str(peer).map_err(|_| QuicAdapterError::InvalidPeer)?;
+        let peer_addr = resolve_peer_addr(peer).map_err(|_| QuicAdapterError::InvalidPeer)?;
         self.outbound_tx
             .try_send(OutboundMessage {
                 peer: peer_addr,
@@ -270,6 +270,7 @@ async fn run_quic_worker(
     mut shutdown_rx: oneshot::Receiver<()>,
     startup_tx: mpsc::SyncSender<Result<(), QuicAdapterError>>,
 ) {
+    let debug = std::env::var_os("VEIL_QUIC_DEBUG").is_some();
     let server_cfg = match build_server_config(&config.identity) {
         Ok(cfg) => cfg,
         Err(_) => {
@@ -304,6 +305,9 @@ async fn run_quic_worker(
             _ = &mut shutdown_rx => break,
             Some(msg) = outbound_rx.recv() => {
                 metrics.send_attempts.fetch_add(1, Ordering::Relaxed);
+                if debug {
+                    eprintln!("quic connecting to {}", msg.peer);
+                }
                 let connecting = endpoint.connect(msg.peer, &config.server_name);
                 if let Ok(connecting) = connecting {
                     let connection = tokio::time::timeout(config.connect_timeout, connecting).await;
@@ -320,12 +324,37 @@ async fn run_quic_worker(
                             metrics.send_success.fetch_add(1, Ordering::Relaxed);
                         } else {
                             metrics.send_errors.fetch_add(1, Ordering::Relaxed);
+                            if debug {
+                                match sent {
+                                    Ok(Err(err)) => {
+                                        eprintln!("quic send error: {err}");
+                                    }
+                                    Err(err) => {
+                                        eprintln!("quic send timeout: {err}");
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                     } else {
                         metrics.send_errors.fetch_add(1, Ordering::Relaxed);
+                        if debug {
+                            match connection {
+                                Ok(Err(err)) => {
+                                    eprintln!("quic connect error: {err}");
+                                }
+                                Err(err) => {
+                                    eprintln!("quic connect timeout: {err}");
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                 } else {
                     metrics.send_errors.fetch_add(1, Ordering::Relaxed);
+                    if debug {
+                        eprintln!("quic connect builder error");
+                    }
                 }
             }
             maybe_incoming = endpoint.accept() => {
@@ -333,22 +362,43 @@ async fn run_quic_worker(
                     let inbound_tx = inbound_tx.clone();
                     let metrics = Arc::clone(&metrics);
                     let max_recv = config.max_recv_bytes;
+                    if debug {
+                        eprintln!("quic incoming connection");
+                    }
                     tokio::spawn(async move {
-                        if let Ok(conn) = incoming.await {
-                            let remote = conn.remote_address().to_string();
-                            while let Ok(mut recv) = conn.accept_uni().await {
-                                match recv.read_to_end(max_recv).await {
-                                    Ok(bytes) => {
-                                        match inbound_tx.try_send((remote.clone(), bytes)) {
-                                            Ok(_) => {
-                                                metrics.inbound_received.fetch_add(1, Ordering::Relaxed);
+                        match incoming.await {
+                            Ok(conn) => {
+                                let remote = conn.remote_address().to_string();
+                                if debug {
+                                    eprintln!("quic accepted from {remote}");
+                                }
+                                while let Ok(mut recv) = conn.accept_uni().await {
+                                    match recv.read_to_end(max_recv).await {
+                                        Ok(bytes) => {
+                                            if debug {
+                                                eprintln!("quic recv {} bytes from {remote}", bytes.len());
                                             }
-                                            Err(_) => {
-                                                metrics.inbound_dropped.fetch_add(1, Ordering::Relaxed);
+                                            match inbound_tx.try_send((remote.clone(), bytes)) {
+                                                Ok(_) => {
+                                                    metrics.inbound_received.fetch_add(1, Ordering::Relaxed);
+                                                }
+                                                Err(_) => {
+                                                    metrics.inbound_dropped.fetch_add(1, Ordering::Relaxed);
+                                                }
                                             }
                                         }
+                                        Err(err) => {
+                                            if debug {
+                                                eprintln!("quic recv error from {remote}: {err}");
+                                            }
+                                            break;
+                                        }
                                     }
-                                    Err(_) => break,
+                                }
+                            }
+                            Err(err) => {
+                                if debug {
+                                    eprintln!("quic incoming connection failed: {err}");
                                 }
                             }
                         }
@@ -368,6 +418,12 @@ fn build_server_config(identity: &QuicIdentity) -> Result<ServerConfig, QuicAdap
 }
 
 fn build_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientConfig, QuicAdapterError> {
+    if std::env::var_os("VEIL_QUIC_PINNED").is_some() && !trusted_certs_der.is_empty() {
+        return build_pinned_client_config(trusted_certs_der);
+    }
+    if std::env::var_os("VEIL_QUIC_INSECURE").is_some() {
+        return build_insecure_client_config();
+    }
     let mut roots = RootCertStore::empty();
     for cert_der in trusted_certs_der {
         let cert = CertificateDer::from(cert_der.clone());
@@ -381,6 +437,136 @@ fn build_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientConfig, Qu
     let quic_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
         .map_err(|_| QuicAdapterError::InvalidIdentity)?;
     Ok(ClientConfig::new(Arc::new(quic_tls)))
+}
+
+fn build_pinned_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientConfig, QuicAdapterError> {
+    #[derive(Debug)]
+    struct PinnedVerifier {
+        pinned: Vec<Vec<u8>>,
+    }
+
+    impl rustls::client::danger::ServerCertVerifier for PinnedVerifier {
+        fn verify_server_cert(
+            &self,
+            end_entity: &rustls_pki_types::CertificateDer<'_>,
+            _intermediates: &[rustls_pki_types::CertificateDer<'_>],
+            _server_name: &rustls::pki_types::ServerName<'_>,
+            _ocsp: &[u8],
+            _now: rustls::pki_types::UnixTime,
+        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+            if self.pinned.iter().any(|cert| cert.as_slice() == end_entity.as_ref()) {
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            } else {
+                Err(rustls::Error::InvalidCertificate(
+                    rustls::CertificateError::UnknownIssuer,
+                ))
+            }
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls_pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls_pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            vec![
+                rustls::SignatureScheme::RSA_PSS_SHA256,
+                rustls::SignatureScheme::RSA_PSS_SHA384,
+                rustls::SignatureScheme::RSA_PSS_SHA512,
+                rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+                rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+                rustls::SignatureScheme::ED25519,
+            ]
+        }
+    }
+
+    let verifier = PinnedVerifier {
+        pinned: trusted_certs_der.to_vec(),
+    };
+    let tls = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth();
+    let quic_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
+        .map_err(|_| QuicAdapterError::InvalidIdentity)?;
+    Ok(ClientConfig::new(Arc::new(quic_tls)))
+}
+
+fn build_insecure_client_config() -> Result<ClientConfig, QuicAdapterError> {
+    #[derive(Debug)]
+    struct AcceptAllVerifier;
+    impl rustls::client::danger::ServerCertVerifier for AcceptAllVerifier {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &rustls_pki_types::CertificateDer<'_>,
+            _intermediates: &[rustls_pki_types::CertificateDer<'_>],
+            _server_name: &rustls::pki_types::ServerName<'_>,
+            _ocsp: &[u8],
+            _now: rustls::pki_types::UnixTime,
+        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls_pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls_pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            vec![
+                rustls::SignatureScheme::RSA_PSS_SHA256,
+                rustls::SignatureScheme::RSA_PSS_SHA384,
+                rustls::SignatureScheme::RSA_PSS_SHA512,
+                rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+                rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+                rustls::SignatureScheme::ED25519,
+            ]
+        }
+    }
+
+    let tls = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
+        .with_no_client_auth();
+    let quic_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
+        .map_err(|_| QuicAdapterError::InvalidIdentity)?;
+    Ok(ClientConfig::new(Arc::new(quic_tls)))
+}
+
+fn resolve_peer_addr(peer: &str) -> Result<SocketAddr, QuicAdapterError> {
+    if let Ok(addr) = SocketAddr::from_str(peer) {
+        return Ok(addr);
+    }
+    let mut addrs = peer
+        .to_socket_addrs()
+        .map_err(|_| QuicAdapterError::InvalidPeer)?;
+    addrs.next().ok_or(QuicAdapterError::InvalidPeer)
 }
 
 #[cfg(test)]
