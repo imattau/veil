@@ -62,7 +62,7 @@ impl QuicAdapterConfig {
         Self {
             bind_addr,
             server_name: server_name.into(),
-            trusted_peer_certs_der: vec![identity.cert_der.clone()],
+            trusted_peer_certs_der: Vec::new(),
             identity,
             connect_timeout: Duration::from_secs(3),
             send_timeout: Duration::from_secs(3),
@@ -418,19 +418,14 @@ fn build_server_config(identity: &QuicIdentity) -> Result<ServerConfig, QuicAdap
 }
 
 fn build_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientConfig, QuicAdapterError> {
-    if std::env::var_os("VEIL_QUIC_PINNED").is_some() && !trusted_certs_der.is_empty() {
-        return build_pinned_client_config(trusted_certs_der);
-    }
     if std::env::var_os("VEIL_QUIC_INSECURE").is_some() {
         return build_insecure_client_config();
     }
-    let mut roots = RootCertStore::empty();
-    for cert_der in trusted_certs_der {
-        let cert = CertificateDer::from(cert_der.clone());
-        roots
-            .add(cert)
-            .map_err(|_| QuicAdapterError::InvalidIdentity)?;
+    if !trusted_certs_der.is_empty() {
+        return build_pinned_client_config(trusted_certs_der);
     }
+    let mut roots = RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let tls = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
