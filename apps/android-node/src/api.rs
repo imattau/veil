@@ -73,3 +73,9 @@ pub struct EventEnvelope {
     pub event: String,
     pub data: serde_json::Value,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueWorkerConfig {
+    pub tick_ms: u64,
+    pub max_attempts: u32,
+}

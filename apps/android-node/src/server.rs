@@ -237,4 +237,31 @@ mod tests {
         let parsed: StatusResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.queue.pending, 1);
     }
+
+    #[tokio::test]
+    async fn publish_response_contains_message_id() {
+        let app = build_router(test_state());
+        let body = serde_json::to_string(&PublishRequest {
+            namespace: 32,
+            payload: "hello".to_string(),
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/publish")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: PublishResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(!parsed.message_id.is_nil());
+    }
 }

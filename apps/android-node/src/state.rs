@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -31,6 +32,7 @@ struct StateInner {
     events: broadcast::Sender<EventEnvelope>,
     store: Option<StateStore>,
     queue: Vec<QueueItem>,
+    queue_attempts: HashMap<Uuid, u32>,
 }
 
 impl NodeState {
@@ -62,6 +64,7 @@ impl NodeState {
                 events,
                 store,
                 queue: snapshot.queue,
+                queue_attempts: HashMap::new(),
             })),
         }
     }
@@ -110,6 +113,54 @@ impl NodeState {
             });
         }
         message_id
+    }
+
+    pub fn take_next_queued(&self) -> Option<QueueItem> {
+        let mut inner = self.inner.lock().expect("state lock");
+        let item = inner.queue.first().cloned();
+        if let Some(item) = &item {
+            inner.queue_inflight = inner.queue_inflight.saturating_add(1);
+            inner.queue_pending = inner.queue_pending.saturating_sub(1);
+            let attempts = inner.queue_attempts.entry(item.id).or_insert(0);
+            *attempts += 1;
+        }
+        item
+    }
+
+    pub fn complete_item(&self, item: &QueueItem, success: bool) {
+        let mut inner = self.inner.lock().expect("state lock");
+        if let Some(pos) = inner.queue.iter().position(|entry| entry.id == item.id) {
+            if success {
+                inner.queue.remove(pos);
+                inner.queue_inflight = inner.queue_inflight.saturating_sub(1);
+                inner.queue_attempts.remove(&item.id);
+                let _ = inner.events.send(EventEnvelope {
+                    event: "publish_sent".to_string(),
+                    data: serde_json::json!({ "message_id": item.id }),
+                });
+            } else {
+                inner.queue_failed = inner.queue_failed.saturating_add(1);
+                inner.queue_inflight = inner.queue_inflight.saturating_sub(1);
+                let attempts = inner.queue_attempts.get(&item.id).copied().unwrap_or(0);
+                let _ = inner.events.send(EventEnvelope {
+                    event: "publish_failed".to_string(),
+                    data: serde_json::json!({
+                        "message_id": item.id,
+                        "attempts": attempts,
+                    }),
+                });
+            }
+        }
+        if let Some(store) = &inner.store {
+            store.persist(&StoreSnapshot {
+                queue: inner.queue.clone(),
+            });
+        }
+    }
+
+    pub fn attempts_for(&self, item: &QueueItem) -> u32 {
+        let inner = self.inner.lock().expect("state lock");
+        inner.queue_attempts.get(&item.id).copied().unwrap_or(0)
     }
 
     pub fn subscribe(&self, tag: &str) -> bool {
