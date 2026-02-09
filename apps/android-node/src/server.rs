@@ -52,12 +52,12 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
 async fn publish(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(_request): Json<PublishRequest>,
+    Json(request): Json<PublishRequest>,
 ) -> Response {
     if !authorized(&headers, &state.auth_token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let message_id = state.node.enqueue_publish();
+    let message_id = state.node.enqueue_publish(request);
     let response = PublishResponse {
         message_id,
         queued: true,
