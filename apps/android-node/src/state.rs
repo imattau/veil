@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use base64::Engine;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -163,6 +164,48 @@ impl NodeState {
         inner.queue_attempts.get(&item.id).copied().unwrap_or(0)
     }
 
+    pub fn mark_lane_health(&self, lane: &str, connected: bool, last_error: Option<String>) {
+        let mut inner = self.inner.lock().expect("state lock");
+        let target = match lane {
+            "quic" => &mut inner.quic,
+            "tor" => &mut inner.tor,
+            _ => &mut inner.websocket,
+        };
+        target.connected = connected;
+        target.last_error = last_error.clone();
+        let _ = inner.events.send(EventEnvelope {
+            event: "lane_health".to_string(),
+            data: serde_json::json!({
+                "lane": lane,
+                "connected": connected,
+                "last_error": last_error,
+            }),
+        });
+    }
+
+    pub fn emit_payload(
+        &self,
+        object_root: &[u8; 32],
+        payload: &[u8],
+        namespace: u16,
+        epoch: u32,
+        tag: &[u8; 32],
+        flags: u16,
+    ) {
+        let inner = self.inner.lock().expect("state lock");
+        let _ = inner.events.send(EventEnvelope {
+            event: "payload".to_string(),
+            data: serde_json::json!({
+                "object_root": hex_encode(object_root),
+                "payload_b64": base64::engine::general_purpose::STANDARD.encode(payload),
+                "namespace": namespace,
+                "epoch": epoch,
+                "tag": hex_encode(tag),
+                "flags": flags,
+            }),
+        });
+    }
+
     pub fn subscribe(&self, tag: &str) -> bool {
         let mut inner = self.inner.lock().expect("state lock");
         inner.subscriptions.insert(tag.to_string())
@@ -177,6 +220,14 @@ impl NodeState {
         let inner = self.inner.lock().expect("state lock");
         inner.events.subscribe()
     }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{:02x}", byte));
+    }
+    out
 }
 
 #[cfg(test)]

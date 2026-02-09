@@ -13,6 +13,7 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 rand = { workspace = true }
+base64 = "0.22"
 veil-core = { path = "../../crates/veil-core" }
 veil-crypto = { path = "../../crates/veil-crypto" }
 veil-node = { path = "../../crates/veil-node" }

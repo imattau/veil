@@ -8,11 +8,16 @@ use tokio::sync::Mutex;
 use veil_core::tags::derive_feed_tag;
 use veil_core::{Epoch, Namespace, Tag};
 use veil_crypto::aead::XChaCha20Poly1305Cipher;
+use veil_crypto::signing::Ed25519Verifier;
 use veil_crypto::signing::Ed25519Signer;
 use veil_node::batch::FeedBatcher;
 use veil_node::config::NodeRuntimeConfig;
+use veil_node::receive::ReceiveEvent;
+use veil_node::runtime::{
+    pump_multi_lane_tick_with_config_resolvers_split, ConfigMultiLanePumpParams, RuntimeStats,
+};
 use veil_node::service::{PublisherRuntime, PublisherTickInput};
-use veil_transport::adapter::InMemoryAdapter;
+use veil_transport::adapter::{InMemoryAdapter, TransportAdapter, TransportHealthSnapshot};
 use veil_transport_websocket::{WebSocketAdapter, WebSocketAdapterConfig};
 
 #[derive(Debug, Clone)]
@@ -38,6 +43,8 @@ pub struct ProtocolEngine {
     >,
     config: ProtocolConfig,
     steps: Arc<AtomicU64>,
+    runtime_stats: Arc<Mutex<RuntimeStats>>,
+    verifier: Ed25519Verifier,
 }
 
 impl ProtocolEngine {
@@ -59,6 +66,8 @@ impl ProtocolEngine {
             inner: Arc::new(Mutex::new(runtime)),
             config,
             steps: Arc::new(AtomicU64::new(0)),
+            runtime_stats: Arc::new(Mutex::new(RuntimeStats::default())),
+            verifier: Ed25519Verifier::default(),
         })
     }
 
@@ -80,6 +89,47 @@ impl ProtocolEngine {
             })
             .map(|_| ())
             .map_err(|e| e.to_string())
+    }
+
+    pub async fn pump_inbound(&self) -> Result<Option<ReceiveEvent>, String> {
+        let mut runtime = self.inner.lock().await;
+        let mut stats = self.runtime_stats.lock().await;
+        let peers = vec!["peer".to_string()];
+        let cfg = NodeRuntimeConfig::default();
+        let PublisherRuntime {
+            state,
+            fast_adapter,
+            fallback_adapter,
+            encrypt_key,
+            ..
+        } = &mut *runtime;
+        let resolver = |peer: &String| cfg.publisher_for_peer(peer);
+        let event = pump_multi_lane_tick_with_config_resolvers_split(
+            state,
+            fast_adapter,
+            fallback_adapter,
+            ConfigMultiLanePumpParams {
+                fast_peers: &peers,
+                fallback_peers: &peers,
+                now_step: self.steps.fetch_add(1, Ordering::Relaxed) + 1,
+                decrypt_key: encrypt_key,
+                config: &cfg,
+                stats: &mut stats,
+            },
+            &resolver,
+            &resolver,
+            &XChaCha20Poly1305Cipher,
+            &self.verifier,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(event)
+    }
+
+    pub async fn health_snapshot(&self) -> (TransportHealthSnapshot, TransportHealthSnapshot) {
+        let runtime = self.inner.lock().await;
+        let fast = runtime.fast_adapter.health_snapshot();
+        let fallback = runtime.fallback_adapter.health_snapshot();
+        (fast, fallback)
     }
 }
 

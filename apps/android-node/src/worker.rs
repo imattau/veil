@@ -6,6 +6,7 @@ use tokio::time::sleep;
 use crate::api::QueueWorkerConfig;
 use crate::protocol::ProtocolEngine;
 use crate::state::NodeState;
+use veil_node::receive::ReceiveEvent;
 
 #[derive(Clone)]
 pub struct QueueWorker {
@@ -26,6 +27,35 @@ impl QueueWorker {
     pub async fn run(self) {
         let tick = Duration::from_millis(self.config.tick_ms.max(50));
         loop {
+            if let Ok(event) = self.protocol.pump_inbound().await {
+                if let Some(ReceiveEvent::Delivered {
+                    object_root,
+                    payload,
+                    namespace,
+                    epoch,
+                    tag,
+                    flags,
+                }) = event
+                {
+                    self.state.emit_payload(
+                        &object_root,
+                        &payload,
+                        namespace.0,
+                        epoch.0,
+                        &tag,
+                        flags,
+                    );
+                }
+            }
+            let (fast, _) = self.protocol.health_snapshot().await;
+            let connected = fast.outbound_send_ok > 0 || fast.inbound_received > 0;
+            let last_error = if fast.outbound_send_err > 0 {
+                Some("send_error".to_string())
+            } else {
+                None
+            };
+            self.state
+                .mark_lane_health("websocket", connected, last_error);
             if let Some(item) = self.state.take_next_queued() {
                 let attempts = self.state.attempts_for(&item);
                 if attempts > self.config.max_attempts {
