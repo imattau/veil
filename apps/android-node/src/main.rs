@@ -32,7 +32,38 @@ async fn main() {
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(32);
-    let protocol_config = default_protocol_config(ws_url, peer_id, namespace);
+    let mut protocol_config = default_protocol_config(ws_url, peer_id, namespace);
+    if let Ok(raw) = std::env::var("VEIL_NODE_FAST_PEERS") {
+        protocol_config.fast_peers = raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    if let Ok(raw) = std::env::var("VEIL_NODE_FALLBACK_PEERS") {
+        protocol_config.fallback_peers = raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    if let Ok(raw) = std::env::var("VEIL_NODE_PEER_PUBKEYS") {
+        for entry in raw.split(',') {
+            let mut parts = entry.splitn(2, '=');
+            let peer = parts.next().unwrap_or("").trim();
+            let hex = parts.next().unwrap_or("").trim();
+            if peer.is_empty() || hex.len() != 64 {
+                continue;
+            }
+            if let Ok(bytes) = hex::decode(hex) {
+                if bytes.len() == 32 {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(&bytes);
+                    protocol_config.runtime_config.bind_peer_publisher(peer, key);
+                }
+            }
+        }
+    }
     let protocol = Arc::new(
         ProtocolEngine::new(protocol_config).expect("protocol engine init"),
     );

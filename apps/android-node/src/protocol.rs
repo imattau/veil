@@ -27,6 +27,9 @@ pub struct ProtocolConfig {
     pub namespace: Namespace,
     pub tag: Tag,
     pub encrypt_key: [u8; 32],
+    pub fast_peers: Vec<String>,
+    pub fallback_peers: Vec<String>,
+    pub runtime_config: NodeRuntimeConfig,
 }
 
 #[derive(Clone)]
@@ -57,7 +60,7 @@ impl ProtocolEngine {
             FeedBatcher::default(),
             fast_adapter,
             fallback_adapter,
-            NodeRuntimeConfig::default(),
+            config.runtime_config.clone(),
             config.encrypt_key,
             None,
             XChaCha20Poly1305Cipher,
@@ -75,7 +78,16 @@ impl ProtocolEngine {
         let mut runtime = self.inner.lock().await;
         runtime.enqueue(payload);
         let step = self.steps.fetch_add(1, Ordering::Relaxed) + 1;
-        let peers = vec!["peer".to_string()];
+        let fast_peers = if self.config.fast_peers.is_empty() {
+            vec!["peer".to_string()]
+        } else {
+            self.config.fast_peers.clone()
+        };
+        let fallback_peers = if self.config.fallback_peers.is_empty() {
+            fast_peers.clone()
+        } else {
+            self.config.fallback_peers.clone()
+        };
         runtime
             .tick(PublisherTickInput {
                 namespace: self.config.namespace,
@@ -84,8 +96,8 @@ impl ProtocolEngine {
                 now_step: step,
                 flags: 0,
                 interactive_flush: true,
-                fast_peers: &peers,
-                fallback_peers: &peers,
+                fast_peers: &fast_peers,
+                fallback_peers: &fallback_peers,
             })
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -94,8 +106,17 @@ impl ProtocolEngine {
     pub async fn pump_inbound(&self) -> Result<Option<ReceiveEvent>, String> {
         let mut runtime = self.inner.lock().await;
         let mut stats = self.runtime_stats.lock().await;
-        let peers = vec!["peer".to_string()];
-        let cfg = NodeRuntimeConfig::default();
+        let fast_peers = if self.config.fast_peers.is_empty() {
+            vec!["peer".to_string()]
+        } else {
+            self.config.fast_peers.clone()
+        };
+        let fallback_peers = if self.config.fallback_peers.is_empty() {
+            fast_peers.clone()
+        } else {
+            self.config.fallback_peers.clone()
+        };
+        let cfg = self.config.runtime_config.clone();
         let PublisherRuntime {
             state,
             fast_adapter,
@@ -109,8 +130,8 @@ impl ProtocolEngine {
             fast_adapter,
             fallback_adapter,
             ConfigMultiLanePumpParams {
-                fast_peers: &peers,
-                fallback_peers: &peers,
+                fast_peers: &fast_peers,
+                fallback_peers: &fallback_peers,
                 now_step: self.steps.fetch_add(1, Ordering::Relaxed) + 1,
                 decrypt_key: encrypt_key,
                 config: &cfg,
@@ -138,12 +159,16 @@ pub fn default_protocol_config(ws_url: String, peer_id: String, namespace: u16) 
     rand::thread_rng().fill_bytes(&mut key);
     let mut pubkey = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut pubkey);
+    let cfg = NodeRuntimeConfig::default();
     ProtocolConfig {
         ws_url,
         peer_id,
         namespace: Namespace(namespace),
         tag: derive_feed_tag(&pubkey, Namespace(namespace)),
         encrypt_key: key,
+        fast_peers: Vec::new(),
+        fallback_peers: Vec::new(),
+        runtime_config: cfg,
     }
 }
 
