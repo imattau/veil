@@ -106,6 +106,47 @@ Deliver a practical-mode VEIL implementation in this Rust workspace that can:
 - Add end-to-end example (`object -> shards -> forward -> reconstruct -> ACK`)
 - Exit criteria: `cargo fmt`, `clippy -D warnings`, and `cargo test --workspace` all green
 
+## Android Node UI Roadmap (App Over Local Node)
+
+### Phase 0 - Contracts + Baseline
+- Define local RPC schema (requests/events) with versioning.
+- Choose IPC transport (localhost HTTP+WS first).
+- Define identity/storage boundaries (node owns keys, cache, queue).
+- Define observability contract (lane health, queue depth, shard stats, errors).
+- Exit criteria: RPC spec doc + stub client in app.
+
+### Phase 1 - Node as Foreground Service
+- Android foreground service wrapper for the node.
+- Start/stop lifecycle and persistent notification.
+- Authenticated localhost RPC endpoint.
+- Exit criteria: UI can connect and read node status.
+
+### Phase 2 - Transport + Identity
+- Node manages QUIC/WS/Tor lanes and exposes health.
+- Node-managed identity creation/persistence/rotation.
+- UI shows identity and lane status.
+- Exit criteria: UI can display live lane health + identity.
+
+### Phase 3 - Messaging + Publish Queue
+- Node owns publish queue with offline buffering and retries.
+- UI submits payloads and receives status updates.
+- Exit criteria: UI send works offline and drains on reconnect.
+
+### Phase 4 - Shard Cache + Reconstruction
+- Node stores shards, reconstructs objects, validates signatures.
+- UI receives decrypted semantic messages via event stream.
+- Exit criteria: end-to-end message flow over multiple lanes.
+
+### Phase 5 - WoT + Local Policy
+- Node computes trust tiers and enforces routing/cache policy.
+- UI displays trust summaries and policy controls.
+- Exit criteria: policy changes affect routing without protocol changes.
+
+### Phase 6 - Reliability + Diagnostics
+- Crash recovery and data migrations.
+- Diagnostics UI for lane health, queue, storage, errors.
+- Exit criteria: reproducible E2E tests + observability dashboard.
+
 ## Release Gates (0.1.0-rc1)
 - Functional: tag derivation, schema compliance, and ACK behavior
 - Resilience: packet loss tolerance and cache churn behavior in `veil-sim`
