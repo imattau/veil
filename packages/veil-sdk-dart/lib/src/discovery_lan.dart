@@ -84,12 +84,21 @@ class LanDiscovery {
     required void Function(LanDiscoveryMessage msg) onMessage,
   }) async {
     if (_socket != null) return;
-    final socket = await RawDatagramSocket.bind(
-      InternetAddress.anyIPv4,
-      port,
-      reuseAddress: true,
-      reusePort: true,
-    );
+    RawDatagramSocket socket;
+    try {
+      socket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        port,
+        reuseAddress: true,
+        reusePort: true,
+      );
+    } catch (_) {
+      socket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        port,
+        reuseAddress: true,
+      );
+    }
     socket.broadcastEnabled = true;
     _socket = socket;
 
