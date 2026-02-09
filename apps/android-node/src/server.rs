@@ -98,6 +98,7 @@ async fn events_ws(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     ws.on_upgrade(move |mut socket| async move {
+        let mut rx = state.node.subscribe_events();
         let event = EventEnvelope {
             event: "node_status".to_string(),
             data: serde_json::to_value(state.node.status()).unwrap_or_default(),
@@ -107,7 +108,19 @@ async fn events_ws(
                 serde_json::to_string(&event).unwrap_or_default(),
             ))
             .await;
-        let _ = socket.close().await;
+        while let Ok(event) = rx.recv().await {
+            let payload = match serde_json::to_string(&event) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if socket
+                .send(axum::extract::ws::Message::Text(payload))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
     })
 }
 
@@ -125,7 +138,7 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
+    use axum::body::{Body, Bytes};
     use http::{Request, StatusCode};
     use tower::ServiceExt;
 
@@ -184,5 +197,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn status_reflects_publish_queue() {
+        let app = build_router(test_state());
+        let body = serde_json::to_string(&PublishRequest {
+            namespace: 32,
+            payload: "hello".to_string(),
+        })
+        .unwrap();
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/publish")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/status")
+                    .header("x-veil-token", "secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: StatusResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.queue.pending, 1);
     }
 }
