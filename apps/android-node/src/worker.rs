@@ -4,17 +4,23 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::api::QueueWorkerConfig;
+use crate::protocol::ProtocolEngine;
 use crate::state::NodeState;
 
 #[derive(Clone)]
 pub struct QueueWorker {
     state: Arc<NodeState>,
+    protocol: Arc<ProtocolEngine>,
     config: QueueWorkerConfig,
 }
 
 impl QueueWorker {
-    pub fn new(state: Arc<NodeState>, config: QueueWorkerConfig) -> Self {
-        Self { state, config }
+    pub fn new(state: Arc<NodeState>, protocol: Arc<ProtocolEngine>, config: QueueWorkerConfig) -> Self {
+        Self {
+            state,
+            protocol,
+            config,
+        }
     }
 
     pub async fn run(self) {
@@ -25,8 +31,11 @@ impl QueueWorker {
                 if attempts > self.config.max_attempts {
                     self.state.complete_item(&item, false);
                 } else {
-                    // Placeholder for real send path.
-                    self.state.complete_item(&item, true);
+                    let result = self
+                        .protocol
+                        .publish(item.payload.clone().into_bytes())
+                        .await;
+                    self.state.complete_item(&item, result.is_ok());
                 }
             }
             sleep(tick).await;

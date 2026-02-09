@@ -2677,6 +2677,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "http",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "tempfile",
@@ -2685,6 +2686,11 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "veil-core",
+ "veil-crypto",
+ "veil-node",
+ "veil-transport",
+ "veil-transport-websocket",
 ]
 
 [[package]]

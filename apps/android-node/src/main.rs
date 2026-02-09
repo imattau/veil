@@ -3,7 +3,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use veil_android_node::{serve, AppState, NodeState, QueueWorker, QueueWorkerConfig};
+use veil_android_node::{
+    default_protocol_config, serve, AppState, NodeState, ProtocolEngine, QueueWorker,
+    QueueWorkerConfig,
+};
 
 #[tokio::main]
 async fn main() {
@@ -23,8 +26,20 @@ async fn main() {
     let node = NodeState::new_with_store(env!("CARGO_PKG_VERSION"), store_path);
     let node_arc = Arc::new(node.clone());
 
+    let ws_url = std::env::var("VEIL_NODE_WS").unwrap_or_else(|_| "ws://127.0.0.1:9001/ws".to_string());
+    let peer_id = std::env::var("VEIL_NODE_PEER").unwrap_or_else(|_| "android-node".to_string());
+    let namespace = std::env::var("VEIL_NODE_NAMESPACE")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(32);
+    let protocol_config = default_protocol_config(ws_url, peer_id, namespace);
+    let protocol = Arc::new(
+        ProtocolEngine::new(protocol_config).expect("protocol engine init"),
+    );
+
     let worker = QueueWorker::new(
         node_arc,
+        protocol,
         QueueWorkerConfig {
             tick_ms: 500,
             max_attempts: 3,
