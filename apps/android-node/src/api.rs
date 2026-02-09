@@ -36,7 +36,7 @@ pub struct CacheStatus {
     pub bytes: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishRequest {
     pub namespace: u16,
     pub payload: String,
@@ -48,7 +48,7 @@ pub struct PublishResponse {
     pub queued: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscribeRequest {
     pub tag: String,
 }
@@ -58,7 +58,7 @@ pub struct SubscribeResponse {
     pub subscribed: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UnsubscribeRequest {
     pub tag: String,
 }
