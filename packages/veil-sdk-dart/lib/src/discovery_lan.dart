@@ -84,13 +84,14 @@ class LanDiscovery {
     required void Function(LanDiscoveryMessage msg) onMessage,
   }) async {
     if (_socket != null) return;
+    final reusePort = Platform.isAndroid;
     RawDatagramSocket socket;
     try {
       socket = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
         port,
         reuseAddress: true,
-        reusePort: true,
+        reusePort: reusePort,
       );
     } catch (_) {
       socket = await RawDatagramSocket.bind(
