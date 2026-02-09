@@ -2692,6 +2692,8 @@ dependencies = [
  "veil-crypto",
  "veil-node",
  "veil-transport",
+ "veil-transport-quic",
+ "veil-transport-tor",
  "veil-transport-websocket",
 ]
 

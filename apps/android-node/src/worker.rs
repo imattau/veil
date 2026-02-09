@@ -47,15 +47,26 @@ impl QueueWorker {
                     );
                 }
             }
-            let (fast, _) = self.protocol.health_snapshot().await;
-            let connected = fast.outbound_send_ok > 0 || fast.inbound_received > 0;
-            let last_error = if fast.outbound_send_err > 0 {
+            let (fast_label, fast, fallback_label, fallback) =
+                self.protocol.health_snapshot().await;
+            let fast_connected = fast.outbound_send_ok > 0 || fast.inbound_received > 0;
+            let fast_error = if fast.outbound_send_err > 0 {
                 Some("send_error".to_string())
             } else {
                 None
             };
             self.state
-                .mark_lane_health("websocket", connected, last_error);
+                .mark_lane_health(&fast_label, fast_connected, fast_error);
+            if fallback_label != "none" {
+                let fallback_connected = fallback.outbound_send_ok > 0 || fallback.inbound_received > 0;
+                let fallback_error = if fallback.outbound_send_err > 0 {
+                    Some("send_error".to_string())
+                } else {
+                    None
+                };
+                self.state
+                    .mark_lane_health(&fallback_label, fallback_connected, fallback_error);
+            }
             if let Some(item) = self.state.take_next_queued() {
                 let attempts = self.state.attempts_for(&item);
                 if attempts > self.config.max_attempts {

@@ -33,14 +33,26 @@ async fn main() {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(32);
     let mut protocol_config = default_protocol_config(ws_url, peer_id, namespace);
-    if let Ok(raw) = std::env::var("VEIL_NODE_FAST_PEERS") {
+    if let Ok(raw) = std::env::var("VEIL_NODE_QUIC_PEERS") {
+        protocol_config.fast_peers = raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    } else if let Ok(raw) = std::env::var("VEIL_NODE_FAST_PEERS") {
         protocol_config.fast_peers = raw
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
     }
-    if let Ok(raw) = std::env::var("VEIL_NODE_FALLBACK_PEERS") {
+    if let Ok(raw) = std::env::var("VEIL_NODE_WS_PEERS") {
+        protocol_config.fallback_peers = raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    } else if let Ok(raw) = std::env::var("VEIL_NODE_FALLBACK_PEERS") {
         protocol_config.fallback_peers = raw
             .split(',')
             .map(|s| s.trim().to_string())
@@ -61,6 +73,33 @@ async fn main() {
                     key.copy_from_slice(&bytes);
                     protocol_config.runtime_config.bind_peer_publisher(peer, key);
                 }
+            }
+        }
+    }
+    if let Ok(raw) = std::env::var("VEIL_NODE_WS") {
+        if !raw.trim().is_empty() {
+            protocol_config.ws_url = Some(raw);
+        }
+    }
+    if let Ok(raw) = std::env::var("VEIL_NODE_QUIC_BIND") {
+        if !raw.trim().is_empty() {
+            protocol_config.quic_bind_addr = raw;
+        }
+    }
+    if let Ok(raw) = std::env::var("VEIL_NODE_QUIC_SERVER_NAME") {
+        if !raw.trim().is_empty() {
+            protocol_config.quic_server_name = Some(raw);
+        }
+    }
+    if let Ok(raw) = std::env::var("VEIL_NODE_TOR_SOCKS") {
+        if !raw.trim().is_empty() {
+            protocol_config.tor_socks = Some(raw);
+        }
+    }
+    if let Ok(raw) = std::env::var("VEIL_NODE_QUIC_CERT_HEX") {
+        if let Ok(bytes) = hex::decode(raw.trim()) {
+            if !bytes.is_empty() {
+                protocol_config.quic_trusted_certs = vec![bytes];
             }
         }
     }

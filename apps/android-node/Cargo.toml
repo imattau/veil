@@ -19,6 +19,8 @@ veil-core = { path = "../../crates/veil-core" }
 veil-crypto = { path = "../../crates/veil-crypto" }
 veil-node = { path = "../../crates/veil-node" }
 veil-transport = { path = "../../crates/veil-transport" }
+veil-transport-quic = { path = "../../crates/veil-transport-quic" }
+veil-transport-tor = { path = "../../crates/veil-transport-tor" }
 veil-transport-websocket = { path = "../../crates/veil-transport-websocket" }
 
 [dev-dependencies]
