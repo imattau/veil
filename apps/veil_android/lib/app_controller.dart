@@ -1147,6 +1147,7 @@ class VeilAppController extends ChangeNotifier {
         break;
       case AppLifecycleState.inactive:
       case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
       case AppLifecycleState.detached:
         unawaited(_pauseForBackground());
         break;
@@ -1403,17 +1404,18 @@ class VeilAppController extends ChangeNotifier {
         }
       } else if (firstQuic != null) {
         _events.insert(0, 'Pinning QUIC cert from server…');
+        final target = firstQuic;
         Future.microtask(() async {
           if (!await QuicLane.isSupported()) {
             _events.insert(0, 'QUIC not supported on this device');
             _notify();
             return;
           }
-          final cert = await QuicLane.fetchPinnedCertHex(firstQuic);
+          final cert = await QuicLane.fetchPinnedCertHex(target);
           if (cert == null || cert.isEmpty) {
             _events.insert(0, 'Failed to pin QUIC cert');
           } else {
-            setQuicCertFor(firstQuic, cert);
+            setQuicCertFor(target, cert);
             await _persistPrefs();
             _events.insert(0, 'Pinned QUIC certificate');
           }
