@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "apps/android-node",
   "apps/veil-vps-node",
   "apps/veil-desktop-relay",
   "crates/veil-core",
