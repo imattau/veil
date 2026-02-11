@@ -263,12 +263,7 @@ chmod 0600 "$ENV_FILE" || true
 chown "$RUN_USER:$RUN_GROUP" "$ENV_FILE" || true
 
 DEFAULT_CORE_TAGS="6914e6d3b151b9ac372db7c201ae4e043af645245ecce6175648d42b6177a9ca,7f3612b9145b9ae924e119dbce48ea5bba8ef366d50f10fdf490fc88378c7180,040257d0dadd0ec43e267cc60c2a3c4306e1665273e0ba88065254bbd082a590,7f3fccfbad7a618eecccf31277a79691c5d6a657e50f45dd671319f84ee1d010"
-if grep -q "^VEIL_VPS_CORE_TAGS=" "$ENV_FILE"; then
-  current=$(grep "^VEIL_VPS_CORE_TAGS=" "$ENV_FILE" | tail -n 1 | cut -d= -f2-)
-  if [[ -z "$current" ]]; then
-    sed -i "s|^VEIL_VPS_CORE_TAGS=.*|VEIL_VPS_CORE_TAGS=${DEFAULT_CORE_TAGS}|" "$ENV_FILE"
-  fi
-else
+if ! grep -q "^VEIL_VPS_CORE_TAGS=" "$ENV_FILE"; then
   echo "" >> "$ENV_FILE"
   echo "# Default core tags: Public Square, Local Builders, Civic Updates, Open Media" >> "$ENV_FILE"
   echo "VEIL_VPS_CORE_TAGS=${DEFAULT_CORE_TAGS}" >> "$ENV_FILE"
@@ -277,9 +272,7 @@ fi
 set_env_var() {
   local key="$1"
   local value="$2"
-  if grep -q "^${key}=" "$ENV_FILE"; then
-    sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
-  else
+  if ! grep -q "^${key}=" "$ENV_FILE"; then
     echo "${key}=${value}" >> "$ENV_FILE"
   fi
 }
@@ -293,6 +286,7 @@ set_env_var "VEIL_VPS_NODE_KEY_PATH" "${PREFIX}/data/node_identity.key"
 set_env_var "VEIL_VPS_QUIC_CERT_PATH" "${PREFIX}/data/quic_cert.der"
 set_env_var "VEIL_VPS_QUIC_KEY_PATH" "${PREFIX}/data/quic_key.der"
 set_env_var "VEIL_VPS_QUIC_BIND" "${VEIL_VPS_QUIC_BIND:-0.0.0.0:5000}"
+set_env_var "VEIL_VPS_QUIC_ALPN" "veil-quic/1,veil/1,veil-node,veil,h3,hq-29"
 set_env_var "VEIL_VPS_FAST_PEERS" ""
 set_env_var "VEIL_VPS_CORE_TAGS" "${DEFAULT_CORE_TAGS}"
 set_env_var "VEIL_VPS_PEER_DB_PATH" "${PREFIX}/data/peers.db"

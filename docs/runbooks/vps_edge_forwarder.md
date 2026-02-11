@@ -34,6 +34,7 @@ export VEIL_VPS_NODE_KEY_PATH=/opt/veil-vps-node/data/node_identity.key
 export VEIL_VPS_QUIC_CERT_PATH=/opt/veil-vps-node/data/quic_cert.der
 export VEIL_VPS_QUIC_KEY_PATH=/opt/veil-vps-node/data/quic_key.der
 export VEIL_VPS_QUIC_BIND=0.0.0.0:5000
+export VEIL_VPS_QUIC_ALPN=veil-quic/1,veil/1,veil-node,veil,h3,hq-29
 export VEIL_VPS_FAST_PEERS=10.0.0.2:5000,10.0.0.3:5000
 export VEIL_VPS_CORE_TAGS=
 export VEIL_VPS_PEER_DB_PATH=/opt/veil-vps-node/data/peers.db

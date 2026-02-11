@@ -179,10 +179,14 @@
       const ws = `${isSecure ? "wss" : "ws"}://${host}/ws`;
       const quicPort = window.VEIL_VPS_QUIC_PORT || 5000;
       const quicCertB64 = window.VEIL_VPS_QUIC_CERT_B64 || "";
+      const quicAlpn = window.VEIL_VPS_QUIC_ALPN || "";
       const quic = `quic://${host.split(":")[0]}:${quicPort}`;
       const params = new URLSearchParams({ ws, quic });
       if (quicCertB64) {
         params.set("certb64", quicCertB64);
+      }
+      if (quicAlpn) {
+        params.set("alpn", quicAlpn);
       }
       const profile = `veil://vps?${params.toString()}`;
 

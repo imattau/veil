@@ -685,6 +685,13 @@ fn start_health_server(
 }
 
 fn main() {
+    if let Ok(raw_alpn) = std::env::var("VEIL_VPS_QUIC_ALPN") {
+        if !raw_alpn.trim().is_empty() {
+            std::env::set_var("VEIL_QUIC_ALPN", raw_alpn.clone());
+            eprintln!("quic: using VEIL_VPS_QUIC_ALPN override: {raw_alpn}");
+        }
+    }
+
     let state_path = PathBuf::from(env_var(
         "VEIL_VPS_STATE_PATH",
         "data/veil-vps-node-state.cbor",

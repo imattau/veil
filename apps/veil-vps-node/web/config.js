@@ -1,2 +1,3 @@
 window.VEIL_VPS_QUIC_PORT = 5000;
 window.VEIL_VPS_QUIC_CERT_B64 = "";
+window.VEIL_VPS_QUIC_ALPN = "";

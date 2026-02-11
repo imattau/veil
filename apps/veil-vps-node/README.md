@@ -50,6 +50,7 @@ Required:
 Optional:
 - `VEIL_VPS_STATE_PATH` (default `data/veil-vps-node-state.cbor`)
 - `VEIL_VPS_NODE_KEY_PATH` (default `data/node_identity.key`)
+- `VEIL_VPS_QUIC_ALPN` (comma-separated ALPN list to advertise; overrides `VEIL_QUIC_ALPN`)
 - `VEIL_VPS_QUIC_CERT_PATH` (default `data/quic_cert.der`)
 - `VEIL_VPS_QUIC_KEY_PATH` (default `data/quic_key.der`)
 - `VEIL_VPS_QUIC_TRUSTED_CERTS` (comma-separated cert DER paths)
