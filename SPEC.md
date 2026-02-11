@@ -14,8 +14,32 @@ This draft defines normative behavior for:
 - Subscription-based forwarding
 - Reconstruction and ACK behavior
 - Rarity-biased cache policy
+- Node-Everywhere operational model
 
 Keywords **MUST**, **SHOULD**, **MAY** are interpreted as in RFC 2119.
+
+## 1.1 Node-Everywhere Model (Normative)
+
+VEIL treats all participants as functionally equivalent nodes. The UI is a thin client over a local node.
+
+**Functional symmetry**
+- All participants (mobile P2P clients and VPS nodes) MUST implement the same shard forwarding, caching, and reconstruction logic.
+- Nodes MUST treat incoming data as opaque, fixed-size shards; forwarding decisions MUST be based on local policy and subscriptions, not on payload content or origin.
+- Shard and object formats MUST be identical across all transport lanes (e.g., QUIC, WebSocket, Tor, WebRTC).
+
+**Architectural decoupling**
+- The node process MUST own networking, erasure coding, shard cache, and WoT policy.
+- The UI layer MUST NOT implement protocol logic; it communicates via a stable local API (RPC/WS).
+- Local policy MUST be sovereign: trust tiers and quotas are determined by local state only.
+
+**Operational resilience**
+- On mobile platforms, the node SHOULD be able to run as a background or foreground service to keep lanes alive and drain queues.
+- CPU-intensive crypto and reconstruction SHOULD be isolated from the UI process.
+- Nodes MUST buffer outbound payloads and drain queues after connectivity loss.
+
+**Identity and discovery**
+- Node identity, pinning, and contact bundles MUST be managed by the node.
+- Applications SHOULD use namespaces `>= 32` to avoid collisions across UI flavors.
 
 ## 2. Primitives
 

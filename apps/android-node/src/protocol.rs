@@ -1,25 +1,33 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::RngCore;
 use tokio::sync::Mutex;
+use serde_json;
 
 use veil_core::tags::derive_feed_tag;
-use veil_core::{Epoch, Namespace, Tag};
+use veil_core::{Epoch, Namespace};
 use veil_crypto::aead::XChaCha20Poly1305Cipher;
 use veil_crypto::signing::Ed25519Verifier;
 use veil_crypto::signing::Ed25519Signer;
 use veil_node::batch::FeedBatcher;
 use veil_node::config::NodeRuntimeConfig;
+use veil_node::policy::LocalWotPolicy;
 use veil_node::receive::ReceiveEvent;
 use veil_node::runtime::{
     pump_multi_lane_tick_with_config_resolvers_split, ConfigMultiLanePumpParams, RuntimeStats,
 };
 use veil_node::service::{PublisherRuntime, PublisherTickInput};
-use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
-use crate::adapters::{FallbackAdapter, FastAdapter};
+use crate::adapters::{FallbackAdapter, FastAdapter, LaneAdapter, LaneSnapshot, MultiLaneAdapter};
+use crate::api::{LaneDetail, LaneStats};
+use veil_node::persistence::load_state_or_default;
+use veil_codec::shard::decode_shard_cbor;
+use veil_fec::sharder::reconstruct_object_padded_with_mode;
+use crate::discovery::discovery_tag;
 
 #[derive(Debug, Clone)]
 pub struct ProtocolConfig {
@@ -30,11 +38,14 @@ pub struct ProtocolConfig {
     pub tor_socks: Option<String>,
     pub peer_id: String,
     pub namespace: Namespace,
-    pub tag: Tag,
+    pub discovery_namespace: Namespace,
     pub encrypt_key: [u8; 32],
+    pub identity_pubkey: [u8; 32],
+    pub signer: Ed25519Signer,
     pub fast_peers: Vec<String>,
     pub fallback_peers: Vec<String>,
     pub runtime_config: NodeRuntimeConfig,
+    pub cache_state_path: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -53,82 +64,81 @@ pub struct ProtocolEngine {
     steps: Arc<AtomicU64>,
     runtime_stats: Arc<Mutex<RuntimeStats>>,
     verifier: Ed25519Verifier,
+    identity_pubkey: Arc<Mutex<[u8; 32]>>,
+    dynamic_fast_peers: Arc<Mutex<Vec<String>>>,
+    dynamic_fallback_peers: Arc<Mutex<Vec<String>>>,
+    dynamic_peer_map: Arc<Mutex<HashMap<String, [u8; 32]>>>,
 }
 
 impl ProtocolEngine {
     pub fn new(config: ProtocolConfig) -> Result<Self, String> {
-        let fast_adapter = if let Some(quic_peer) = config.fast_peers.first() {
-            let server_name = config
-                .quic_server_name
-                .clone()
-                .or_else(|| derive_server_name(quic_peer));
-            if let Some(name) = server_name {
-                let bind_addr = config
-                    .quic_bind_addr
-                    .parse()
-                    .map_err(|_| "invalid QUIC bind addr")?;
-                let quic = crate::adapters::build_quic_adapter(
-                    bind_addr,
-                    name,
-                    config.quic_trusted_certs.clone(),
-                )
-                .map_err(|e| e.to_string())?;
-                FastAdapter::Quic(quic)
-            } else {
-                build_ws_fast(&config)?
-            }
+        let identity_pubkey = config.identity_pubkey;
+        let fast_adapter = build_fast_adapter(&config)?;
+        let fallback_adapter = build_fallback_adapter(&config)?;
+        let state = if let Some(path) = &config.cache_state_path {
+            load_state_or_default(path).unwrap_or_default()
         } else {
-            build_ws_fast(&config)?
-        };
-
-        let fallback_adapter = if let Some(socks) = &config.tor_socks {
-            let tor = crate::adapters::build_tor_adapter(socks.clone()).map_err(|e| e.to_string())?;
-            FallbackAdapter::Tor(tor)
-        } else if let Some(ws_url) = &config.ws_url {
-            let ws = crate::adapters::build_ws_adapter(ws_url.clone(), config.peer_id.clone())
-                .map_err(|e| e.to_string())?;
-            FallbackAdapter::WebSocket(ws)
-        } else {
-            FallbackAdapter::InMemory(veil_transport::adapter::InMemoryAdapter::default())
+            veil_node::state::NodeState::default()
         };
         let runtime = PublisherRuntime::new(
-            veil_node::state::NodeState::default(),
+            state,
             FeedBatcher::default(),
             fast_adapter,
             fallback_adapter,
             config.runtime_config.clone(),
             config.encrypt_key,
-            None,
+            Some(config.signer.clone()),
             XChaCha20Poly1305Cipher,
         );
+        let mut runtime = runtime;
+        let tag = discovery_tag(config.discovery_namespace);
+        runtime.state.subscriptions.insert(tag);
         Ok(Self {
             inner: Arc::new(Mutex::new(runtime)),
             config,
             steps: Arc::new(AtomicU64::new(0)),
             runtime_stats: Arc::new(Mutex::new(RuntimeStats::default())),
             verifier: Ed25519Verifier::default(),
+            identity_pubkey: Arc::new(Mutex::new(identity_pubkey)),
+            dynamic_fast_peers: Arc::new(Mutex::new(Vec::new())),
+            dynamic_fallback_peers: Arc::new(Mutex::new(Vec::new())),
+            dynamic_peer_map: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
-    pub async fn publish(&self, payload: Vec<u8>) -> Result<(), String> {
+    pub async fn publish(&self, payload: Vec<u8>, namespace: Option<u16>) -> Result<(), String> {
+        let namespace = Namespace(namespace.unwrap_or(self.config.namespace.0));
+        let pubkey = *self.identity_pubkey.lock().await;
+        let tag = derive_feed_tag(&pubkey, namespace);
+        self.publish_with_tag(payload, namespace, tag).await
+    }
+
+    pub async fn publish_with_tag(
+        &self,
+        payload: Vec<u8>,
+        namespace: Namespace,
+        tag: [u8; 32],
+    ) -> Result<(), String> {
         let mut runtime = self.inner.lock().await;
         runtime.enqueue(payload);
         let step = self.steps.fetch_add(1, Ordering::Relaxed) + 1;
-        let fast_peers = if self.config.fast_peers.is_empty() {
+        let fast_peers = self.fast_peers().await;
+        let fast_peers = if fast_peers.is_empty() {
             vec!["peer".to_string()]
         } else {
-            self.config.fast_peers.clone()
+            fast_peers
         };
-        let fallback_peers = if self.config.fallback_peers.is_empty() {
+        let fallback_peers = self.fallback_peers().await;
+        let fallback_peers = if fallback_peers.is_empty() {
             fast_peers.clone()
         } else {
-            self.config.fallback_peers.clone()
+            fallback_peers
         };
         runtime
             .tick(PublisherTickInput {
-                namespace: self.config.namespace,
+                namespace,
                 epoch: current_epoch(),
-                tag: self.config.tag,
+                tag,
                 now_step: step,
                 flags: 0,
                 interactive_flush: true,
@@ -139,18 +149,126 @@ impl ProtocolEngine {
             .map_err(|e| e.to_string())
     }
 
+    pub async fn publish_discovery(&self, msg: crate::discovery::DiscoveryMessage) -> Result<(), String> {
+        let payload = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+        let namespace = self.config.discovery_namespace;
+        let tag = discovery_tag(namespace);
+        self.publish_with_tag(payload, namespace, tag).await
+    }
+
+    pub async fn subscribe_pubkey(&self, pubkey: [u8; 32], namespace: Namespace) {
+        let tag = derive_feed_tag(&pubkey, namespace);
+        let mut runtime = self.inner.lock().await;
+        runtime.state.subscriptions.insert(tag);
+    }
+
+    pub async fn subscribe_tag(&self, tag: [u8; 32]) {
+        let mut runtime = self.inner.lock().await;
+        runtime.state.subscriptions.insert(tag);
+    }
+
+    pub async fn has_subscription(&self, tag: [u8; 32]) -> bool {
+        let runtime = self.inner.lock().await;
+        runtime.state.subscriptions.contains(&tag)
+    }
+
+    pub async fn update_identity(&self, pubkey: [u8; 32], signer: Ed25519Signer) {
+        let mut runtime = self.inner.lock().await;
+        runtime.signer = Some(signer);
+        let mut guard = self.identity_pubkey.lock().await;
+        *guard = pubkey;
+    }
+
+    pub async fn update_wot_policy(&self, policy: LocalWotPolicy) {
+        let mut runtime = self.inner.lock().await;
+        runtime.config.wot_policy = policy;
+    }
+
+    pub async fn add_contact(&self, contact: &crate::api::ContactBundle) {
+        if let Some(quic_addr) = &contact.quic_addr {
+            let mut peers = self.dynamic_fast_peers.lock().await;
+            if !peers.contains(quic_addr) {
+                peers.push(quic_addr.clone());
+            }
+        }
+        if let Some(ws_url) = &contact.ws_url {
+            let mut peers = self.dynamic_fallback_peers.lock().await;
+            if !peers.contains(ws_url) {
+                peers.push(ws_url.clone());
+            }
+        }
+        if contact.pubkey_hex.len() == 64 {
+            if let Ok(bytes) = hex::decode(&contact.pubkey_hex) {
+                if bytes.len() == 32 {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(&bytes);
+                    let mut map = self.dynamic_peer_map.lock().await;
+                    map.insert(contact.peer_id.clone(), key);
+                }
+            }
+        }
+    }
+
+    pub async fn get_cached_shard(&self, shard_id: [u8; 32]) -> Option<Vec<u8>> {
+        let runtime = self.inner.lock().await;
+        runtime.state.cache.get(&shard_id).map(|cached| cached.bytes.clone())
+    }
+
+    pub async fn reconstruct_object(&self, root: [u8; 32]) -> Option<Vec<u8>> {
+        let runtime = self.inner.lock().await;
+        let mut shards = Vec::new();
+        for cached in runtime.state.cache.values() {
+            if let Ok(shard) = decode_shard_cbor(&cached.bytes) {
+                if shard.header.object_root == root {
+                    shards.push(shard);
+                }
+            }
+        }
+        if shards.is_empty() {
+            return None;
+        }
+        reconstruct_object_padded_with_mode(&shards, root, runtime.config.erasure_coding_mode).ok()
+    }
+
+    pub async fn persist_cache_state(&self) {
+        let path = match &self.config.cache_state_path {
+            Some(path) => path.clone(),
+            None => return,
+        };
+        let runtime = self.inner.lock().await;
+        let _ = veil_node::persistence::save_state_to_path(path, &runtime.state);
+    }
+
+    pub fn peer_id(&self) -> String {
+        self.config.peer_id.clone()
+    }
+
+    pub fn ws_url(&self) -> Option<String> {
+        self.config.ws_url.clone()
+    }
+
+    pub fn discovery_namespace(&self) -> Namespace {
+        self.config.discovery_namespace
+    }
+
+    pub fn quic_bind_addr(&self) -> String {
+        self.config.quic_bind_addr.clone()
+    }
+
     pub async fn pump_inbound(&self) -> Result<Option<ReceiveEvent>, String> {
         let mut runtime = self.inner.lock().await;
         let mut stats = self.runtime_stats.lock().await;
-        let fast_peers = if self.config.fast_peers.is_empty() {
+        let fast_peers = self.fast_peers().await;
+        let fast_peers = if fast_peers.is_empty() {
             vec!["peer".to_string()]
         } else {
-            self.config.fast_peers.clone()
+            fast_peers
         };
-        let fallback_peers = if self.config.fallback_peers.is_empty() {
+        let fallback_peers = self.fallback_peers().await;
+        let fallback_peers = if fallback_peers.is_empty() {
             fast_peers.clone()
         } else {
-            self.config.fallback_peers.clone()
+            fallback_peers
         };
         let cfg = self.config.runtime_config.clone();
         let PublisherRuntime {
@@ -160,7 +278,8 @@ impl ProtocolEngine {
             encrypt_key,
             ..
         } = &mut *runtime;
-        let resolver = |peer: &String| cfg.publisher_for_peer(peer);
+        let dynamic = self.dynamic_peer_map.lock().await.clone();
+        let resolver = |peer: &String| dynamic.get(peer).copied().or_else(|| cfg.publisher_for_peer(peer));
         let event = pump_multi_lane_tick_with_config_resolvers_split(
             state,
             fast_adapter,
@@ -182,30 +301,49 @@ impl ProtocolEngine {
         Ok(event)
     }
 
-    pub async fn health_snapshot(
-        &self,
-    ) -> (String, TransportHealthSnapshot, String, TransportHealthSnapshot) {
+    pub async fn lane_details(&self) -> Vec<LaneDetail> {
         let runtime = self.inner.lock().await;
-        let fast_health = runtime.fast_adapter.health_snapshot();
-        let fallback_health = runtime.fallback_adapter.health_snapshot();
-        let fast_label = match runtime.fast_adapter {
-            FastAdapter::Quic(_) => "quic".to_string(),
-            FastAdapter::WebSocket(_) => "websocket".to_string(),
-        };
-        let fallback_label = match runtime.fallback_adapter {
-            FallbackAdapter::WebSocket(_) => "websocket".to_string(),
-            FallbackAdapter::Tor(_) => "tor".to_string(),
-            FallbackAdapter::InMemory(_) => "none".to_string(),
-        };
-        (fast_label, fast_health, fallback_label, fallback_health)
+        let mut details = Vec::new();
+        details.extend(build_lane_details("fast", runtime.fast_adapter.lane_snapshots()));
+        details.extend(build_lane_details(
+            "fallback",
+            runtime.fallback_adapter.lane_snapshots(),
+        ));
+        details
+    }
+
+    async fn fast_peers(&self) -> Vec<String> {
+        let mut peers = self.config.fast_peers.clone();
+        let dynamic = self.dynamic_fast_peers.lock().await;
+        for peer in dynamic.iter() {
+            if !peers.contains(peer) {
+                peers.push(peer.clone());
+            }
+        }
+        peers
+    }
+
+    async fn fallback_peers(&self) -> Vec<String> {
+        let mut peers = self.config.fallback_peers.clone();
+        let dynamic = self.dynamic_fallback_peers.lock().await;
+        for peer in dynamic.iter() {
+            if !peers.contains(peer) {
+                peers.push(peer.clone());
+            }
+        }
+        peers
     }
 }
 
-pub fn default_protocol_config(ws_url: String, peer_id: String, namespace: u16) -> ProtocolConfig {
+pub fn default_protocol_config(
+    ws_url: String,
+    peer_id: String,
+    namespace: u16,
+    identity_pubkey: [u8; 32],
+    signer: Ed25519Signer,
+) -> ProtocolConfig {
     let mut key = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut key);
-    let mut pubkey = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut pubkey);
     let cfg = NodeRuntimeConfig::default();
     ProtocolConfig {
         ws_url: Some(ws_url),
@@ -215,11 +353,14 @@ pub fn default_protocol_config(ws_url: String, peer_id: String, namespace: u16) 
         tor_socks: None,
         peer_id,
         namespace: Namespace(namespace),
-        tag: derive_feed_tag(&pubkey, Namespace(namespace)),
+        discovery_namespace: Namespace(4096),
         encrypt_key: key,
+        identity_pubkey,
+        signer,
         fast_peers: Vec::new(),
         fallback_peers: Vec::new(),
         runtime_config: cfg,
+        cache_state_path: None,
     }
 }
 
@@ -249,12 +390,96 @@ fn derive_server_name(peer: &str) -> Option<String> {
     }
 }
 
-fn build_ws_fast(config: &ProtocolConfig) -> Result<FastAdapter, String> {
+fn build_ws_fast(config: &ProtocolConfig) -> Result<LaneAdapter, String> {
     let ws_url = config
         .ws_url
         .clone()
         .ok_or_else(|| "missing WS url".to_string())?;
     let ws = crate::adapters::build_ws_adapter(ws_url, config.peer_id.clone())
         .map_err(|e| e.to_string())?;
-    Ok(FastAdapter::WebSocket(ws))
+    Ok(LaneAdapter::WebSocket(ws))
+}
+
+fn build_lane_details(role: &str, snapshots: Vec<LaneSnapshot>) -> Vec<LaneDetail> {
+    snapshots
+        .into_iter()
+        .map(|snapshot| {
+            let last_error = if snapshot.health.outbound_send_err > 0 {
+                Some("send_error".to_string())
+            } else {
+                None
+            };
+            LaneDetail {
+                role: role.to_string(),
+                lane: snapshot.label.to_string(),
+                connected: snapshot.connected
+                    || snapshot.health.outbound_send_ok > 0
+                    || snapshot.health.inbound_received > 0,
+                last_error,
+                stats: LaneStats {
+                    outbound_queued: snapshot.health.outbound_queued,
+                    outbound_send_ok: snapshot.health.outbound_send_ok,
+                    outbound_send_err: snapshot.health.outbound_send_err,
+                    inbound_received: snapshot.health.inbound_received,
+                    inbound_dropped: snapshot.health.inbound_dropped,
+                    reconnect_attempts: snapshot.health.reconnect_attempts,
+                },
+            }
+        })
+        .collect()
+}
+
+fn build_fast_adapter(config: &ProtocolConfig) -> Result<FastAdapter, String> {
+    let mut lanes: Vec<LaneAdapter> = Vec::new();
+
+    let server_name = config
+        .quic_server_name
+        .clone()
+        .or_else(|| config.fast_peers.first().and_then(|peer| derive_server_name(peer)));
+    if let Some(name) = server_name {
+        let bind_addr = config
+            .quic_bind_addr
+            .parse()
+            .map_err(|_| "invalid QUIC bind addr")?;
+        let quic = crate::adapters::build_quic_adapter(
+            bind_addr,
+            name,
+            config.quic_trusted_certs.clone(),
+        )
+        .map_err(|e| e.to_string())?;
+        lanes.push(LaneAdapter::Quic(quic));
+    }
+
+    if config.ws_url.is_some() {
+        lanes.push(build_ws_fast(config)?);
+    }
+
+    if lanes.is_empty() {
+        return Err("no fast lanes available".to_string());
+    }
+
+    Ok(MultiLaneAdapter::new(lanes))
+}
+
+fn build_fallback_adapter(config: &ProtocolConfig) -> Result<FallbackAdapter, String> {
+    let mut lanes: Vec<LaneAdapter> = Vec::new();
+
+    if let Some(ws_url) = &config.ws_url {
+        let ws = crate::adapters::build_ws_adapter(ws_url.clone(), config.peer_id.clone())
+            .map_err(|e| e.to_string())?;
+        lanes.push(LaneAdapter::WebSocket(ws));
+    }
+
+    if let Some(socks) = &config.tor_socks {
+        let tor = crate::adapters::build_tor_adapter(socks.clone()).map_err(|e| e.to_string())?;
+        lanes.push(LaneAdapter::Tor(tor));
+    }
+
+    if lanes.is_empty() {
+        lanes.push(LaneAdapter::InMemory(
+            veil_transport::adapter::InMemoryAdapter::default(),
+        ));
+    }
+
+    Ok(MultiLaneAdapter::new(lanes))
 }

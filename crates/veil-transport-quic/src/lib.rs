@@ -17,6 +17,28 @@ use thiserror::Error;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
+fn alpn_protocols() -> Vec<Vec<u8>> {
+    if let Ok(raw) = std::env::var("VEIL_QUIC_ALPN") {
+        let mut out = Vec::new();
+        for entry in raw.split(',') {
+            let value = entry.trim();
+            if value.is_empty() {
+                continue;
+            }
+            out.push(value.as_bytes().to_vec());
+        }
+        return out;
+    }
+    vec![
+        b"veil-quic/1".to_vec(),
+        b"veil/1".to_vec(),
+        b"veil-node".to_vec(),
+        b"veil".to_vec(),
+        b"h3".to_vec(),
+        b"hq-29".to_vec(),
+    ]
+}
+
 #[derive(Debug, Clone)]
 pub struct QuicIdentity {
     pub cert_der: Vec<u8>,
@@ -304,58 +326,65 @@ async fn run_quic_worker(
         tokio::select! {
             _ = &mut shutdown_rx => break,
             Some(msg) = outbound_rx.recv() => {
-                metrics.send_attempts.fetch_add(1, Ordering::Relaxed);
-                if debug {
-                    eprintln!("quic connecting to {}", msg.peer);
-                }
-                let connecting = endpoint.connect(msg.peer, &config.server_name);
-                if let Ok(connecting) = connecting {
-                    let connection = tokio::time::timeout(config.connect_timeout, connecting).await;
-                    if let Ok(Ok(conn)) = connection {
-                        let send_task = async {
-                            let mut stream = conn.open_uni().await?;
-                            stream.write_all(&msg.bytes).await?;
-                            stream.finish()?;
-                            let _ = stream.stopped().await;
-                            Result::<(), quinn::WriteError>::Ok(())
-                        };
-                        let sent = tokio::time::timeout(config.send_timeout, send_task).await;
-                        if matches!(sent, Ok(Ok(()))) {
-                            metrics.send_success.fetch_add(1, Ordering::Relaxed);
+                let endpoint = endpoint.clone();
+                let metrics = Arc::clone(&metrics);
+                let server_name = config.server_name.clone();
+                let connect_timeout = config.connect_timeout;
+                let send_timeout = config.send_timeout;
+                tokio::spawn(async move {
+                    metrics.send_attempts.fetch_add(1, Ordering::Relaxed);
+                    if debug {
+                        eprintln!("quic connecting to {}", msg.peer);
+                    }
+                    let connecting = endpoint.connect(msg.peer, &server_name);
+                    if let Ok(connecting) = connecting {
+                        let connection = tokio::time::timeout(connect_timeout, connecting).await;
+                        if let Ok(Ok(conn)) = connection {
+                            let send_task = async {
+                                let mut stream = conn.open_uni().await?;
+                                stream.write_all(&msg.bytes).await?;
+                                stream.finish()?;
+                                let _ = stream.stopped().await;
+                                Result::<(), quinn::WriteError>::Ok(())
+                            };
+                            let sent = tokio::time::timeout(send_timeout, send_task).await;
+                            if matches!(sent, Ok(Ok(()))) {
+                                metrics.send_success.fetch_add(1, Ordering::Relaxed);
+                            } else {
+                                metrics.send_errors.fetch_add(1, Ordering::Relaxed);
+                                if debug {
+                                    match sent {
+                                        Ok(Err(err)) => {
+                                            eprintln!("quic send error: {err}");
+                                        }
+                                        Err(err) => {
+                                            eprintln!("quic send timeout: {err}");
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                         } else {
                             metrics.send_errors.fetch_add(1, Ordering::Relaxed);
                             if debug {
-                                match sent {
+                                match connection {
                                     Ok(Err(err)) => {
-                                        eprintln!("quic send error: {err}");
+                                        eprintln!("quic connect error: {err}");
                                     }
                                     Err(err) => {
-                                        eprintln!("quic send timeout: {err}");
+                                        eprintln!("quic connect timeout: {err}");
                                     }
                                     _ => {}
                                 }
                             }
                         }
-                    } else {
+                    } else if let Err(err) = connecting {
                         metrics.send_errors.fetch_add(1, Ordering::Relaxed);
                         if debug {
-                            match connection {
-                                Ok(Err(err)) => {
-                                    eprintln!("quic connect error: {err}");
-                                }
-                                Err(err) => {
-                                    eprintln!("quic connect timeout: {err}");
-                                }
-                                _ => {}
-                            }
+                            eprintln!("quic connect builder error: {err}");
                         }
                     }
-                } else {
-                    metrics.send_errors.fetch_add(1, Ordering::Relaxed);
-                    if debug {
-                        eprintln!("quic connect builder error");
-                    }
-                }
+                });
             }
             maybe_incoming = endpoint.accept() => {
                 if let Some(incoming) = maybe_incoming {
@@ -414,7 +443,14 @@ async fn run_quic_worker(
 fn build_server_config(identity: &QuicIdentity) -> Result<ServerConfig, QuicAdapterError> {
     let cert = CertificateDer::from(identity.cert_der.clone());
     let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(identity.key_der.clone()));
-    ServerConfig::with_single_cert(vec![cert], key).map_err(|_| QuicAdapterError::InvalidIdentity)
+    let mut tls = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .map_err(|_| QuicAdapterError::InvalidIdentity)?;
+    tls.alpn_protocols = alpn_protocols();
+    let quic_tls = quinn::crypto::rustls::QuicServerConfig::try_from(tls)
+        .map_err(|_| QuicAdapterError::InvalidIdentity)?;
+    Ok(ServerConfig::with_crypto(Arc::new(quic_tls)))
 }
 
 fn build_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientConfig, QuicAdapterError> {
@@ -426,9 +462,10 @@ fn build_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientConfig, Qu
     }
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let tls = rustls::ClientConfig::builder()
+    let mut tls = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
+    tls.alpn_protocols = alpn_protocols();
     let quic_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
         .map_err(|_| QuicAdapterError::InvalidIdentity)?;
     Ok(ClientConfig::new(Arc::new(quic_tls)))
@@ -491,10 +528,11 @@ fn build_pinned_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientCon
     let verifier = PinnedVerifier {
         pinned: trusted_certs_der.to_vec(),
     };
-    let tls = rustls::ClientConfig::builder()
+    let mut tls = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
+    tls.alpn_protocols = alpn_protocols();
     let quic_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
         .map_err(|_| QuicAdapterError::InvalidIdentity)?;
     Ok(ClientConfig::new(Arc::new(quic_tls)))
@@ -545,10 +583,11 @@ fn build_insecure_client_config() -> Result<ClientConfig, QuicAdapterError> {
         }
     }
 
-    let tls = rustls::ClientConfig::builder()
+    let mut tls = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(AcceptAllVerifier))
         .with_no_client_auth();
+    tls.alpn_protocols = alpn_protocols();
     let quic_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
         .map_err(|_| QuicAdapterError::InvalidIdentity)?;
     Ok(ClientConfig::new(Arc::new(quic_tls)))

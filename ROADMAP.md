@@ -109,43 +109,52 @@ Deliver a practical-mode VEIL implementation in this Rust workspace that can:
 ## Android Node UI Roadmap (App Over Local Node)
 
 ### Phase 0 - Contracts + Baseline
-- Define local RPC schema (requests/events) with versioning.
-- Choose IPC transport (localhost HTTP+WS first).
-- Define identity/storage boundaries (node owns keys, cache, queue).
-- Define observability contract (lane health, queue depth, shard stats, errors).
-- Exit criteria: RPC spec doc + stub client in app.
+- [x] Define local RPC schema (requests/events) with versioning.
+- [x] Choose IPC transport (localhost HTTP+WS first).
+- [x] Do not use the SDK in android-node; UI must talk directly to the node API.
+- [x] Define identity/storage boundaries (node owns keys, cache, queue).
+- [x] Define observability contract (lane health, queue depth, shard stats, errors).
+- [x] Exit criteria: RPC spec doc + stub client in app.
 
 ### Phase 1 - Node as Foreground Service
-- Android foreground service wrapper for the node.
-- Start/stop lifecycle and persistent notification.
-- Authenticated localhost RPC endpoint.
-- Exit criteria: UI can connect and read node status.
+- [x] Android foreground service wrapper for the node.
+- [x] Start/stop lifecycle and persistent notification.
+- [x] Authenticated localhost RPC endpoint.
+- [x] Exit criteria: UI can connect and read node status.
 
 ### Phase 2 - Transport + Identity
-- Node manages QUIC/WS/Tor lanes and exposes health.
-- Node-managed identity creation/persistence/rotation.
-- UI shows identity and lane status.
-- Exit criteria: UI can display live lane health + identity.
+- [x] Node manages QUIC/WS/Tor lanes and exposes health.
+- [x] Node-managed identity creation/persistence/rotation.
+- [x] UI shows identity and lane status.
+- [x] Exit criteria: UI can display live lane health + identity.
 
 ### Phase 3 - Messaging + Publish Queue
-- Node owns publish queue with offline buffering and retries.
-- UI submits payloads and receives status updates.
-- Exit criteria: UI send works offline and drains on reconnect.
+- [x] Node owns publish queue with offline buffering and retries.
+- [x] UI submits payloads and receives status updates.
+- [x] Exit criteria: UI send works offline and drains on reconnect.
 
 ### Phase 4 - Shard Cache + Reconstruction
-- Node stores shards, reconstructs objects, validates signatures.
-- UI receives decrypted semantic messages via event stream.
-- Exit criteria: end-to-end message flow over multiple lanes.
+- [x] Node stores shards, reconstructs objects, validates signatures.
+- [x] UI receives decrypted semantic messages via event stream.
+- [x] Exit criteria: end-to-end message flow over multiple lanes.
 
 ### Phase 5 - WoT + Local Policy
-- Node computes trust tiers and enforces routing/cache policy.
-- UI displays trust summaries and policy controls.
-- Exit criteria: policy changes affect routing without protocol changes.
+- [x] Node computes trust tiers and enforces routing/cache policy.
+- [x] UI displays trust summaries and policy controls.
+- [x] Exit criteria: policy changes affect routing without protocol changes.
 
 ### Phase 6 - Reliability + Diagnostics
-- Crash recovery and data migrations.
-- Diagnostics UI for lane health, queue, storage, errors.
-- Exit criteria: reproducible E2E tests + observability dashboard.
+- [x] Crash recovery and data migrations.
+- [x] Diagnostics UI for lane health, queue, storage, errors.
+- [x] Exit criteria: reproducible E2E tests + observability dashboard.
+
+### Phase 7 - Discovery + Endorsements
+- [x] Endorsement payloads update local WoT policy automatically.
+- [x] Policy explanation + update endpoints for diagnostics.
+- [x] Persistent shard cache across restarts.
+- [x] Inbound QUIC listener for true P2P.
+- [x] Object/shard retrieval endpoints for clients.
+- [x] Auto discovery/contact exchange (LAN broadcast + gossip + DHT lookup).
 
 ## Release Gates (0.1.0-rc1)
 - Functional: tag derivation, schema compliance, and ACK behavior

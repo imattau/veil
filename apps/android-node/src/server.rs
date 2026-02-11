@@ -1,33 +1,79 @@
 use std::net::SocketAddr;
 
 use axum::{
-    extract::{State, WebSocketUpgrade},
+    extract::{Query, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
+use base64::Engine;
 use tracing::info;
 
 use crate::api::{
-    EventEnvelope, PublishRequest, PublishResponse, StatusResponse, SubscribeRequest,
-    SubscribeResponse, UnsubscribeRequest, UnsubscribeResponse,
+    BlockPublishRequest, BlockPublishResponse, DirectMessagePublishRequest,
+    DirectMessagePublishResponse, FollowPublishRequest, FollowPublishResponse, GroupMessagePublishRequest,
+    GroupMessagePublishResponse, HealthResponse, IdentityResponse, IdentityRotateResponse,
+    MediaPublishRequest, MediaPublishResponse, MutePublishRequest, MutePublishResponse,
+    PostPublishRequest, PostPublishResponse, ProfilePublishRequest, ProfilePublishResponse,
+    PublishRequest, PublishResponse, ReactionPublishRequest, ReactionPublishResponse, StatusResponse,
+    SubscribeRequest, SubscribeResponse, UnsubscribeRequest, UnsubscribeResponse, ErrorResponse,
+    PolicySummaryResponse, PolicyConfigRequest, PolicyConfigResponse, PolicySetRequest,
+    PolicySetResponse, ContactImportRequest, ContactImportResponse, ContactListResponse,
+    ShardFetchResponse, ObjectFetchResponse, DiscoveryAnnounceRequest,
+    DiscoveryLookupRequest, DiscoveryLookupResponse, DiscoveryGossipRequest,
+    DiscoveryGossipResponse,
+};
+use crate::discovery::{
+    build_self_contact, handle_discovery_announce, handle_discovery_gossip, handle_discovery_lookup,
+    DiscoveryMessage,
 };
 use crate::state::NodeState;
+use crate::ProtocolEngine;
 
 #[derive(Clone)]
 pub struct AppState {
     pub node: NodeState,
+    pub protocol: std::sync::Arc<ProtocolEngine>,
     pub auth_token: String,
     pub version: String,
 }
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
+        .route("/health", get(health))
         .route("/status", get(status))
+        .route("/identity", get(identity))
+        .route("/identity/rotate", post(rotate_identity))
         .route("/publish", post(publish))
+        .route("/profile", post(publish_profile))
+        .route("/post", post(publish_post))
+        .route("/reaction", post(publish_reaction))
+        .route("/direct_message", post(publish_direct_message))
+        .route("/group_message", post(publish_group_message))
+        .route("/media", post(publish_media))
+        .route("/follow", post(publish_follow))
+        .route("/mute", post(publish_mute))
+        .route("/block", post(publish_block))
         .route("/subscribe", post(subscribe))
         .route("/unsubscribe", post(unsubscribe))
+        .route("/policy", get(policy_summary))
+        .route("/policy/explain", post(policy_explain))
+        .route("/policy/config", post(update_policy_config))
+        .route("/policy/trust", post(policy_trust))
+        .route("/policy/untrust", post(policy_untrust))
+        .route("/policy/mute", post(policy_mute))
+        .route("/policy/unmute", post(policy_unmute))
+        .route("/policy/block", post(policy_block))
+        .route("/policy/unblock", post(policy_unblock))
+        .route("/contact", get(contact_list))
+        .route("/contact", post(contact_import))
+        .route("/contact/self", get(contact_self))
+        .route("/discovery/announce", post(discovery_announce))
+        .route("/discovery/lookup", post(discovery_lookup))
+        .route("/discovery/gossip", post(discovery_gossip))
+        .route("/shard/:id", get(fetch_shard))
+        .route("/object/:root", get(fetch_object))
         .route("/events", get(events_ws))
         .with_state(state)
 }
@@ -39,6 +85,26 @@ pub async fn serve(addr: SocketAddr, state: AppState) {
         .await
         .expect("bind address");
     axum::serve(listener, app).await.expect("serve");
+}
+
+const MAX_RAW_PAYLOAD_BYTES: usize = 256 * 1024;
+const MAX_BUNDLE_JSON_BYTES: usize = 256 * 1024;
+const MAX_CHANNEL_LEN: usize = 64;
+const MAX_NAME_LEN: usize = 64;
+const MAX_TEXT_LEN: usize = 4096;
+const MAX_BIO_LEN: usize = 1024;
+const MAX_URL_LEN: usize = 1024;
+const MAX_MIME_LEN: usize = 128;
+const MAX_REASON_LEN: usize = 256;
+const MAX_ACTION_LEN: usize = 32;
+const MAX_GROUP_ID_LEN: usize = 64;
+
+async fn health(State(state): State<AppState>) -> Response {
+    Json(HealthResponse {
+        status: "ok".to_string(),
+        version: state.version.clone(),
+    })
+    .into_response()
 }
 
 async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -57,12 +123,747 @@ async fn publish(
     if !authorized(&headers, &state.auth_token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    if request.payload.as_bytes().len() > MAX_RAW_PAYLOAD_BYTES {
+        return bad_request("payload_too_large", "payload exceeds max size");
+    }
     let message_id = state.node.enqueue_publish(request);
     let response = PublishResponse {
         message_id,
         queued: true,
     };
     Json(response).into_response()
+}
+
+async fn identity(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    Json(IdentityResponse {
+        public_key_hex: identity.public_key_hex(),
+    })
+    .into_response()
+}
+
+async fn rotate_identity(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.rotate_identity();
+    state
+        .protocol
+        .update_identity(identity.public_key, identity.signer())
+        .await;
+    Json(IdentityRotateResponse {
+        public_key_hex: identity.public_key_hex(),
+        rotated: true,
+    })
+    .into_response()
+}
+
+async fn publish_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ProfilePublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    if !valid_channel(&bundle.channel_id) {
+        return bad_request("invalid_channel", "channel_id is invalid");
+    }
+    if bundle.display_name.len() > MAX_NAME_LEN {
+        return bad_request("display_name_too_long", "display_name too long");
+    }
+    if bundle.bio.len() > MAX_BIO_LEN {
+        return bad_request("bio_too_long", "bio too long");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    if payload.len() > MAX_BUNDLE_JSON_BYTES {
+        return bad_request("bundle_too_large", "bundle exceeds max size");
+    }
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    Json(ProfilePublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_post(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PostPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    if !valid_channel(&bundle.channel_id) {
+        return bad_request("invalid_channel", "channel_id is invalid");
+    }
+    if bundle.text.len() > MAX_TEXT_LEN {
+        return bad_request("text_too_long", "text too long");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    if payload.len() > MAX_BUNDLE_JSON_BYTES {
+        return bad_request("bundle_too_large", "bundle exceeds max size");
+    }
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    Json(PostPublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_reaction(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ReactionPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    if !valid_channel(&bundle.channel_id) {
+        return bad_request("invalid_channel", "channel_id is invalid");
+    }
+    if bundle.action_code.trim().is_empty() || bundle.action_code.len() > MAX_ACTION_LEN {
+        return bad_request("invalid_action", "action_code invalid");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    if payload.len() > MAX_BUNDLE_JSON_BYTES {
+        return bad_request("bundle_too_large", "bundle exceeds max size");
+    }
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    Json(ReactionPublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_direct_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<DirectMessagePublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    if !valid_channel(&bundle.channel_id) {
+        return bad_request("invalid_channel", "channel_id is invalid");
+    }
+    if !valid_pubkey_hex(&bundle.recipient_pubkey_hex) {
+        return bad_request("invalid_recipient", "recipient pubkey invalid");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    if payload.len() > MAX_BUNDLE_JSON_BYTES {
+        return bad_request("bundle_too_large", "bundle exceeds max size");
+    }
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    Json(DirectMessagePublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_group_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<GroupMessagePublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    if !valid_channel(&bundle.channel_id) {
+        return bad_request("invalid_channel", "channel_id is invalid");
+    }
+    if bundle.group_id.trim().is_empty() || bundle.group_id.len() > MAX_GROUP_ID_LEN {
+        return bad_request("invalid_group", "group_id invalid");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    if payload.len() > MAX_BUNDLE_JSON_BYTES {
+        return bad_request("bundle_too_large", "bundle exceeds max size");
+    }
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    Json(GroupMessagePublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_media(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<MediaPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    if !valid_channel(&bundle.channel_id) {
+        return bad_request("invalid_channel", "channel_id is invalid");
+    }
+    if bundle.mime_type.len() > MAX_MIME_LEN {
+        return bad_request("mime_too_long", "mime_type too long");
+    }
+    if bundle.url.len() > MAX_URL_LEN {
+        return bad_request("url_too_long", "url too long");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    if payload.len() > MAX_BUNDLE_JSON_BYTES {
+        return bad_request("bundle_too_large", "bundle exceeds max size");
+    }
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    Json(MediaPublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_follow(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<FollowPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.follower_pubkey_hex.is_empty() {
+        bundle.follower_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.follower_pubkey_hex != pubkey_hex {
+        return bad_request("follower_mismatch", "follower pubkey does not match identity");
+    }
+    if !valid_channel(&bundle.channel_id) {
+        return bad_request("invalid_channel", "channel_id is invalid");
+    }
+    if !valid_pubkey_hex(&bundle.followee_pubkey_hex) {
+        return bad_request("invalid_followee", "followee pubkey invalid");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    if payload.len() > MAX_BUNDLE_JSON_BYTES {
+        return bad_request("bundle_too_large", "bundle exceeds max size");
+    }
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.trust_pubkey(hex_to_pubkey(&bundle.followee_pubkey_hex));
+    state
+        .protocol
+        .update_wot_policy(state.node.wot_policy())
+        .await;
+    Json(FollowPublishResponse {
+        message_id,
+        queued: true,
+        follower_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_mute(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<MutePublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.muter_pubkey_hex.is_empty() {
+        bundle.muter_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.muter_pubkey_hex != pubkey_hex {
+        return bad_request("muter_mismatch", "muter pubkey does not match identity");
+    }
+    if !valid_channel(&bundle.channel_id) {
+        return bad_request("invalid_channel", "channel_id is invalid");
+    }
+    if !valid_pubkey_hex(&bundle.muted_pubkey_hex) {
+        return bad_request("invalid_muted", "muted pubkey invalid");
+    }
+    if let Some(reason) = &bundle.reason {
+        if reason.len() > MAX_REASON_LEN {
+            return bad_request("reason_too_long", "reason too long");
+        }
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    if payload.len() > MAX_BUNDLE_JSON_BYTES {
+        return bad_request("bundle_too_large", "bundle exceeds max size");
+    }
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.mute_pubkey(hex_to_pubkey(&bundle.muted_pubkey_hex));
+    state
+        .protocol
+        .update_wot_policy(state.node.wot_policy())
+        .await;
+    Json(MutePublishResponse {
+        message_id,
+        queued: true,
+        muter_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_block(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<BlockPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.blocker_pubkey_hex.is_empty() {
+        bundle.blocker_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.blocker_pubkey_hex != pubkey_hex {
+        return bad_request("blocker_mismatch", "blocker pubkey does not match identity");
+    }
+    if !valid_channel(&bundle.channel_id) {
+        return bad_request("invalid_channel", "channel_id is invalid");
+    }
+    if !valid_pubkey_hex(&bundle.blocked_pubkey_hex) {
+        return bad_request("invalid_blocked", "blocked pubkey invalid");
+    }
+    if let Some(reason) = &bundle.reason {
+        if reason.len() > MAX_REASON_LEN {
+            return bad_request("reason_too_long", "reason too long");
+        }
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    if payload.len() > MAX_BUNDLE_JSON_BYTES {
+        return bad_request("bundle_too_large", "bundle exceeds max size");
+    }
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.block_pubkey(hex_to_pubkey(&bundle.blocked_pubkey_hex));
+    state
+        .protocol
+        .update_wot_policy(state.node.wot_policy())
+        .await;
+    Json(BlockPublishResponse {
+        message_id,
+        queued: true,
+        blocker_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn policy_summary(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let summary = state.node.policy_summary();
+    Json(PolicySummaryResponse {
+        trusted: summary.trusted,
+        muted: summary.muted,
+        blocked: summary.blocked,
+        endorsements: summary.endorsements,
+        config: summary.config,
+    })
+    .into_response()
+}
+
+async fn policy_explain(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PolicySetRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !valid_pubkey_hex(&request.pubkey_hex) {
+        return bad_request("invalid_pubkey", "pubkey invalid");
+    }
+    let pubkey = hex_to_pubkey(&request.pubkey_hex);
+    let policy = state.node.wot_policy();
+    let explanation = policy.explain_publisher(pubkey, 0);
+    Json(explanation).into_response()
+}
+
+async fn update_policy_config(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PolicyConfigRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    state.node.update_policy_config(request.config);
+    state
+        .protocol
+        .update_wot_policy(state.node.wot_policy())
+        .await;
+    Json(PolicyConfigResponse { updated: true }).into_response()
+}
+
+async fn policy_trust(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PolicySetRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !valid_pubkey_hex(&request.pubkey_hex) {
+        return bad_request("invalid_pubkey", "pubkey invalid");
+    }
+    state.node.trust_pubkey(hex_to_pubkey(&request.pubkey_hex));
+    state
+        .protocol
+        .update_wot_policy(state.node.wot_policy())
+        .await;
+    Json(PolicySetResponse { applied: true }).into_response()
+}
+
+async fn policy_untrust(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PolicySetRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !valid_pubkey_hex(&request.pubkey_hex) {
+        return bad_request("invalid_pubkey", "pubkey invalid");
+    }
+    state.node.untrust_pubkey(hex_to_pubkey(&request.pubkey_hex));
+    state
+        .protocol
+        .update_wot_policy(state.node.wot_policy())
+        .await;
+    Json(PolicySetResponse { applied: true }).into_response()
+}
+
+async fn policy_mute(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PolicySetRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !valid_pubkey_hex(&request.pubkey_hex) {
+        return bad_request("invalid_pubkey", "pubkey invalid");
+    }
+    state.node.mute_pubkey(hex_to_pubkey(&request.pubkey_hex));
+    state
+        .protocol
+        .update_wot_policy(state.node.wot_policy())
+        .await;
+    Json(PolicySetResponse { applied: true }).into_response()
+}
+
+async fn policy_unmute(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PolicySetRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !valid_pubkey_hex(&request.pubkey_hex) {
+        return bad_request("invalid_pubkey", "pubkey invalid");
+    }
+    state.node.unmute_pubkey(hex_to_pubkey(&request.pubkey_hex));
+    state
+        .protocol
+        .update_wot_policy(state.node.wot_policy())
+        .await;
+    Json(PolicySetResponse { applied: true }).into_response()
+}
+
+async fn policy_block(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PolicySetRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !valid_pubkey_hex(&request.pubkey_hex) {
+        return bad_request("invalid_pubkey", "pubkey invalid");
+    }
+    state.node.block_pubkey(hex_to_pubkey(&request.pubkey_hex));
+    state
+        .protocol
+        .update_wot_policy(state.node.wot_policy())
+        .await;
+    Json(PolicySetResponse { applied: true }).into_response()
+}
+
+async fn policy_unblock(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PolicySetRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !valid_pubkey_hex(&request.pubkey_hex) {
+        return bad_request("invalid_pubkey", "pubkey invalid");
+    }
+    state.node.unblock_pubkey(hex_to_pubkey(&request.pubkey_hex));
+    state
+        .protocol
+        .update_wot_policy(state.node.wot_policy())
+        .await;
+    Json(PolicySetResponse { applied: true }).into_response()
+}
+
+async fn contact_list(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let contacts = state.node.contacts();
+    Json(ContactListResponse { contacts }).into_response()
+}
+
+async fn contact_self(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let contact = build_self_contact(&state.node, &state.protocol);
+    Json(contact).into_response()
+}
+
+async fn contact_import(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ContactImportRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if request.contact.pubkey_hex.len() != 64 {
+        return bad_request("invalid_pubkey", "pubkey invalid");
+    }
+    state.node.add_contact(request.contact.clone());
+    state.protocol.add_contact(&request.contact).await;
+    Json(ContactImportResponse { imported: true }).into_response()
+}
+
+async fn discovery_announce(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<DiscoveryAnnounceRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if request.contact.pubkey_hex.len() != 64 {
+        return bad_request("invalid_pubkey", "pubkey invalid");
+    }
+    let contact = request.contact.clone();
+    let response = handle_discovery_announce(&state.node, request, 16);
+    for contact in &response.neighbors {
+        state.protocol.add_contact(contact).await;
+    }
+    let _ = state
+        .protocol
+        .publish_discovery(DiscoveryMessage::announce(contact))
+        .await;
+    Json(response).into_response()
+}
+
+async fn discovery_lookup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<DiscoveryLookupRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let response: DiscoveryLookupResponse = handle_discovery_lookup(&state.node, request.clone());
+    let reply_to = state.protocol.peer_id();
+    let msg = DiscoveryMessage::lookup(request.peer_id, request.pubkey_hex, reply_to);
+    let _ = state.protocol.publish_discovery(msg).await;
+    Json(response).into_response()
+}
+
+async fn discovery_gossip(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<DiscoveryGossipRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    for contact in &request.contacts {
+        if contact.pubkey_hex.len() == 64 {
+            state.protocol.add_contact(contact).await;
+        }
+    }
+    let response: DiscoveryGossipResponse = handle_discovery_gossip(&state.node, request.clone(), 24);
+    let msg = DiscoveryMessage::gossip(request.contacts);
+    let _ = state.protocol.publish_discovery(msg).await;
+    Json(response).into_response()
+}
+
+async fn fetch_shard(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !valid_pubkey_hex(&id) {
+        return bad_request("invalid_shard_id", "shard id invalid");
+    }
+    let mut shard_id = [0u8; 32];
+    if let Ok(bytes) = hex::decode(&id) {
+        if bytes.len() == 32 {
+            shard_id.copy_from_slice(&bytes);
+        }
+    }
+    let shard = state.protocol.get_cached_shard(shard_id).await;
+    match shard {
+        Some(bytes) => Json(ShardFetchResponse {
+            shard_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        })
+        .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn fetch_object(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(root): axum::extract::Path<String>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !valid_pubkey_hex(&root) {
+        return bad_request("invalid_object_root", "object root invalid");
+    }
+    let mut object_root = [0u8; 32];
+    if let Ok(bytes) = hex::decode(&root) {
+        if bytes.len() == 32 {
+            object_root.copy_from_slice(&bytes);
+        }
+    }
+    let object = state.protocol.reconstruct_object(object_root).await;
+    match object {
+        Some(bytes) => Json(ObjectFetchResponse {
+            object_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        })
+        .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn subscribe(
@@ -92,20 +893,29 @@ async fn unsubscribe(
 async fn events_ws(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<EventsQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
     if !authorized(&headers, &state.auth_token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     ws.on_upgrade(move |mut socket| async move {
-        let mut rx = state.node.subscribe_events();
-        let event = EventEnvelope {
-            event: "node_status".to_string(),
-            data: serde_json::to_value(state.node.status()).unwrap_or_default(),
-        };
+        let (backlog, mut rx) = state.node.subscribe_events_since(query.since);
+        for event in backlog {
+            if socket
+                .send(axum::extract::ws::Message::Text(
+                    serde_json::to_string(&event).unwrap_or_default(),
+                ))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+        let status_event = state.node.emit_status_event();
         let _ = socket
             .send(axum::extract::ws::Message::Text(
-                serde_json::to_string(&event).unwrap_or_default(),
+                serde_json::to_string(&status_event).unwrap_or_default(),
             ))
             .await;
         while let Ok(event) = rx.recv().await {
@@ -124,6 +934,11 @@ async fn events_ws(
     })
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct EventsQuery {
+    since: Option<u64>,
+}
+
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
     if token.is_empty() {
         return true;
@@ -135,16 +950,61 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn bad_request(code: &str, message: &str) -> Response {
+    let payload = ErrorResponse {
+        code: code.to_string(),
+        message: message.to_string(),
+    };
+    (StatusCode::BAD_REQUEST, Json(payload)).into_response()
+}
+
+fn valid_pubkey_hex(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn valid_channel(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= MAX_CHANNEL_LEN
+}
+
+fn hex_to_pubkey(value: &str) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    if let Ok(bytes) = hex::decode(value) {
+        if bytes.len() == 32 {
+            out.copy_from_slice(&bytes);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::body::{Body, Bytes};
     use http::{Request, StatusCode};
     use tower::ServiceExt;
+    use crate::api::ContactBundle;
+    use crate::api::DiscoveryAnnounceResponse;
+    use veil_schema_feed::{
+        BlockBundle, BundleMeta, DirectMessageBundle, FollowBundle, GroupMessageBundle,
+        MediaBundle, MuteBundle, PostBundle, ProfileBundle, ReactionBundle,
+    };
 
     fn test_state() -> AppState {
+        let node = NodeState::new("0.1-test");
+        let identity = node.identity();
+        let protocol_config = crate::default_protocol_config(
+            "ws://127.0.0.1:9001/ws".to_string(),
+            "test-node".to_string(),
+            32,
+            identity.public_key,
+            identity.signer(),
+        );
+        let protocol = std::sync::Arc::new(
+            ProtocolEngine::new(protocol_config).expect("protocol init"),
+        );
         AppState {
-            node: NodeState::new("0.1-test"),
+            node,
+            protocol,
             auth_token: "secret".to_string(),
             version: "0.1-test".to_string(),
         }
@@ -158,6 +1018,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn health_allows_unauthenticated_access() {
+        let app = build_router(test_state());
+        let response = app
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: HealthResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.status, "ok");
+        assert!(!parsed.version.is_empty());
+    }
+
+    #[tokio::test]
+    async fn publish_rejects_oversized_payload() {
+        let app = build_router(test_state());
+        let body = serde_json::to_string(&PublishRequest {
+            namespace: 32,
+            payload: "a".repeat(MAX_RAW_PAYLOAD_BYTES + 1),
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/publish")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -263,5 +1162,763 @@ mod tests {
             .unwrap_or_else(|_| Bytes::new());
         let parsed: PublishResponse = serde_json::from_slice(&bytes).unwrap();
         assert!(!parsed.message_id.is_nil());
+    }
+
+    #[tokio::test]
+    async fn policy_summary_reflects_trust() {
+        let app = build_router(test_state());
+        let pubkey = "aa".repeat(32);
+        let body = serde_json::to_string(&PolicySetRequest { pubkey_hex: pubkey }).unwrap();
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/policy/trust")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/policy")
+                    .header("x-veil-token", "secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: PolicySummaryResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.trusted, 1);
+    }
+
+    #[tokio::test]
+    async fn policy_config_updates() {
+        let app = build_router(test_state());
+        let mut config = veil_node::policy::WotConfig::default();
+        config.trusted_forward_quota = 0.55;
+        let body = serde_json::to_string(&PolicyConfigRequest { config }).unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/policy/config")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn contact_import_adds_contact() {
+        let app = build_router(test_state());
+        let contact = ContactBundle {
+            peer_id: "peer-a".to_string(),
+            ws_url: Some("ws://127.0.0.1:9001/ws".to_string()),
+            quic_addr: Some("127.0.0.1:9000".to_string()),
+            pubkey_hex: "aa".repeat(32),
+            rpc_url: Some("http://127.0.0.1:7788".to_string()),
+            lan_addrs: vec!["192.168.1.5:9000".to_string()],
+        };
+        let body = serde_json::to_string(&ContactImportRequest { contact }).unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/contact")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/contact")
+                    .header("x-veil-token", "secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: ContactListResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.contacts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn discovery_announce_returns_neighbors() {
+        let app = build_router(test_state());
+        let contact = ContactBundle {
+            peer_id: "peer-b".to_string(),
+            ws_url: None,
+            quic_addr: Some("127.0.0.1:9002".to_string()),
+            pubkey_hex: "bb".repeat(32),
+            rpc_url: None,
+            lan_addrs: Vec::new(),
+        };
+        let body = serde_json::to_string(&DiscoveryAnnounceRequest { contact }).unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/discovery/announce")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: DiscoveryAnnounceResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(parsed.accepted);
+    }
+
+    #[tokio::test]
+    async fn discovery_lookup_returns_contacts() {
+        let app = build_router(test_state());
+        let contact = ContactBundle {
+            peer_id: "peer-c".to_string(),
+            ws_url: None,
+            quic_addr: Some("127.0.0.1:9003".to_string()),
+            pubkey_hex: "cc".repeat(32),
+            rpc_url: None,
+            lan_addrs: Vec::new(),
+        };
+        let announce = serde_json::to_string(&DiscoveryAnnounceRequest { contact }).unwrap();
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/discovery/announce")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(announce))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let lookup = serde_json::to_string(&DiscoveryLookupRequest {
+            peer_id: Some("peer-c".to_string()),
+            pubkey_hex: None,
+            limit: Some(4),
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/discovery/lookup")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(lookup))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: DiscoveryLookupResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(!parsed.contacts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn identity_returns_public_key() {
+        let app = build_router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity")
+                    .header("x-veil-token", "secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: IdentityResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.public_key_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn identity_rotate_changes_pubkey() {
+        let app = build_router(test_state());
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/identity")
+                    .header("x-veil-token", "secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let first_bytes = axum::body::to_bytes(first.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let first_parsed: IdentityResponse = serde_json::from_slice(&first_bytes).unwrap();
+
+        let rotated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/rotate")
+                    .method("POST")
+                    .header("x-veil-token", "secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rotated.status(), StatusCode::OK);
+        let rotated_bytes = axum::body::to_bytes(rotated.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let rotated_parsed: IdentityRotateResponse =
+            serde_json::from_slice(&rotated_bytes).unwrap();
+        assert!(rotated_parsed.rotated);
+        assert_ne!(first_parsed.public_key_hex, rotated_parsed.public_key_hex);
+    }
+
+    #[tokio::test]
+    async fn profile_publish_rejects_mismatched_author() {
+        let app = build_router(test_state());
+        let bundle = ProfileBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_000,
+            },
+            channel_id: "general".to_string(),
+            author_pubkey_hex: "11".repeat(32),
+            display_name: "Test".to_string(),
+            bio: "bio".to_string(),
+            avatar_media_root: None,
+        };
+        let body = serde_json::to_string(&ProfilePublishRequest {
+            namespace: 32,
+            bundle,
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/profile")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn profile_publish_accepts_empty_author() {
+        let app = build_router(test_state());
+        let bundle = ProfileBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_001,
+            },
+            channel_id: "general".to_string(),
+            author_pubkey_hex: String::new(),
+            display_name: "Test".to_string(),
+            bio: "bio".to_string(),
+            avatar_media_root: None,
+        };
+        let body = serde_json::to_string(&ProfilePublishRequest {
+            namespace: 32,
+            bundle,
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/profile")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: ProfilePublishResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.author_pubkey_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn post_publish_accepts_empty_author() {
+        let app = build_router(test_state());
+        let bundle = PostBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_010,
+            },
+            channel_id: "general".to_string(),
+            author_pubkey_hex: String::new(),
+            text: "Hello".to_string(),
+            media_roots: vec![],
+            reply_to_root: None,
+        };
+        let body = serde_json::to_string(&PostPublishRequest {
+            namespace: 32,
+            bundle,
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/post")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: PostPublishResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.author_pubkey_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn reaction_publish_accepts_empty_author() {
+        let app = build_router(test_state());
+        let body = serde_json::to_string(&ReactionPublishRequest {
+            namespace: 32,
+            bundle: ReactionBundle {
+                meta: BundleMeta {
+                    version: 1,
+                    created_at: 1_700_000_030,
+                },
+                channel_id: "general".to_string(),
+                author_pubkey_hex: String::new(),
+                target_root: [0x11; 32],
+                action_code: "like".to_string(),
+            },
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/reaction")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .method("POST")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: ReactionPublishResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.author_pubkey_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn reaction_publish_rejects_empty_action() {
+        let app = build_router(test_state());
+        let body = serde_json::to_string(&ReactionPublishRequest {
+            namespace: 32,
+            bundle: ReactionBundle {
+                meta: BundleMeta {
+                    version: 1,
+                    created_at: 1_700_000_031,
+                },
+                channel_id: "general".to_string(),
+                author_pubkey_hex: String::new(),
+                target_root: [0x11; 32],
+                action_code: " ".to_string(),
+            },
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/reaction")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .method("POST")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn direct_message_publish_accepts_empty_author() {
+        let app = build_router(test_state());
+        let body = serde_json::to_string(&DirectMessagePublishRequest {
+            namespace: 32,
+            bundle: DirectMessageBundle {
+                meta: BundleMeta {
+                    version: 1,
+                    created_at: 1_700_000_032,
+                },
+                channel_id: "dm".to_string(),
+                author_pubkey_hex: String::new(),
+                recipient_pubkey_hex: "aa".repeat(32),
+                ciphertext_root: [0x22; 32],
+                reply_to_root: None,
+            },
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/direct_message")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .method("POST")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: DirectMessagePublishResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.author_pubkey_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn direct_message_publish_rejects_invalid_recipient() {
+        let app = build_router(test_state());
+        let body = serde_json::to_string(&DirectMessagePublishRequest {
+            namespace: 32,
+            bundle: DirectMessageBundle {
+                meta: BundleMeta {
+                    version: 1,
+                    created_at: 1_700_000_033,
+                },
+                channel_id: "dm".to_string(),
+                author_pubkey_hex: String::new(),
+                recipient_pubkey_hex: "zz".to_string(),
+                ciphertext_root: [0x22; 32],
+                reply_to_root: None,
+            },
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/direct_message")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .method("POST")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn group_message_publish_accepts_empty_author() {
+        let app = build_router(test_state());
+        let body = serde_json::to_string(&GroupMessagePublishRequest {
+            namespace: 32,
+            bundle: GroupMessageBundle {
+                meta: BundleMeta {
+                    version: 1,
+                    created_at: 1_700_000_034,
+                },
+                channel_id: "general".to_string(),
+                author_pubkey_hex: String::new(),
+                group_id: "group-alpha".to_string(),
+                ciphertext_root: [0x33; 32],
+                reply_to_root: None,
+            },
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/group_message")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .method("POST")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: GroupMessagePublishResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.author_pubkey_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn group_message_publish_rejects_empty_group_id() {
+        let app = build_router(test_state());
+        let body = serde_json::to_string(&GroupMessagePublishRequest {
+            namespace: 32,
+            bundle: GroupMessageBundle {
+                meta: BundleMeta {
+                    version: 1,
+                    created_at: 1_700_000_035,
+                },
+                channel_id: "general".to_string(),
+                author_pubkey_hex: String::new(),
+                group_id: " ".to_string(),
+                ciphertext_root: [0x33; 32],
+                reply_to_root: None,
+            },
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/group_message")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .method("POST")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn media_publish_accepts_empty_author() {
+        let app = build_router(test_state());
+        let bundle = MediaBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_011,
+            },
+            channel_id: "general".to_string(),
+            author_pubkey_hex: String::new(),
+            mime_type: "image/png".to_string(),
+            url: "https://example.com/a.png".to_string(),
+            bytes_hint: 1024,
+        };
+        let body = serde_json::to_string(&MediaPublishRequest {
+            namespace: 32,
+            bundle,
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/media")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: MediaPublishResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.author_pubkey_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn follow_publish_accepts_empty_follower() {
+        let app = build_router(test_state());
+        let bundle = FollowBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_012,
+            },
+            channel_id: "general".to_string(),
+            follower_pubkey_hex: String::new(),
+            followee_pubkey_hex: "ff".repeat(32),
+            at_step: 7,
+        };
+        let body = serde_json::to_string(&FollowPublishRequest {
+            namespace: 32,
+            bundle,
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/follow")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: FollowPublishResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.follower_pubkey_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn follow_publish_rejects_invalid_followee() {
+        let app = build_router(test_state());
+        let bundle = FollowBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_020,
+            },
+            channel_id: "general".to_string(),
+            follower_pubkey_hex: String::new(),
+            followee_pubkey_hex: "zz".to_string(),
+            at_step: 7,
+        };
+        let body = serde_json::to_string(&FollowPublishRequest {
+            namespace: 32,
+            bundle,
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/follow")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn mute_publish_accepts_empty_muter() {
+        let app = build_router(test_state());
+        let bundle = MuteBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_013,
+            },
+            channel_id: "general".to_string(),
+            muter_pubkey_hex: String::new(),
+            muted_pubkey_hex: "aa".repeat(32),
+            reason: Some("spam".to_string()),
+            at_step: 9,
+        };
+        let body = serde_json::to_string(&MutePublishRequest {
+            namespace: 32,
+            bundle,
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/mute")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: MutePublishResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.muter_pubkey_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn block_publish_accepts_empty_blocker() {
+        let app = build_router(test_state());
+        let bundle = BlockBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_014,
+            },
+            channel_id: "general".to_string(),
+            blocker_pubkey_hex: String::new(),
+            blocked_pubkey_hex: "bb".repeat(32),
+            reason: None,
+            at_step: 11,
+        };
+        let body = serde_json::to_string(&BlockPublishRequest {
+            namespace: 32,
+            bundle,
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/block")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: BlockPublishResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.blocker_pubkey_hex.len(), 64);
     }
 }

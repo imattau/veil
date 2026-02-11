@@ -28,6 +28,15 @@ pub struct TrustScoreExplanation {
     pub second_hop_score: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WotSummary {
+    pub trusted: usize,
+    pub muted: usize,
+    pub blocked: usize,
+    pub endorsements: usize,
+    pub config: WotConfig,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndorsementIngestResult {
     Applied,
@@ -216,14 +225,50 @@ impl LocalWotPolicy {
         self.trusted.insert(pubkey);
     }
 
+    /// Removes explicit trust entry.
+    pub fn untrust(&mut self, pubkey: [u8; 32]) {
+        self.trusted.remove(&pubkey);
+    }
+
     /// Marks a publisher as muted.
     pub fn mute(&mut self, pubkey: [u8; 32]) {
         self.muted.insert(pubkey);
     }
 
+    /// Removes mute entry.
+    pub fn unmute(&mut self, pubkey: [u8; 32]) {
+        self.muted.remove(&pubkey);
+    }
+
     /// Marks a publisher as blocked.
     pub fn block(&mut self, pubkey: [u8; 32]) {
         self.blocked.insert(pubkey);
+    }
+
+    /// Removes block entry.
+    pub fn unblock(&mut self, pubkey: [u8; 32]) {
+        self.blocked.remove(&pubkey);
+    }
+
+    /// Updates the policy config while keeping trust sets/endorsements.
+    pub fn update_config(&mut self, config: WotConfig) {
+        self.config = config;
+    }
+
+    /// Returns summary counts for UI display.
+    pub fn summary(&self) -> WotSummary {
+        let endorsements = self
+            .endorsements_by_endorser
+            .values()
+            .map(|edges| edges.len())
+            .sum();
+        WotSummary {
+            trusted: self.trusted.len(),
+            muted: self.muted.len(),
+            blocked: self.blocked.len(),
+            endorsements,
+            config: self.config,
+        }
     }
 
     /// Adds a directed endorsement edge at `at_step`.

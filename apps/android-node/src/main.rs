@@ -1,11 +1,12 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::time::Duration;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use veil_android_node::{
-    default_protocol_config, serve, AppState, NodeState, ProtocolEngine, QueueWorker,
-    QueueWorkerConfig,
+    build_self_contact, default_protocol_config, serve, AppState, DiscoveryConfig, DiscoveryWorker,
+    LanDiscoveryConfig, LanDiscoveryWorker, NodeState, ProtocolEngine, QueueWorker, QueueWorkerConfig,
 };
 
 #[tokio::main]
@@ -25,6 +26,7 @@ async fn main() {
         .ok();
     let node = NodeState::new_with_store(env!("CARGO_PKG_VERSION"), store_path);
     let node_arc = Arc::new(node.clone());
+    let identity = node.identity();
 
     let ws_url = std::env::var("VEIL_NODE_WS").unwrap_or_else(|_| "ws://127.0.0.1:9001/ws".to_string());
     let peer_id = std::env::var("VEIL_NODE_PEER").unwrap_or_else(|_| "android-node".to_string());
@@ -32,7 +34,19 @@ async fn main() {
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(32);
-    let mut protocol_config = default_protocol_config(ws_url, peer_id, namespace);
+    let mut protocol_config = default_protocol_config(
+        ws_url,
+        peer_id,
+        namespace,
+        identity.public_key,
+        identity.signer(),
+    );
+    protocol_config.runtime_config.wot_policy = node.wot_policy();
+    if let Ok(raw) = std::env::var("VEIL_NODE_CACHE_STATE") {
+        if !raw.trim().is_empty() {
+            protocol_config.cache_state_path = Some(PathBuf::from(raw));
+        }
+    }
     if let Ok(raw) = std::env::var("VEIL_NODE_QUIC_PEERS") {
         protocol_config.fast_peers = raw
             .split(',')
@@ -103,22 +117,75 @@ async fn main() {
             }
         }
     }
+    if let Ok(raw) = std::env::var("VEIL_DISCOVERY_NAMESPACE") {
+        if let Ok(value) = raw.trim().parse::<u16>() {
+            protocol_config.discovery_namespace = veil_core::Namespace(value);
+        }
+    }
     let protocol = Arc::new(
         ProtocolEngine::new(protocol_config).expect("protocol engine init"),
     );
 
+    let discovery_config = DiscoveryConfig {
+        bootstrap_urls: std::env::var("VEIL_DISCOVERY_BOOTSTRAP")
+            .unwrap_or_default()
+            .split(',')
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect(),
+        gossip_interval: std::env::var("VEIL_DISCOVERY_INTERVAL_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| Duration::from_secs(12)),
+        max_gossip_contacts: std::env::var("VEIL_DISCOVERY_GOSSIP_MAX")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(24),
+        transport_enabled: std::env::var("VEIL_DISCOVERY_TRANSPORT")
+            .ok()
+            .as_deref()
+            .map(|value| value != "0")
+            .unwrap_or(true),
+    };
+    let lan_config = LanDiscoveryConfig {
+        enabled: std::env::var("VEIL_LAN_DISCOVERY").ok().as_deref() == Some("1"),
+        port: std::env::var("VEIL_LAN_DISCOVERY_PORT")
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(9333),
+        announce_interval: std::env::var("VEIL_LAN_DISCOVERY_INTERVAL_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| Duration::from_secs(5)),
+    };
+
     let worker = QueueWorker::new(
         node_arc,
-        protocol,
+        protocol.clone(),
         QueueWorkerConfig {
             tick_ms: 500,
             max_attempts: 3,
+            backoff_base_ms: 500,
+            backoff_max_ms: 20_000,
         },
     );
     tokio::spawn(worker.run());
 
+    let discovery_worker = DiscoveryWorker::new(
+        Arc::new(node.clone()),
+        protocol.clone(),
+        discovery_config,
+    );
+    tokio::spawn(discovery_worker.run());
+    let lan_worker = LanDiscoveryWorker::new(Arc::new(node.clone()), protocol.clone(), lan_config);
+    let self_contact = build_self_contact(&node, &protocol);
+    lan_worker.start(self_contact);
+
     let state = AppState {
         node,
+        protocol,
         auth_token: token,
         version: env!("CARGO_PKG_VERSION").to_string(),
     };

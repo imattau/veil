@@ -9,21 +9,30 @@ axum = { version = "0.7", features = ["ws", "json", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 serde = { workspace = true }
 serde_json = "1"
+serde_cbor = "0.11"
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 rand = { workspace = true }
 base64 = "0.22"
 hex = "0.4"
+blake3 = "1"
+ureq = "2"
 veil-core = { path = "../../crates/veil-core" }
 veil-crypto = { path = "../../crates/veil-crypto" }
+veil-codec = { path = "../../crates/veil-codec" }
+veil-fec = { path = "../../crates/veil-fec" }
 veil-node = { path = "../../crates/veil-node" }
 veil-transport = { path = "../../crates/veil-transport" }
 veil-transport-quic = { path = "../../crates/veil-transport-quic" }
 veil-transport-tor = { path = "../../crates/veil-transport-tor" }
 veil-transport-websocket = { path = "../../crates/veil-transport-websocket" }
+veil-schema-feed = { path = "../../crates/veil-schema-feed" }
 
 [dev-dependencies]
 http = "1"
 tower = "0.5"
 tempfile = "3"
+veil-codec = { path = "../../crates/veil-codec" }
+serde_cbor = "0.11"
+veil-fec = { path = "../../crates/veil-fec" }

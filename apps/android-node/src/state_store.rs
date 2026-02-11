@@ -14,6 +14,17 @@ pub struct QueueItem {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StoreSnapshot {
     pub queue: Vec<QueueItem>,
+    pub identity: Option<IdentityRecord>,
+    #[serde(default)]
+    pub policy_json: Option<String>,
+    #[serde(default)]
+    pub contacts: Vec<crate::api::ContactBundle>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityRecord {
+    pub public_key_hex: String,
+    pub secret_key_hex: String,
 }
 
 #[derive(Debug, Clone)]

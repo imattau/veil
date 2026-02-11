@@ -1,11 +1,12 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::time::sleep;
 
 use crate::api::QueueWorkerConfig;
 use crate::protocol::ProtocolEngine;
 use crate::state::NodeState;
+use crate::discovery::handle_discovery_payload;
 use veil_node::receive::ReceiveEvent;
 
 #[derive(Clone)]
@@ -13,6 +14,7 @@ pub struct QueueWorker {
     state: Arc<NodeState>,
     protocol: Arc<ProtocolEngine>,
     config: QueueWorkerConfig,
+    step: u64,
 }
 
 impl QueueWorker {
@@ -21,13 +23,16 @@ impl QueueWorker {
             state,
             protocol,
             config,
+            step: 0,
         }
     }
 
     pub async fn run(self) {
-        let tick = Duration::from_millis(self.config.tick_ms.max(50));
+        let mut worker = self;
+        let tick = Duration::from_millis(worker.config.tick_ms.max(50));
         loop {
-            if let Ok(event) = self.protocol.pump_inbound().await {
+            worker.step = worker.step.saturating_add(1);
+            if let Ok(event) = worker.protocol.pump_inbound().await {
                 if let Some(ReceiveEvent::Delivered {
                     object_root,
                     payload,
@@ -37,7 +42,10 @@ impl QueueWorker {
                     flags,
                 }) = event
                 {
-                    self.state.emit_payload(
+                    if namespace == worker.protocol.discovery_namespace() {
+                        let _ = handle_discovery_payload(&worker.state, &worker.protocol, &payload).await;
+                    }
+                    worker.state.emit_payload(
                         &object_root,
                         &payload,
                         namespace.0,
@@ -45,41 +53,62 @@ impl QueueWorker {
                         &tag,
                         flags,
                     );
+                    if worker
+                        .state
+                        .ingest_endorsement_payload(&payload, worker.step)
+                    {
+                        worker
+                            .protocol
+                            .update_wot_policy(worker.state.wot_policy())
+                            .await;
+                    }
                 }
             }
-            let (fast_label, fast, fallback_label, fallback) =
-                self.protocol.health_snapshot().await;
-            let fast_connected = fast.outbound_send_ok > 0 || fast.inbound_received > 0;
-            let fast_error = if fast.outbound_send_err > 0 {
-                Some("send_error".to_string())
-            } else {
-                None
-            };
-            self.state
-                .mark_lane_health(&fast_label, fast_connected, fast_error);
-            if fallback_label != "none" {
-                let fallback_connected = fallback.outbound_send_ok > 0 || fallback.inbound_received > 0;
-                let fallback_error = if fallback.outbound_send_err > 0 {
-                    Some("send_error".to_string())
-                } else {
-                    None
-                };
-                self.state
-                    .mark_lane_health(&fallback_label, fallback_connected, fallback_error);
+            if worker.step % 50 == 0 {
+                worker.protocol.persist_cache_state().await;
             }
-            if let Some(item) = self.state.take_next_queued() {
-                let attempts = self.state.attempts_for(&item);
-                if attempts > self.config.max_attempts {
-                    self.state.complete_item(&item, false);
-                } else {
-                    let result = self
-                        .protocol
-                        .publish(item.payload.clone().into_bytes())
-                        .await;
-                    self.state.complete_item(&item, result.is_ok());
+            let details = worker.protocol.lane_details().await;
+            let any_connected = details.iter().any(|detail| detail.connected);
+            worker.state.mark_lane_details(details);
+            if any_connected {
+                let now_ms = now_millis();
+                if let Some(item) = worker.state.take_next_queued(now_ms) {
+                    let attempts = worker.state.attempts_for(&item);
+                    if attempts > worker.config.max_attempts {
+                        worker.state.drop_item(&item);
+                    } else {
+                        let result = worker
+                            .protocol
+                            .publish(item.payload.clone().into_bytes(), Some(item.namespace))
+                            .await;
+                        if result.is_ok() {
+                            worker.state.complete_success(&item);
+                        } else {
+                            let backoff = retry_backoff_ms(
+                                attempts,
+                                worker.config.backoff_base_ms,
+                                worker.config.backoff_max_ms,
+                            );
+                            worker.state.complete_failure(item, backoff);
+                        }
+                    }
                 }
             }
             sleep(tick).await;
         }
     }
+}
+
+fn retry_backoff_ms(attempts: u32, base_ms: u64, max_ms: u64) -> u64 {
+    let exponent = attempts.saturating_sub(1).min(10);
+    let factor = 1u64.checked_shl(exponent).unwrap_or(u64::MAX);
+    let raw = base_ms.saturating_mul(factor);
+    raw.min(max_ms).max(base_ms)
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
