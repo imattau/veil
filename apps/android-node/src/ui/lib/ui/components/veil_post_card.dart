@@ -1,0 +1,237 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import '../../logic/models/node_event.dart';
+import '../../logic/social_controller.dart';
+import '../theme/veil_theme.dart';
+import './reaction_tray.dart';
+import './rich_text_view.dart';
+import './nested_post_card.dart';
+import './zap_dialog.dart';
+import '../../logic/zap_controller.dart';
+import '../screens/post_detail_view.dart';
+
+class VeilPostCard extends StatelessWidget {
+  final NodeEvent event;
+  final SocialController controller;
+  final bool isDetail;
+
+  const VeilPostCard({
+    super.key,
+    required this.event,
+    required this.controller,
+    this.isDetail = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final pubkey = event.authorPubkey ?? 'unknown';
+    final displayName = controller.getDisplayName(pubkey);
+    final text = event.isRepost ? event.repostComment : event.postText;
+    final time = event.createdAt != null 
+        ? DateTime.fromMillisecondsSinceEpoch(event.createdAt! * 1000)
+        : null;
+    final root = event.objectRoot;
+    final targetRoot = event.isRepost ? event.targetRoot : null;
+
+    return InkWell(
+      onTap: isDetail ? null : () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => PostDetailView(post: event, controller: controller),
+          ),
+        );
+      },
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: VeilTheme.accent.withOpacity(0.2),
+                    backgroundImage: _getAvatarImage(pubkey),
+                    child: _getAvatarImage(pubkey) == null
+                      ? Text(displayName.substring(0, 1).toUpperCase())
+                      : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(displayName, style: Theme.of(context).textTheme.titleMedium),
+                        Text(
+                          pubkey.length >= 12 
+                            ? '@${pubkey.substring(0, 12)}...'
+                            : '@$pubkey',
+                          style: Theme.of(context).textTheme.labelSmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (time != null)
+                    Text(
+                      _formatTime(time),
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (text != null && text.isNotEmpty)
+                RichTextView(text: text),
+              
+              if (targetRoot != null) ...[
+                const SizedBox(height: 12),
+                NestedPostCard(targetRoot: targetRoot, controller: controller),
+              ],
+
+              if (root != null) ...[
+                const SizedBox(height: 12),
+                ReactionTray(objectRoot: root, controller: controller),
+                const SizedBox(height: 16),
+                _PostFooter(
+                  objectRoot: root,
+                  controller: controller,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  ImageProvider? _getAvatarImage(String pubkey) {
+    final profile = controller.nodeService.profiles[pubkey];
+    final root = profile?.data['avatar_media_root'] as String?;
+    if (root != null && controller.imageCache.containsKey(root)) {
+      return MemoryImage(controller.imageCache[root]!);
+    }
+    return null;
+  }
+
+  String _formatTime(DateTime time) {
+    final diff = DateTime.now().difference(time);
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
+    if (diff.inHours < 24) return '${diff.inHours}h';
+    return '${diff.inDays}d';
+  }
+}
+
+class _PostFooter extends StatelessWidget {
+  final String objectRoot;
+  final SocialController controller;
+
+  const _PostFooter({required this.objectRoot, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    final reactions = controller.getReactions(objectRoot);
+    final reposts = controller.getReposts(objectRoot);
+    final comments = controller.getComments(objectRoot);
+    final zapTotal = controller.getZapTotal(objectRoot);
+    final liked = controller.hasLiked(objectRoot);
+
+    final authorPubkey = controller.nodeService.feedEvents
+        .firstWhere((e) => e.objectRoot == objectRoot, orElse: () => const NodeEvent(seq: 0, event: '', data: {}))
+        .authorPubkey;
+    final lnAddress = authorPubkey != null 
+        ? controller.nodeService.profiles[authorPubkey]?.lightningAddress 
+        : null;
+
+    return Row(
+      children: [
+        _FooterAction(
+          icon: liked ? Icons.favorite : Icons.favorite_border,
+          count: reactions.length,
+          color: liked ? Colors.red : null,
+          onTap: () {
+            HapticFeedback.lightImpact();
+            // TODO: Implement like
+          },
+        ),
+        const SizedBox(width: 24),
+        _FooterAction(
+          icon: Icons.chat_bubble_outline,
+          count: comments.length,
+          onTap: () {
+            HapticFeedback.lightImpact();
+            // Navigation handled by the card tap
+          },
+        ),
+        const SizedBox(width: 24),
+        _FooterAction(
+          icon: Icons.repeat,
+          count: reposts.length,
+          onTap: () {
+            HapticFeedback.lightImpact();
+            // TODO: Implement boost
+          },
+        ),
+        const SizedBox(width: 24),
+        _FooterAction(
+          icon: Icons.bolt,
+          count: zapTotal,
+          color: zapTotal > 0 ? Colors.amber : null,
+          onTap: () {
+            HapticFeedback.lightImpact();
+            if (lnAddress != null && authorPubkey != null) {
+              showDialog(
+                context: context,
+                builder: (context) => ZapDialog(
+                  lnAddress: lnAddress,
+                  targetRoot: objectRoot,
+                  authorPubkey: authorPubkey,
+                  controller: ZapController(controller.nodeService),
+                ),
+              );
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Author has no Lightning Address set')),
+              );
+            }
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _FooterAction extends StatelessWidget {
+  final IconData icon;
+  final int count;
+  final VoidCallback onTap;
+  final Color? color;
+
+  const _FooterAction({
+    required this.icon,
+    required this.count,
+    required this.onTap,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: color ?? VeilTheme.textSecondary),
+          const SizedBox(width: 4),
+          if (count > 0)
+            Text(
+              count.toString(),
+              style: TextStyle(
+                fontSize: 12,
+                color: color ?? VeilTheme.textSecondary,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}

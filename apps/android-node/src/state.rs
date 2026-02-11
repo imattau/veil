@@ -99,6 +99,10 @@ impl NodeState {
             .and_then(|json| LocalWotPolicy::import_json(json).ok())
             .unwrap_or_default();
         let contacts = snapshot.contacts.clone();
+        let subscriptions: HashSet<String> = snapshot.subscriptions.iter().cloned().collect();
+        let event_buffer: VecDeque<EventEnvelope> = VecDeque::from(snapshot.feed_history.clone());
+        let event_seq = event_buffer.iter().map(|e| e.seq).max().unwrap_or(0);
+        
         let discovery_table = Arc::new(Mutex::new(DiscoveryTable::default()));
         {
             let mut table = discovery_table.lock().expect("discovery lock");
@@ -113,6 +117,8 @@ impl NodeState {
                     identity: Some(identity.to_record()),
                     policy_json: wot_policy.export_json().ok(),
                     contacts: contacts.clone(),
+                    feed_history: event_buffer.iter().cloned().collect(),
+                    subscriptions: subscriptions.iter().cloned().collect(),
                 });
             }
         }
@@ -129,10 +135,10 @@ impl NodeState {
                 websocket: LaneHealth::default(),
                 tor: LaneHealth::default(),
                 lane_details: Vec::new(),
-                subscriptions: HashSet::new(),
+                subscriptions,
                 events,
-                event_seq: 0,
-                event_buffer: VecDeque::with_capacity(256),
+                event_seq,
+                event_buffer,
                 store,
                 queue: VecDeque::from(snapshot.queue),
                 queue_attempts: HashMap::new(),
@@ -269,6 +275,52 @@ impl NodeState {
     pub fn attempts_for(&self, item: &QueueItem) -> u32 {
         let inner = self.inner.lock().expect("state lock");
         inner.queue_attempts.get(&item.id).copied().unwrap_or(0)
+    }
+
+    pub fn get_feed(&self, limit: usize) -> Vec<EventEnvelope> {
+        let inner = self.inner.lock().expect("state lock");
+        inner
+            .event_buffer
+            .iter()
+            .rev()
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_subscriptions(&self) -> Vec<String> {
+        let inner = self.inner.lock().expect("state lock");
+        inner.subscriptions.iter().cloned().collect()
+    }
+
+    pub fn export_identity(&self) -> (String, String) {
+        let inner = self.inner.lock().expect("state lock");
+        (
+            inner.identity.public_key_hex(),
+            hex_encode(&inner.identity.secret_key),
+        )
+    }
+
+    pub fn import_identity(&self, secret_key_hex: String) -> Result<NodeIdentity, String> {
+        let sec_bytes = hex::decode(&secret_key_hex).map_err(|e| e.to_string())?;
+        if sec_bytes.len() != 32 {
+            return Err("secret key must be 32 bytes".to_string());
+        }
+        let mut secret_key = [0u8; 32];
+        secret_key.copy_from_slice(&sec_bytes);
+        let signer = Ed25519Signer::from_secret(secret_key);
+        let public_key = signer.public_key();
+        let identity = NodeIdentity {
+            public_key,
+            secret_key,
+        };
+
+        let mut inner = self.inner.lock().expect("state lock");
+        inner.identity = identity.clone();
+        if let Some(store) = &inner.store {
+            store.persist(&snapshot_from_inner(&inner));
+        }
+        Ok(identity)
     }
 
     pub fn policy_summary(&self) -> WotSummary {
@@ -464,10 +516,14 @@ impl NodeState {
             }),
         );
         for bundle in feed_bundles {
+            let mut value = serde_json::to_value(bundle).unwrap_or_default();
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("object_root".to_string(), serde_json::json!(hex_encode(object_root)));
+            }
             emit_event_locked(
                 &mut inner,
                 "feed_bundle",
-                serde_json::to_value(bundle).unwrap_or_default(),
+                value,
             );
         }
     }
@@ -559,6 +615,24 @@ impl NodeState {
         )
     }
 
+    pub fn persist(&self) {
+        let mut inner = self.inner.lock().expect("state lock");
+        self.persist_policy_locked(&mut inner);
+    }
+
+    pub fn inject_local_feed_bundle(&self, bundle: serde_json::Value, object_root: [u8; 32]) {
+        let mut inner = self.inner.lock().expect("state lock");
+        let mut value = bundle;
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("object_root".to_string(), serde_json::json!(hex_encode(&object_root)));
+        }
+        emit_event_locked(
+            &mut inner,
+            "feed_bundle",
+            value,
+        );
+    }
+
     fn persist_policy_locked(&self, inner: &mut StateInner) {
         if let Some(store) = &inner.store {
             store.persist(&snapshot_from_inner(inner));
@@ -594,6 +668,8 @@ fn snapshot_from_inner(inner: &StateInner) -> StoreSnapshot {
         identity: Some(inner.identity.to_record()),
         policy_json: inner.wot_policy.export_json().ok(),
         contacts: inner.contacts.clone(),
+        feed_history: inner.event_buffer.iter().cloned().collect(),
+        subscriptions: inner.subscriptions.iter().cloned().collect(),
     }
 }
 
@@ -812,5 +888,24 @@ mod tests {
         assert_eq!(first.event, "payload");
         let second = rx.try_recv().expect("event");
         assert_eq!(second.event, "feed_bundle");
+    }
+
+    #[test]
+    fn injects_local_feed_bundle() {
+        let state = NodeState::new("0.1-test");
+        let mut rx = state.subscribe_events();
+        
+        let bundle = serde_json::json!({
+            "kind": "post",
+            "text": "local post"
+        });
+        let root = [0x99; 32];
+        
+        state.inject_local_feed_bundle(bundle, root);
+        
+        let event = rx.try_recv().expect("should receive event");
+        assert_eq!(event.event, "feed_bundle");
+        assert_eq!(event.data["text"], "local post");
+        assert_eq!(event.data["object_root"], hex_encode(&root));
     }
 }

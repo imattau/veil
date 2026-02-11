@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../models/node_state.dart';
+import '../../logic/models/node_state.dart';
 
 class NodeStatusCard extends StatelessWidget {
   final NodeState state;
@@ -35,6 +35,27 @@ class NodeStatusCard extends StatelessWidget {
             _StatusRow(label: 'Node ID', value: nodeId ?? 'Unknown'),
             _StatusRow(label: 'Version', value: version ?? 'Unknown'),
             _StatusRow(label: 'Last update', value: lastUpdated),
+            const SizedBox(height: 8),
+            const Text(
+              'Subscriptions',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+            ),
+            const SizedBox(height: 4),
+            if (state.subscriptions.isEmpty)
+              const Text('None', style: TextStyle(color: Colors.grey, fontSize: 13))
+            else
+              Wrap(
+                spacing: 6,
+                runSpacing: 0,
+                children: state.subscriptions
+                    .map((s) => Chip(
+                          label: Text(s, style: const TextStyle(fontSize: 11)),
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ))
+                    .toList(),
+              ),
             if (state.lastError != null) ...[
               const SizedBox(height: 12),
               Text(

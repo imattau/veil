@@ -1,27 +1,21 @@
 import 'package:flutter/material.dart';
-import 'ui/screens/node_home.dart';
+import './ui/theme/veil_theme.dart';
+import './ui/screens/social_home.dart';
 
 void main() {
-  runApp(const VeilNodeApp());
+  runApp(const VeilApp());
 }
 
-class VeilNodeApp extends StatelessWidget {
-  const VeilNodeApp({super.key});
+class VeilApp extends StatelessWidget {
+  const VeilApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF0B1D26),
-      brightness: Brightness.light,
-    );
     return MaterialApp(
-      title: 'Veil Node',
-      theme: ThemeData(
-        colorScheme: colorScheme,
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFF5F4F1),
-      ),
-      home: const NodeHome(),
+      title: 'VEIL Social',
+      debugShowCheckedModeBanner: false,
+      theme: VeilTheme.dark,
+      home: const SocialHome(),
     );
   }
 }

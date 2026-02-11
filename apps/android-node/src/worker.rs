@@ -66,6 +66,7 @@ impl QueueWorker {
             }
             if worker.step % 50 == 0 {
                 worker.protocol.persist_cache_state().await;
+                worker.state.persist();
             }
             let details = worker.protocol.lane_details().await;
             let any_connected = details.iter().any(|detail| detail.connected);

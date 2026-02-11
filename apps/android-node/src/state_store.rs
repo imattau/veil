@@ -19,6 +19,10 @@ pub struct StoreSnapshot {
     pub policy_json: Option<String>,
     #[serde(default)]
     pub contacts: Vec<crate::api::ContactBundle>,
+    #[serde(default)]
+    pub feed_history: Vec<crate::api::EventEnvelope>,
+    #[serde(default)]
+    pub subscriptions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

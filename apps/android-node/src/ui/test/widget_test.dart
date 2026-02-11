@@ -7,11 +7,11 @@
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:veil_android_node_ui/main.dart';
+import 'package:veil_social/main.dart';
 
 void main() {
   testWidgets('Node home renders', (WidgetTester tester) async {
-    await tester.pumpWidget(const VeilNodeApp());
-    expect(find.text('Veil Node'), findsWidgets);
+    await tester.pumpWidget(const VeilApp());
+    expect(find.text('VEIL'), findsWidgets);
   });
 }

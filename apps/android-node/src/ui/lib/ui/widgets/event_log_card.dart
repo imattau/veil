@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../models/node_event.dart';
+import '../../logic/models/node_event.dart';
 
 class EventLogCard extends StatelessWidget {
   final List<NodeEvent> events;

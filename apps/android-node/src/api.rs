@@ -34,6 +34,19 @@ pub struct ErrorResponse {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectPublishRequest {
+    pub namespace: u16,
+    pub payload_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectPublishResponse {
+    pub object_root: String,
+    pub message_id: Uuid,
+    pub queued: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LaneStatus {
     pub quic: LaneHealth,
@@ -210,6 +223,123 @@ pub struct BlockPublishResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListPublishRequest {
+    pub namespace: u16,
+    pub bundle: veil_schema_feed::ListBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListPublishResponse {
+    pub message_id: Uuid,
+    pub queued: bool,
+    pub author_pubkey_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupMetadataPublishRequest {
+    pub namespace: u16,
+    pub bundle: veil_schema_feed::GroupMetadataBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupMetadataPublishResponse {
+    pub message_id: Uuid,
+    pub queued: bool,
+    pub author_pubkey_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZapPublishRequest {
+    pub namespace: u16,
+    pub bundle: veil_schema_feed::ZapBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZapPublishResponse {
+    pub message_id: Uuid,
+    pub queued: bool,
+    pub author_pubkey_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppPreferencesPublishRequest {
+    pub namespace: u16,
+    pub bundle: veil_schema_feed::AppPreferencesBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppPreferencesPublishResponse {
+    pub message_id: Uuid,
+    pub queued: bool,
+    pub author_pubkey_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletionPublishRequest {
+    pub namespace: u16,
+    pub bundle: veil_schema_feed::DeletionBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletionPublishResponse {
+    pub message_id: Uuid,
+    pub queued: bool,
+    pub author_pubkey_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepostPublishRequest {
+    pub namespace: u16,
+    pub bundle: veil_schema_feed::RepostBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepostPublishResponse {
+    pub message_id: Uuid,
+    pub queued: bool,
+    pub author_pubkey_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PollPublishRequest {
+    pub namespace: u16,
+    pub bundle: veil_schema_feed::PollBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PollPublishResponse {
+    pub message_id: Uuid,
+    pub queued: bool,
+    pub author_pubkey_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PollVotePublishRequest {
+    pub namespace: u16,
+    pub bundle: veil_schema_feed::PollVoteBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PollVotePublishResponse {
+    pub message_id: Uuid,
+    pub queued: bool,
+    pub author_pubkey_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveStatusPublishRequest {
+    pub namespace: u16,
+    pub bundle: veil_schema_feed::LiveStatusBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiveStatusPublishResponse {
+    pub message_id: Uuid,
+    pub queued: bool,
+    pub author_pubkey_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscribeRequest {
     pub tag: String,
 }
@@ -235,6 +365,27 @@ pub struct EventEnvelope {
     pub seq: u64,
     pub event: String,
     pub data: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedResponse {
+    pub events: Vec<EventEnvelope>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscriptionListResponse {
+    pub subscriptions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityExportResponse {
+    pub public_key_hex: String,
+    pub secret_key_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityImportRequest {
+    pub secret_key_hex: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -239,6 +239,10 @@ impl ProtocolEngine {
         let _ = veil_node::persistence::save_state_to_path(path, &runtime.state);
     }
 
+    pub async fn persist_state(&self) {
+        // NodeState has its own persist method internally.
+    }
+
     pub fn peer_id(&self) -> String {
         self.config.peer_id.clone()
     }

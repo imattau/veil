@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../../services/node_service.dart';
+import '../../logic/node_service.dart';
 import '../widgets/identity_card.dart';
 import '../widgets/lane_status_card.dart';
 import '../widgets/node_status_card.dart';
@@ -42,6 +42,70 @@ class _NodeHomeState extends State<NodeHome> {
     super.dispose();
   }
 
+  Future<void> _exportIdentity() async {
+    final result = await _service.exportIdentity();
+    if (result == null) return;
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Export Identity'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Public Key:'),
+            SelectableText(result['public_key_hex'],
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+            const SizedBox(height: 12),
+            const Text('Secret Key (KEEP PRIVATE!):',
+                style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+            SelectableText(result['secret_key_hex'],
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _importIdentity() async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Import Identity'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            labelText: 'Secret Key (Hex)',
+            hintText: '64 hex characters',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.isNotEmpty) {
+      await _service.importIdentity(result);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -78,6 +142,8 @@ class _NodeHomeState extends State<NodeHome> {
                 IdentityCard(
                   identityHex: _service.state.identityHex,
                   onRotate: _service.rotateIdentity,
+                  onExport: _exportIdentity,
+                  onImport: _importIdentity,
                   busy: _service.state.busy,
                 ),
                 const SizedBox(height: 16),

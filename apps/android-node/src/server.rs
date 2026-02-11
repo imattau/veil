@@ -22,7 +22,13 @@ use crate::api::{
     PolicySetResponse, ContactImportRequest, ContactImportResponse, ContactListResponse,
     ShardFetchResponse, ObjectFetchResponse, DiscoveryAnnounceRequest,
     DiscoveryLookupRequest, DiscoveryLookupResponse, DiscoveryGossipRequest,
-    DiscoveryGossipResponse,
+    DiscoveryGossipResponse, FeedResponse, SubscriptionListResponse, IdentityExportResponse, IdentityImportRequest,
+    ListPublishRequest, ListPublishResponse, GroupMetadataPublishRequest, GroupMetadataPublishResponse,
+    ZapPublishRequest, ZapPublishResponse, AppPreferencesPublishRequest, AppPreferencesPublishResponse,
+    DeletionPublishRequest, DeletionPublishResponse, RepostPublishRequest, RepostPublishResponse,
+    PollPublishRequest, PollPublishResponse, PollVotePublishRequest, PollVotePublishResponse,
+    LiveStatusPublishRequest, LiveStatusPublishResponse,
+    ObjectPublishRequest, ObjectPublishResponse,
 };
 use crate::discovery::{
     build_self_contact, handle_discovery_announce, handle_discovery_gossip, handle_discovery_lookup,
@@ -43,9 +49,14 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/status", get(status))
+        .route("/feed", get(feed))
+        .route("/subscriptions", get(subscriptions))
         .route("/identity", get(identity))
         .route("/identity/rotate", post(rotate_identity))
+        .route("/identity/export", get(export_identity))
+        .route("/identity/import", post(import_identity))
         .route("/publish", post(publish))
+        .route("/publish_object", post(publish_object))
         .route("/profile", post(publish_profile))
         .route("/post", post(publish_post))
         .route("/reaction", post(publish_reaction))
@@ -55,6 +66,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/follow", post(publish_follow))
         .route("/mute", post(publish_mute))
         .route("/block", post(publish_block))
+        .route("/list", post(publish_list))
+        .route("/group_metadata", post(publish_group_metadata))
+        .route("/zap", post(publish_zap))
+        .route("/app_preferences", post(publish_app_preferences))
+        .route("/deletion", post(publish_deletion))
+        .route("/repost", post(publish_repost))
+        .route("/poll", post(publish_poll))
+        .route("/poll_vote", post(publish_poll_vote))
+        .route("/live_status", post(publish_live_status))
         .route("/subscribe", post(subscribe))
         .route("/unsubscribe", post(unsubscribe))
         .route("/policy", get(policy_summary))
@@ -115,6 +135,22 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
     Json(payload).into_response()
 }
 
+async fn feed(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let events = state.node.get_feed(50);
+    Json(FeedResponse { events }).into_response()
+}
+
+async fn subscriptions(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let subscriptions = state.node.get_subscriptions();
+    Json(SubscriptionListResponse { subscriptions }).into_response()
+}
+
 async fn publish(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -132,6 +168,31 @@ async fn publish(
         queued: true,
     };
     Json(response).into_response()
+}
+
+async fn publish_object(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ObjectPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let payload = match base64::engine::general_purpose::STANDARD.decode(&request.payload_b64) {
+        Ok(bytes) => bytes,
+        Err(_) => return bad_request("invalid_base64", "payload must be base64 encoded"),
+    };
+    let object_root = blake3::hash(&payload);
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: request.payload_b64, // Keep as b64 for the publish worker
+    });
+    Json(ObjectPublishResponse {
+        object_root: hex::encode(object_root.as_bytes()),
+        message_id,
+        queued: true,
+    })
+    .into_response()
 }
 
 async fn identity(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -159,6 +220,41 @@ async fn rotate_identity(State(state): State<AppState>, headers: HeaderMap) -> R
         rotated: true,
     })
     .into_response()
+}
+
+async fn export_identity(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let (public_key_hex, secret_key_hex) = state.node.export_identity();
+    Json(IdentityExportResponse {
+        public_key_hex,
+        secret_key_hex,
+    })
+    .into_response()
+}
+
+async fn import_identity(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<IdentityImportRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match state.node.import_identity(request.secret_key_hex) {
+        Ok(identity) => {
+            state
+                .protocol
+                .update_identity(identity.public_key, identity.signer())
+                .await;
+            Json(IdentityResponse {
+                public_key_hex: identity.public_key_hex(),
+            })
+            .into_response()
+        }
+        Err(err) => bad_request("import_failed", &err),
+    }
 }
 
 async fn publish_profile(
@@ -193,10 +289,12 @@ async fn publish_profile(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(ProfilePublishResponse {
         message_id,
         queued: true,
@@ -234,10 +332,12 @@ async fn publish_post(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(PostPublishResponse {
         message_id,
         queued: true,
@@ -275,10 +375,12 @@ async fn publish_reaction(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(ReactionPublishResponse {
         message_id,
         queued: true,
@@ -316,10 +418,12 @@ async fn publish_direct_message(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(DirectMessagePublishResponse {
         message_id,
         queued: true,
@@ -357,10 +461,12 @@ async fn publish_group_message(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(GroupMessagePublishResponse {
         message_id,
         queued: true,
@@ -401,10 +507,12 @@ async fn publish_media(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(MediaPublishResponse {
         message_id,
         queued: true,
@@ -442,10 +550,12 @@ async fn publish_follow(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     state.node.trust_pubkey(hex_to_pubkey(&bundle.followee_pubkey_hex));
     state
         .protocol
@@ -557,6 +667,312 @@ async fn publish_block(
         message_id,
         queued: true,
         blocker_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ListPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    Json(ListPublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_group_metadata(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<GroupMetadataPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    Json(GroupMetadataPublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_zap(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ZapPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    Json(ZapPublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_app_preferences(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<AppPreferencesPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    Json(AppPreferencesPublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_deletion(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<DeletionPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    Json(DeletionPublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_repost(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<RepostPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    Json(RepostPublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_poll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PollPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    Json(PollPublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_poll_vote(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PollVotePublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    Json(PollVotePublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
+    })
+    .into_response()
+}
+
+async fn publish_live_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<LiveStatusPublishRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let identity = state.node.identity();
+    let mut bundle = request.bundle;
+    let pubkey_hex = identity.public_key_hex();
+    if bundle.author_pubkey_hex.is_empty() {
+        bundle.author_pubkey_hex = pubkey_hex.clone();
+    } else if bundle.author_pubkey_hex != pubkey_hex {
+        return bad_request("author_mismatch", "author pubkey does not match identity");
+    }
+    let payload = match serde_json::to_vec(&bundle) {
+        Ok(value) => value,
+        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+    };
+    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let message_id = state.node.enqueue_publish(PublishRequest {
+        namespace: request.namespace,
+        payload: String::from_utf8(payload).unwrap_or_default(),
+    });
+    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    Json(LiveStatusPublishResponse {
+        message_id,
+        queued: true,
+        author_pubkey_hex: pubkey_hex,
     })
     .into_response()
 }
@@ -1920,5 +2336,53 @@ mod tests {
             .unwrap_or_else(|_| Bytes::new());
         let parsed: BlockPublishResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.blocker_pubkey_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn post_publish_triggers_loopback() {
+        let state = test_state();
+        let mut rx = state.node.subscribe_events();
+        let app = build_router(state);
+        
+        let bundle = PostBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_010,
+            },
+            channel_id: "general".to_string(),
+            author_pubkey_hex: String::new(),
+            text: "Loopback test".to_string(),
+            media_roots: vec![],
+            reply_to_root: None,
+        };
+        
+        let body = serde_json::to_string(&PostPublishRequest {
+            namespace: 32,
+            bundle,
+        }).unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/post")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        
+        // The node emits "publish_queued" first, then we call inject_local_feed_bundle
+        let first = rx.try_recv().expect("first event should be emitted");
+        assert_eq!(first.event, "publish_queued");
+
+        // Now we should get the feed_bundle event
+        let second = rx.try_recv().expect("second event should be emitted");
+        assert_eq!(second.event, "feed_bundle");
+        assert_eq!(second.data["text"], "Loopback test");
     }
 }

@@ -1,5 +1,5 @@
-name: veil_android_node_ui
-description: "A new Flutter project."
+name: veil_social
+description: "Personal Cloud Social Client for the Veil Network."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -36,6 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^1.2.0
   web_socket_channel: ^3.0.1
+  url_launcher: ^6.3.0
+  image_picker: ^1.1.2
 
 dev_dependencies:
   flutter_test:
