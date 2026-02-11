@@ -11,11 +11,16 @@ use veil_android_node::{
 
 #[tokio::main]
 async fn main() {
+    let filter = std::env::var("VEIL_NODE_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
     tracing_subscriber::fmt()
-        .with_env_filter("info")
+        .with_env_filter(filter)
         .init();
 
     let token = std::env::var("VEIL_NODE_TOKEN").unwrap_or_default();
+    let host = std::env::var("VEIL_NODE_HOST")
+        .ok()
+        .and_then(|value| value.parse::<IpAddr>().ok())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
     let port = std::env::var("VEIL_NODE_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
@@ -28,19 +33,22 @@ async fn main() {
     let node_arc = Arc::new(node.clone());
     let identity = node.identity();
 
-    let ws_url = std::env::var("VEIL_NODE_WS").unwrap_or_else(|_| "ws://127.0.0.1:9001/ws".to_string());
+    let ws_url = std::env::var("VEIL_NODE_WS").ok();
     let peer_id = std::env::var("VEIL_NODE_PEER").unwrap_or_else(|_| "android-node".to_string());
     let namespace = std::env::var("VEIL_NODE_NAMESPACE")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(32);
     let mut protocol_config = default_protocol_config(
-        ws_url,
+        ws_url.clone().unwrap_or_default(),
         peer_id,
         namespace,
         identity.public_key,
         identity.signer(),
     );
+    if ws_url.is_none() {
+        protocol_config.ws_url = None;
+    }
     protocol_config.runtime_config.wot_policy = node.wot_policy();
     if let Ok(raw) = std::env::var("VEIL_NODE_CACHE_STATE") {
         if !raw.trim().is_empty() {
@@ -190,6 +198,6 @@ async fn main() {
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
 
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    let addr = SocketAddr::new(host, port);
     serve(addr, state).await;
 }

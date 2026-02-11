@@ -47,6 +47,15 @@ class _NodeHomeState extends State<NodeHome> {
     return AnimatedBuilder(
       animation: _service,
       builder: (context, _) {
+        final error = _service.state.lastError;
+        if (error != null && error.isNotEmpty) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(error)),
+            );
+            _service.clearError();
+          });
+        }
         return Scaffold(
           appBar: AppBar(
             title: const Text('Veil Node'),

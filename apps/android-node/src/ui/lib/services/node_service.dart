@@ -44,6 +44,7 @@ class NodeService extends ChangeNotifier {
       _setState(_state.copyWith(lastError: 'Start failed: $err'));
     } finally {
       _setState(_state.copyWith(busy: false));
+      await Future.delayed(const Duration(seconds: 2));
       await refresh();
       await connectEvents();
     }
@@ -68,22 +69,37 @@ class NodeService extends ChangeNotifier {
       return;
     }
     final uri = Uri.parse('ws://127.0.0.1:7788/events');
-    try {
-      _eventsChannel = IOWebSocketChannel.connect(
-        uri,
-        headers: _authHeader,
-      );
-      _eventsSub = _eventsChannel!.stream.listen(
-        _handleEventMessage,
-        onError: (err) {
-          _setState(_state.copyWith(lastError: 'WS error: $err'));
-        },
-        onDone: () {
+    int attempts = 0;
+    const maxAttempts = 5;
+
+    while (attempts < maxAttempts) {
+      try {
+        _eventsChannel = IOWebSocketChannel.connect(
+          uri,
+          headers: _authHeader,
+        );
+        // Wait for the stream to actually connect
+        await _eventsChannel!.ready;
+        _eventsSub = _eventsChannel!.stream.listen(
+          _handleEventMessage,
+          onError: (err) {
+            _setState(_state.copyWith(lastError: 'WS error: $err'));
+            _eventsChannel = null;
+          },
+          onDone: () {
+            _eventsChannel = null;
+          },
+        );
+        return; // Success
+      } catch (err) {
+        attempts++;
+        if (attempts >= maxAttempts) {
+          _setState(_state.copyWith(lastError: 'WS connect failed after $maxAttempts attempts: $err'));
           _eventsChannel = null;
-        },
-      );
-    } catch (err) {
-      _setState(_state.copyWith(lastError: 'WS connect failed: $err'));
+          return;
+        }
+        await Future.delayed(Duration(milliseconds: 500 * attempts));
+      }
     }
   }
 
@@ -124,22 +140,24 @@ class NodeService extends ChangeNotifier {
   }
 
   Future<void> refresh() async {
-    final health = await _getJson('/health');
-    final identity = await _getJson('/identity');
-    final status = await _getJson('/status');
-    final policy = await _getJson('/policy');
-    final lastError = _state.lastError;
+    try {
+      final health = await _getJson('/health');
+      final identity = await _getJson('/identity');
+      final status = await _getJson('/status');
+      final policy = await _getJson('/policy');
 
-    _setState(
-      _state.copyWith(
-        healthPayload: health ?? _state.healthPayload,
-        identityHex: identity?['public_key_hex'] as String? ?? _state.identityHex,
-        statusPayload: status ?? _state.statusPayload,
-        policySummary: policy ?? _state.policySummary,
-        lastError: lastError,
-        lastUpdated: DateTime.now(),
-      ),
-    );
+      _setState(
+        _state.copyWith(
+          healthPayload: health,
+          identityHex: identity?['public_key_hex'] as String? ?? _state.identityHex,
+          statusPayload: status,
+          policySummary: policy,
+          lastUpdated: DateTime.now(),
+        ),
+      );
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Refresh failed: $err'));
+    }
   }
 
   Future<void> publishRaw({
@@ -295,6 +313,10 @@ class NodeService extends ChangeNotifier {
     } catch (_) {
       // Ignore malformed messages
     }
+  }
+
+  void clearError() {
+    _setState(_state.copyWith(lastError: null));
   }
 
   void _setState(NodeState next) {

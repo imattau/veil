@@ -3,9 +3,11 @@ package com.veil.veil_android_node_ui
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -52,7 +54,11 @@ class NodeForegroundService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START, null -> {
-                startForeground(NOTIFICATION_ID, buildNotification())
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                } else {
+                    startForeground(NOTIFICATION_ID, buildNotification())
+                }
                 if (starting.compareAndSet(false, true)) {
                     Thread {
                         startNodeProcess()
@@ -70,6 +76,15 @@ class NodeForegroundService : Service() {
         super.onDestroy()
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.i(TAG, "App swiped away, stopping node service")
+        stopNodeProcess()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        running = false
+    }
+
     private fun startNodeProcess() {
         if (process != null) {
             running = true
@@ -78,18 +93,31 @@ class NodeForegroundService : Service() {
         }
         try {
             val binary = ensureBinary()
-            binary.setExecutable(true, false)
+            if (!binary.setExecutable(true, false)) {
+                Log.w(TAG, "setExecutable failed for ${binary.absolutePath}")
+            }
+            // Small delay to ensure service is fully ready
+            Thread.sleep(1000)
+            
             val builder = ProcessBuilder(binary.absolutePath)
-            builder.directory(filesDir)
+            builder.directory(binary.parentFile)
             builder.redirectErrorStream(true)
             val env = builder.environment()
             val token = loadOrCreateToken()
+            env["VEIL_NODE_HOST"] = "127.0.0.1"
             env["VEIL_NODE_PORT"] = "7788"
+            env["VEIL_NODE_LOG_LEVEL"] = "debug"
             env["VEIL_NODE_STATE"] = File(filesDir, "node_state.json").absolutePath
             env["VEIL_NODE_CACHE_STATE"] = File(filesDir, "node_cache.cbor").absolutePath
             env["VEIL_NODE_QUIC_BIND"] = "0.0.0.0:9000"
             env["VEIL_NODE_QUIC_SERVER_NAME"] = "localhost"
+            env["VEIL_NODE_QUIC_PUBLIC"] = "127.0.0.1:9000"
+            env["VEIL_NODE_WS"] = "ws://relay.veil-network.io:9001/ws"
+            env["VEIL_NODE_WS_PEERS"] = "ws://relay.veil-network.io:9001/ws,ws://veilnode.3nostr.com:9001/ws"
+            env["VEIL_NODE_FAST_PEERS"] = "quic://bootstrap.veil-network.io:9000,quic://veilnode.3nostr.com:9000"
             env["VEIL_NODE_TOKEN"] = token
+            env["VEIL_DISCOVERY_BOOTSTRAP"] = "quic://bootstrap.veil-network.io:9000,ws://relay.veil-network.io:9001/ws,quic://veilnode.3nostr.com:9000,ws://veilnode.3nostr.com:9001/ws"
+            env["VEIL_LAN_DISCOVERY"] = "1"
             process = builder.start()
             running = true
             lastError = null
@@ -124,22 +152,39 @@ class NodeForegroundService : Service() {
                 }
             } catch (err: Exception) {
                 Log.w(TAG, "Log stream stopped", err)
+            } finally {
+                try {
+                    val exitCode = proc.exitValue()
+                    Log.i(TAG, "Node process exited with code $exitCode")
+                    if (exitCode != 0) {
+                        lastError = "Process exited with code $exitCode"
+                    }
+                } catch (e: IllegalThreadStateException) {
+                    // Still running
+                }
+                if (process == proc) {
+                    running = false
+                    process = null
+                }
             }
         }.start()
     }
 
     private fun ensureBinary(): File {
-        val target = File(filesDir, "veil_node")
-        if (target.exists()) {
-            return target
+        // We MUST bundle binaries as "native libraries" (.so files) so they are extracted to nativeLibraryDir.
+        // Modern Android (API 29+) forbids execution from any writable directory.
+        Log.i(TAG, "Native library dir: ${applicationInfo.nativeLibraryDir}")
+        val nativeBin = File(applicationInfo.nativeLibraryDir, "libveil_node.so")
+        if (nativeBin.exists()) {
+            Log.i(TAG, "Using native binary: ${nativeBin.absolutePath}")
+            return nativeBin
         }
-        val assetName = selectAssetName()
-        assets.open(assetName).use { input ->
-            FileOutputStream(target).use { output ->
-                input.copyTo(output)
-            }
-        }
-        return target
+
+        // Detailed error reporting if the binary is missing from the APK
+        val abi = Build.SUPPORTED_ABIS?.firstOrNull() ?: "unknown"
+        throw IllegalStateException("Binary 'libveil_node.so' not found in nativeLibraryDir for ABI $abi. " +
+                "Check that src/main/jniLibs contains the correct architecture folders and .so files, " +
+                "and that you have done a FULL REINSTALL (uninstall first).")
     }
 
     private fun loadOrCreateToken(): String {
@@ -184,11 +229,32 @@ class NodeForegroundService : Service() {
 
     private fun buildNotification(): Notification {
         ensureChannel()
-        return Notification.Builder(this, CHANNEL_ID)
+        
+        val stopIntent = Intent(this, NodeForegroundService::class.java).apply {
+            action = ACTION_STOP
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this, 0, stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+
+        return builder
             .setContentTitle("Veil Node")
             .setContentText("Node service running")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)
+            .addAction(
+                Notification.Action.Builder(
+                    null, "Stop", stopPendingIntent
+                ).build()
+            )
             .build()
     }
 
