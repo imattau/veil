@@ -1345,7 +1345,7 @@ async fn fetch_object(
             object_root.copy_from_slice(&bytes);
         }
     }
-    let object = state.protocol.reconstruct_object(object_root).await;
+    let object = state.protocol.reconstruct_payload(object_root).await;
     match object {
         Some(bytes) => Json(ObjectFetchResponse {
             object_b64: base64::engine::general_purpose::STANDARD.encode(bytes),

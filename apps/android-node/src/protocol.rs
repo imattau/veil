@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 use veil_core::tags::derive_feed_tag;
 use veil_core::{Epoch, Namespace};
-use veil_crypto::aead::XChaCha20Poly1305Cipher;
+use veil_crypto::aead::{build_veil_aad, AeadCipher, XChaCha20Poly1305Cipher};
 use veil_crypto::signing::Ed25519Signer;
 use veil_crypto::signing::Ed25519Verifier;
 use veil_fec::profile::ErasureCodingMode;
@@ -26,6 +26,7 @@ use veil_node::service::{PublisherRuntime, PublisherTickInput};
 use crate::adapters::{FallbackAdapter, FastAdapter, LaneAdapter, LaneSnapshot, MultiLaneAdapter};
 use crate::api::{LaneDetail, LaneStats};
 use crate::discovery::discovery_tag;
+use veil_codec::object::decode_object_cbor_prefix;
 use veil_codec::shard::decode_shard_cbor;
 use veil_fec::sharder::reconstruct_object_padded_with_mode;
 use veil_node::persistence::load_state_or_default;
@@ -284,6 +285,54 @@ impl ProtocolEngine {
         }
         let mode = erasure_mode_from_shards(&shards, runtime.config.erasure_coding_mode);
         reconstruct_object_padded_with_mode(&shards, root, mode).ok()
+    }
+
+    pub async fn reconstruct_payload(&self, root: [u8; 32]) -> Option<Vec<u8>> {
+        let runtime = self.inner.lock().await;
+        let mut roots = std::collections::HashSet::new();
+        for cached in runtime.state.cache.values() {
+            if let Ok(shard) = decode_shard_cbor(&cached.bytes) {
+                roots.insert(shard.header.object_root);
+            }
+        }
+
+        let cipher = XChaCha20Poly1305Cipher;
+        for wire_root in roots {
+            let mut shards = Vec::new();
+            for cached in runtime.state.cache.values() {
+                if let Ok(shard) = decode_shard_cbor(&cached.bytes) {
+                    if shard.header.object_root == wire_root {
+                        shards.push(shard);
+                    }
+                }
+            }
+            if shards.is_empty() {
+                continue;
+            }
+
+            let mode = erasure_mode_from_shards(&shards, runtime.config.erasure_coding_mode);
+            let reconstructed = match reconstruct_object_padded_with_mode(&shards, wire_root, mode)
+            {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let (object, _) = match decode_object_cbor_prefix(&reconstructed) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if wire_root != root && object.object_root != root {
+                continue;
+            }
+
+            let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
+            if let Ok(payload) =
+                cipher.decrypt(&runtime.encrypt_key, object.nonce, &aad, &object.ciphertext)
+            {
+                return Some(payload);
+            }
+        }
+
+        None
     }
 
     pub async fn persist_cache_state(&self) {
