@@ -283,15 +283,15 @@ async fn publish_profile(
     if bundle.bio.len() > MAX_BIO_LEN {
         return bad_request("bio_too_long", "bio too long");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::Profile(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value =
-        serde_json::to_value(&FeedBundle::Profile(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -329,14 +329,15 @@ async fn publish_post(
     if bundle.text.len() > MAX_TEXT_LEN {
         return bad_request("text_too_long", "text too long");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::Post(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value = serde_json::to_value(&FeedBundle::Post(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -374,15 +375,15 @@ async fn publish_reaction(
     if bundle.action_code.trim().is_empty() || bundle.action_code.len() > MAX_ACTION_LEN {
         return bad_request("invalid_action", "action_code invalid");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::Reaction(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value =
-        serde_json::to_value(&FeedBundle::Reaction(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -420,15 +421,15 @@ async fn publish_direct_message(
     if !valid_pubkey_hex(&bundle.recipient_pubkey_hex) {
         return bad_request("invalid_recipient", "recipient pubkey invalid");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::DirectMessage(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value =
-        serde_json::to_value(&FeedBundle::DirectMessage(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -466,15 +467,15 @@ async fn publish_group_message(
     if bundle.group_id.trim().is_empty() || bundle.group_id.len() > MAX_GROUP_ID_LEN {
         return bad_request("invalid_group", "group_id invalid");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::GroupMessage(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value =
-        serde_json::to_value(&FeedBundle::GroupMessage(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -515,14 +516,15 @@ async fn publish_media(
     if bundle.url.len() > MAX_URL_LEN {
         return bad_request("url_too_long", "url too long");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::Media(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value = serde_json::to_value(&FeedBundle::Media(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -563,15 +565,15 @@ async fn publish_follow(
     if !valid_pubkey_hex(&bundle.followee_pubkey_hex) {
         return bad_request("invalid_followee", "followee pubkey invalid");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::Follow(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value =
-        serde_json::to_value(&FeedBundle::Follow(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -621,7 +623,8 @@ async fn publish_mute(
             return bad_request("reason_too_long", "reason too long");
         }
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::Mute(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
@@ -674,7 +677,8 @@ async fn publish_block(
             return bad_request("reason_too_long", "reason too long");
         }
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::Block(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
@@ -716,11 +720,12 @@ async fn publish_list(
     } else if bundle.author_pubkey_hex != pubkey_hex {
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::List(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&FeedBundle::List(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -752,12 +757,12 @@ async fn publish_group_metadata(
     } else if bundle.author_pubkey_hex != pubkey_hex {
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::GroupMetadata(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value =
-        serde_json::to_value(&FeedBundle::GroupMetadata(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -789,11 +794,12 @@ async fn publish_zap(
     } else if bundle.author_pubkey_hex != pubkey_hex {
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::Zap(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&FeedBundle::Zap(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -825,12 +831,12 @@ async fn publish_app_preferences(
     } else if bundle.author_pubkey_hex != pubkey_hex {
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::AppPreferences(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value =
-        serde_json::to_value(&FeedBundle::AppPreferences(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -862,12 +868,12 @@ async fn publish_deletion(
     } else if bundle.author_pubkey_hex != pubkey_hex {
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::Deletion(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value =
-        serde_json::to_value(&FeedBundle::Deletion(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -899,12 +905,12 @@ async fn publish_repost(
     } else if bundle.author_pubkey_hex != pubkey_hex {
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::Repost(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value =
-        serde_json::to_value(&FeedBundle::Repost(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -936,11 +942,12 @@ async fn publish_poll(
     } else if bundle.author_pubkey_hex != pubkey_hex {
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::Poll(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&FeedBundle::Poll(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -972,12 +979,12 @@ async fn publish_poll_vote(
     } else if bundle.author_pubkey_hex != pubkey_hex {
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::PollVote(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value =
-        serde_json::to_value(&FeedBundle::PollVote(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -1009,12 +1016,12 @@ async fn publish_live_status(
     } else if bundle.author_pubkey_hex != pubkey_hex {
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
-    let payload = match serde_json::to_vec(&bundle) {
+    let feed_bundle = FeedBundle::LiveStatus(bundle.clone());
+    let payload = match serde_json::to_vec(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value =
-        serde_json::to_value(&FeedBundle::LiveStatus(bundle.clone())).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
@@ -2010,6 +2017,53 @@ mod tests {
             .unwrap_or_else(|_| Bytes::new());
         let parsed: PostPublishResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.author_pubkey_hex.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn post_publish_queues_feed_bundle_envelope() {
+        let state = test_state();
+        let app = build_router(state.clone());
+        let bundle = PostBundle {
+            meta: BundleMeta {
+                version: 1,
+                created_at: 1_700_000_010,
+            },
+            channel_id: "general".to_string(),
+            author_pubkey_hex: String::new(),
+            text: "wrapped payload".to_string(),
+            media_roots: vec![],
+            reply_to_root: None,
+        };
+        let body = serde_json::to_string(&PostPublishRequest {
+            namespace: 32,
+            bundle,
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/post")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let item = state
+            .node
+            .take_next_queued(now_ms)
+            .expect("queued post payload");
+        let payload: serde_json::Value =
+            serde_json::from_str(&item.payload).expect("queued payload should be json");
+        assert_eq!(payload.get("kind").and_then(|v| v.as_str()), Some("post"));
     }
 
     #[tokio::test]

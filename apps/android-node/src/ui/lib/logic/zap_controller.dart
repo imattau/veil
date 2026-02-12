@@ -24,13 +24,15 @@ class ZapController extends ChangeNotifier {
       final res = await _client.get(Uri.parse(url));
       final metadata = jsonDecode(res.body);
       final callback = metadata['callback'] as String?;
-      
+
       if (callback == null) return null;
 
       final amountMsat = amountSats * 1000;
-      final invoiceRes = await _client.get(Uri.parse('$callback?amount=$amountMsat'));
+      final invoiceRes = await _client.get(
+        Uri.parse('$callback?amount=$amountMsat'),
+      );
       final invoiceData = jsonDecode(invoiceRes.body);
-      
+
       return invoiceData['pr'] as String?; // The Bolt11 invoice
     } catch (e) {
       debugPrint('LNURL error: $e');
@@ -54,20 +56,11 @@ class ZapController extends ChangeNotifier {
     required String authorPubkey,
     String? channelId,
   }) async {
-    await nodeService.publishRaw(
+    await nodeService.publishZap(
       namespace: 32,
-      payload: jsonEncode({
-        'kind': 'zap',
-        'meta': {
-          'version': 1,
-          'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        },
-        'channel_id': channelId ?? 'general',
-        'author_pubkey_hex': nodeService.state.identityHex,
-        'amount': amount,
-        'unit': 'sats',
-        'target_root': targetRoot,
-      }),
+      targetRoot: targetRoot,
+      amount: amount,
+      channelId: channelId ?? 'general',
     );
   }
 

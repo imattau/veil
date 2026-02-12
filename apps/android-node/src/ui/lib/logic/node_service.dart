@@ -17,7 +17,9 @@ class NodeService extends ChangeNotifier {
   IOWebSocketChannel? _eventsChannel;
   StreamSubscription? _eventsSub;
   Timer? _poller;
-  
+  Timer? _eventsReconnectTimer;
+  bool _disposed = false;
+
   final List<NodeEvent> _events = [];
   final List<NodeEvent> _feedEvents = [];
   final Map<String, NodeEvent> _profiles = {};
@@ -26,7 +28,8 @@ class NodeService extends ChangeNotifier {
   List<NodeEvent> get events => List.unmodifiable(_events);
   List<NodeEvent> get feedEvents => List.unmodifiable(_feedEvents);
   Map<String, NodeEvent> get profiles => Map.unmodifiable(_profiles);
-  Map<String, String> get decryptedPayloads => Map.unmodifiable(_decryptedPayloads);
+  Map<String, String> get decryptedPayloads =>
+      Map.unmodifiable(_decryptedPayloads);
 
   NodeState get state => _state;
 
@@ -51,8 +54,9 @@ class NodeService extends ChangeNotifier {
     } finally {
       _setState(_state.copyWith(busy: false));
       await Future.delayed(const Duration(seconds: 2));
+      await _refreshServiceStatus();
       await refresh();
-      
+
       if (_state.identityHex == null || _state.identityHex!.isEmpty) {
         await rotateIdentity();
       }
@@ -87,32 +91,36 @@ class NodeService extends ChangeNotifier {
     if (_eventsChannel != null) {
       return;
     }
+    await _refreshServiceStatus();
     final uri = Uri.parse('ws://127.0.0.1:7788/events');
     int attempts = 0;
     const maxAttempts = 5;
 
     while (attempts < maxAttempts) {
       try {
-        _eventsChannel = IOWebSocketChannel.connect(
-          uri,
-          headers: _authHeader,
-        );
+        _eventsChannel = IOWebSocketChannel.connect(uri, headers: _authHeader);
         await _eventsChannel!.ready;
         _eventsSub = _eventsChannel!.stream.listen(
           _handleEventMessage,
           onError: (err) {
             _setState(_state.copyWith(lastError: 'WS error: $err'));
             _eventsChannel = null;
+            _scheduleEventsReconnect();
           },
           onDone: () {
             _eventsChannel = null;
+            _scheduleEventsReconnect();
           },
         );
         return;
       } catch (err) {
         attempts++;
         if (attempts >= maxAttempts) {
-          _setState(_state.copyWith(lastError: 'WS connect failed after $maxAttempts attempts: $err'));
+          _setState(
+            _state.copyWith(
+              lastError: 'WS connect failed after $maxAttempts attempts: $err',
+            ),
+          );
           _eventsChannel = null;
           return;
         }
@@ -122,6 +130,8 @@ class NodeService extends ChangeNotifier {
   }
 
   Future<void> disconnectEvents() async {
+    _eventsReconnectTimer?.cancel();
+    _eventsReconnectTimer = null;
     await _eventsSub?.cancel();
     _eventsSub = null;
     await _eventsChannel?.sink.close(ws_status.goingAway);
@@ -133,10 +143,7 @@ class NodeService extends ChangeNotifier {
     _setState(_state.copyWith(busy: true, lastError: _state.lastError));
     try {
       final response = await _client
-          .post(
-            Uri.parse('$_baseUrl/identity/rotate'),
-            headers: _authHeader,
-          )
+          .post(Uri.parse('$_baseUrl/identity/rotate'), headers: _authHeader)
           .timeout(const Duration(seconds: 4));
       if (response.statusCode >= 200 && response.statusCode < 300) {
         final payload = jsonDecode(response.body);
@@ -145,9 +152,9 @@ class NodeService extends ChangeNotifier {
           _setState(_state.copyWith(identityHex: identity));
         }
       } else {
-        _setState(_state.copyWith(
-          lastError: 'Rotate failed: ${response.statusCode}',
-        ));
+        _setState(
+          _state.copyWith(lastError: 'Rotate failed: ${response.statusCode}'),
+        );
       }
     } catch (err) {
       _setState(_state.copyWith(lastError: 'Rotate failed: $err'));
@@ -158,6 +165,7 @@ class NodeService extends ChangeNotifier {
   }
 
   Future<void> refresh() async {
+    await _refreshServiceStatus();
     try {
       final health = await _getJson('/health');
       final identity = await _getJson('/identity');
@@ -168,10 +176,13 @@ class NodeService extends ChangeNotifier {
       _setState(
         _state.copyWith(
           healthPayload: health,
-          identityHex: identity?['public_key_hex'] as String? ?? _state.identityHex,
+          identityHex:
+              identity?['public_key_hex'] as String? ?? _state.identityHex,
           statusPayload: status,
           policySummary: policy,
-          subscriptions: (subs?['subscriptions'] as List?)?.cast<String>() ?? _state.subscriptions,
+          subscriptions:
+              (subs?['subscriptions'] as List?)?.cast<String>() ??
+              _state.subscriptions,
           lastUpdated: DateTime.now(),
         ),
       );
@@ -199,10 +210,7 @@ class NodeService extends ChangeNotifier {
     }
   }
 
-  Future<void> publishRaw({
-    required String payload,
-    int namespace = 32,
-  }) async {
+  Future<void> publishRaw({required String payload, int namespace = 32}) async {
     if (_state.busy) return;
     if (payload.trim().isEmpty) {
       _setState(_state.copyWith(lastError: 'Payload is empty'));
@@ -213,17 +221,14 @@ class NodeService extends ChangeNotifier {
       final response = await _client
           .post(
             Uri.parse('$_baseUrl/publish'),
-            headers: {
-              'content-type': 'application/json',
-              ..._authHeader,
-            },
+            headers: {'content-type': 'application/json', ..._authHeader},
             body: jsonEncode({'namespace': namespace, 'payload': payload}),
           )
           .timeout(const Duration(seconds: 4));
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        _setState(_state.copyWith(
-          lastError: 'Publish failed: ${response.statusCode}',
-        ));
+        _setState(
+          _state.copyWith(lastError: 'Publish failed: ${response.statusCode}'),
+        );
       }
     } catch (err) {
       _setState(_state.copyWith(lastError: 'Publish failed: $err'));
@@ -235,6 +240,7 @@ class NodeService extends ChangeNotifier {
   Future<void> publishPost({
     required String text,
     String? replyToRoot,
+    List<String> mediaRoots = const [],
     String channelId = 'general',
     int namespace = 32,
   }) async {
@@ -249,31 +255,228 @@ class NodeService extends ChangeNotifier {
         'channel_id': channelId,
         'author_pubkey_hex': _state.identityHex ?? '',
         'text': text,
-        'media_roots': [],
+        'media_roots': mediaRoots,
         'reply_to_root': replyToRoot,
       };
 
       final response = await _client
           .post(
             Uri.parse('$_baseUrl/post'),
-            headers: {
-              'content-type': 'application/json',
-              ..._authHeader,
-            },
-            body: jsonEncode({
-              'namespace': namespace,
-              'bundle': bundle,
-            }),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
           )
           .timeout(const Duration(seconds: 4));
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        _setState(_state.copyWith(
-          lastError: 'Post failed: ${response.statusCode}',
-        ));
+        _setState(
+          _state.copyWith(lastError: 'Post failed: ${response.statusCode}'),
+        );
       }
     } catch (err) {
       _setState(_state.copyWith(lastError: 'Post failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+    }
+  }
+
+  Future<void> publishPoll({
+    required String question,
+    required List<String> options,
+    int? endsAtUnixSeconds,
+    String channelId = 'general',
+    int namespace = 32,
+  }) async {
+    if (_state.busy) return;
+    _setState(_state.copyWith(busy: true));
+    try {
+      await _refreshServiceStatus();
+      final bundle = {
+        'meta': {
+          'version': 1,
+          'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        'channel_id': channelId,
+        'author_pubkey_hex': _state.identityHex ?? '',
+        'question': question,
+        'options': options,
+        'ends_at': endsAtUnixSeconds,
+      };
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/poll'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(lastError: 'Poll failed: ${response.statusCode}'),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Poll failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+    }
+  }
+
+  Future<void> publishPollVote({
+    required String pollRoot,
+    required int optionIndex,
+    String channelId = 'general',
+    int namespace = 32,
+  }) async {
+    if (_state.busy) return;
+    _setState(_state.copyWith(busy: true));
+    try {
+      await _refreshServiceStatus();
+      final bundle = {
+        'meta': {
+          'version': 1,
+          'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        'channel_id': channelId,
+        'author_pubkey_hex': _state.identityHex ?? '',
+        'poll_root': pollRoot,
+        'option_index': optionIndex,
+      };
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/poll_vote'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(
+            lastError: 'Poll vote failed: ${response.statusCode}',
+          ),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Poll vote failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+    }
+  }
+
+  Future<void> publishReaction({
+    required String targetRoot,
+    String actionCode = 'like',
+    String channelId = 'general',
+    int namespace = 32,
+  }) async {
+    if (_state.busy) return;
+    _setState(_state.copyWith(busy: true));
+    try {
+      await _refreshServiceStatus();
+      final bundle = {
+        'meta': {
+          'version': 1,
+          'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        'channel_id': channelId,
+        'author_pubkey_hex': _state.identityHex ?? '',
+        'target_root': targetRoot,
+        'action_code': actionCode,
+      };
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/reaction'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(lastError: 'Reaction failed: ${response.statusCode}'),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Reaction failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+    }
+  }
+
+  Future<void> publishRepost({
+    required String targetRoot,
+    String? comment,
+    String channelId = 'general',
+    int namespace = 32,
+  }) async {
+    if (_state.busy) return;
+    _setState(_state.copyWith(busy: true));
+    try {
+      await _refreshServiceStatus();
+      final bundle = {
+        'meta': {
+          'version': 1,
+          'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        'channel_id': channelId,
+        'author_pubkey_hex': _state.identityHex ?? '',
+        'target_root': targetRoot,
+        'comment': comment,
+      };
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/repost'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(lastError: 'Boost failed: ${response.statusCode}'),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Boost failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+    }
+  }
+
+  Future<void> publishZap({
+    required String targetRoot,
+    required int amount,
+    String channelId = 'general',
+    int namespace = 32,
+    String? message,
+  }) async {
+    if (_state.busy) return;
+    _setState(_state.copyWith(busy: true));
+    try {
+      await _refreshServiceStatus();
+      final bundle = {
+        'meta': {
+          'version': 1,
+          'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        'channel_id': channelId,
+        'author_pubkey_hex': _state.identityHex ?? '',
+        'amount': amount,
+        'unit': 'sats',
+        'target_root': targetRoot,
+        'receipt_proof': null,
+        'message': message,
+      };
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/zap'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(lastError: 'Zap failed: ${response.statusCode}'),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Zap failed: $err'));
     } finally {
       _setState(_state.copyWith(busy: false));
     }
@@ -299,31 +502,72 @@ class NodeService extends ChangeNotifier {
         'channel_id': channelId,
         'author_pubkey_hex': _state.identityHex ?? '',
         'recipient_pubkey_hex': recipientPubkey,
-        'ciphertext_root': 'enc_${DateTime.now().millisecondsSinceEpoch}', // Placeholder for actual encryption root
+        'ciphertext_root':
+            'enc_${DateTime.now().millisecondsSinceEpoch}', // Placeholder for actual encryption root
         'reply_to_root': replyToRoot,
       };
 
       final response = await _client
           .post(
             Uri.parse('$_baseUrl/direct_message'),
-            headers: {
-              'content-type': 'application/json',
-              ..._authHeader,
-            },
-            body: jsonEncode({
-              'namespace': namespace,
-              'bundle': bundle,
-            }),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
           )
           .timeout(const Duration(seconds: 4));
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        _setState(_state.copyWith(
-          lastError: 'DM failed: ${response.statusCode}',
-        ));
+        _setState(
+          _state.copyWith(lastError: 'DM failed: ${response.statusCode}'),
+        );
       }
     } catch (err) {
       _setState(_state.copyWith(lastError: 'DM failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+    }
+  }
+
+  Future<void> publishGroupMessage({
+    required String groupId,
+    required String text,
+    String? replyToRoot,
+    String channelId = 'group',
+    int namespace = 32,
+  }) async {
+    if (_state.busy) return;
+    _setState(_state.copyWith(busy: true));
+    try {
+      await _refreshServiceStatus();
+      final bundle = {
+        'meta': {
+          'version': 1,
+          'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+        'channel_id': channelId,
+        'author_pubkey_hex': _state.identityHex ?? '',
+        'group_id': groupId,
+        // Placeholder until encrypted message objects are wired.
+        'ciphertext_root': 'grp_${DateTime.now().millisecondsSinceEpoch}',
+        'reply_to_root': replyToRoot,
+      };
+
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/group_message'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
+          )
+          .timeout(const Duration(seconds: 4));
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(
+            lastError: 'Group message failed: ${response.statusCode}',
+          ),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Group message failed: $err'));
     } finally {
       _setState(_state.copyWith(busy: false));
     }
@@ -356,14 +600,8 @@ class NodeService extends ChangeNotifier {
       final response = await _client
           .post(
             Uri.parse('$_baseUrl/profile'),
-            headers: {
-              'content-type': 'application/json',
-              ..._authHeader,
-            },
-            body: jsonEncode({
-              'namespace': namespace,
-              'bundle': bundle,
-            }),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
           )
           .timeout(const Duration(seconds: 4));
 
@@ -380,9 +618,11 @@ class NodeService extends ChangeNotifier {
         await refresh();
         await fetchFeed();
       } else {
-        _setState(_state.copyWith(
-          lastError: 'Profile update failed: ${response.statusCode}',
-        ));
+        _setState(
+          _state.copyWith(
+            lastError: 'Profile update failed: ${response.statusCode}',
+          ),
+        );
       }
     } catch (err) {
       _setState(_state.copyWith(lastError: 'Profile update failed: $err'));
@@ -398,10 +638,7 @@ class NodeService extends ChangeNotifier {
       final response = await _client
           .post(
             Uri.parse('$_baseUrl/publish_object'),
-            headers: {
-              'content-type': 'application/json',
-              ..._authHeader,
-            },
+            headers: {'content-type': 'application/json', ..._authHeader},
             body: jsonEncode({
               'namespace': 32,
               'payload_b64': base64.encode(bytes),
@@ -413,7 +650,9 @@ class NodeService extends ChangeNotifier {
         final data = jsonDecode(response.body);
         return data['object_root'] as String?;
       } else {
-        _setState(_state.copyWith(lastError: 'Upload failed: ${response.statusCode}'));
+        _setState(
+          _state.copyWith(lastError: 'Upload failed: ${response.statusCode}'),
+        );
         return null;
       }
     } catch (err) {
@@ -435,17 +674,16 @@ class NodeService extends ChangeNotifier {
       final response = await _client
           .post(
             Uri.parse('$_baseUrl/policy/$action'),
-            headers: {
-              'content-type': 'application/json',
-              ..._authHeader,
-            },
+            headers: {'content-type': 'application/json', ..._authHeader},
             body: jsonEncode({'pubkey_hex': pubkeyHex}),
           )
           .timeout(const Duration(seconds: 4));
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        _setState(_state.copyWith(
-          lastError: 'Policy update failed: ${response.statusCode}',
-        ));
+        _setState(
+          _state.copyWith(
+            lastError: 'Policy update failed: ${response.statusCode}',
+          ),
+        );
       }
     } catch (err) {
       _setState(_state.copyWith(lastError: 'Policy update failed: $err'));
@@ -464,17 +702,16 @@ class NodeService extends ChangeNotifier {
       final response = await _client
           .post(
             Uri.parse('$_baseUrl/policy/explain'),
-            headers: {
-              'content-type': 'application/json',
-              ..._authHeader,
-            },
+            headers: {'content-type': 'application/json', ..._authHeader},
             body: jsonEncode({'pubkey_hex': pubkeyHex}),
           )
           .timeout(const Duration(seconds: 4));
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        _setState(_state.copyWith(
-          lastError: 'Policy explain failed: ${response.statusCode}',
-        ));
+        _setState(
+          _state.copyWith(
+            lastError: 'Policy explain failed: ${response.statusCode}',
+          ),
+        );
         return null;
       }
       final payload = jsonDecode(response.body);
@@ -506,17 +743,16 @@ class NodeService extends ChangeNotifier {
       final response = await _client
           .post(
             Uri.parse('$_baseUrl/identity/import'),
-            headers: {
-              'content-type': 'application/json',
-              ..._authHeader,
-            },
+            headers: {'content-type': 'application/json', ..._authHeader},
             body: jsonEncode({'secret_key_hex': secretKeyHex}),
           )
           .timeout(const Duration(seconds: 4));
       if (response.statusCode >= 200 && response.statusCode < 300) {
         await refresh();
       } else {
-        _setState(_state.copyWith(lastError: 'Import failed: ${response.statusCode}'));
+        _setState(
+          _state.copyWith(lastError: 'Import failed: ${response.statusCode}'),
+        );
       }
     } catch (err) {
       _setState(_state.copyWith(lastError: 'Import failed: $err'));
@@ -526,15 +762,22 @@ class NodeService extends ChangeNotifier {
   }
 
   Future<Map<String, dynamic>?> _getJson(String path) async {
+    await _refreshServiceStatus();
     final uri = Uri.parse('$_baseUrl$path');
     try {
-      final response = await _client
+      var response = await _client
           .get(uri, headers: _authHeader)
           .timeout(const Duration(seconds: 4));
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        await _refreshServiceStatus();
+        response = await _client
+            .get(uri, headers: _authHeader)
+            .timeout(const Duration(seconds: 4));
+      }
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        _setState(_state.copyWith(
-          lastError: 'HTTP ${response.statusCode} on $path',
-        ));
+        _setState(
+          _state.copyWith(lastError: 'HTTP ${response.statusCode} on $path'),
+        );
         return null;
       }
       final payload = jsonDecode(response.body);
@@ -553,12 +796,41 @@ class NodeService extends ChangeNotifier {
       final running = result['running'] == true;
       final error = result['error'] as String?;
       final token = result['token'] as String?;
-      _setState(_state.copyWith(
-        running: running,
-        lastError: error,
-        authToken: token ?? _state.authToken,
-      ));
+      _setState(
+        _state.copyWith(
+          running: running,
+          lastError: error,
+          authToken: token ?? _state.authToken,
+        ),
+      );
     }
+  }
+
+  Future<void> _refreshServiceStatus() async {
+    try {
+      final result = await _channel.invokeMethod('status');
+      if (result is Map) {
+        _applyServiceResult(result);
+      }
+    } catch (_) {
+      // Best effort; HTTP/WS calls will report actionable errors.
+    }
+  }
+
+  void _scheduleEventsReconnect() {
+    if (_disposed || _eventsChannel != null) {
+      return;
+    }
+    if (_eventsReconnectTimer != null) {
+      return;
+    }
+    _eventsReconnectTimer = Timer(const Duration(seconds: 1), () async {
+      _eventsReconnectTimer = null;
+      if (_disposed || _eventsChannel != null) {
+        return;
+      }
+      await connectEvents();
+    });
   }
 
   void _handleEventMessage(dynamic message) {
@@ -567,8 +839,10 @@ class NodeService extends ChangeNotifier {
       final payload = jsonDecode(message);
       if (payload is Map<String, dynamic>) {
         final event = NodeEvent.fromJson(payload);
-        debugPrint('[NodeService] Received event: ${event.event} (seq: ${event.seq})');
-        
+        debugPrint(
+          '[NodeService] Received event: ${event.event} (seq: ${event.seq})',
+        );
+
         // Add to main event log (newest first)
         _events.insert(0, event);
         if (_events.length > 100) {
@@ -576,7 +850,9 @@ class NodeService extends ChangeNotifier {
         }
 
         if (event.isFeedBundle) {
-          debugPrint('[NodeService] Processing feed bundle: ${event.bundleKind}');
+          debugPrint(
+            '[NodeService] Processing feed bundle: ${event.bundleKind}',
+          );
           debugPrint('[NodeService] Raw bundle data: ${event.data}');
           _addFeedEvent(event);
         }
@@ -588,7 +864,7 @@ class NodeService extends ChangeNotifier {
             _decryptedPayloads[root] = text;
           }
         }
-        
+
         notifyListeners();
       }
     } catch (e) {
@@ -620,17 +896,21 @@ class NodeService extends ChangeNotifier {
         }
       }
     }
-    
+
     // Explicitly notify so SocialController sees the new item
     notifyListeners();
   }
 
   List<NodeEvent> getReactionsFor(String objectRoot) {
-    return _feedEvents.where((e) => e.isReaction && e.targetRoot == objectRoot).toList();
+    return _feedEvents
+        .where((e) => e.isReaction && e.targetRoot == objectRoot)
+        .toList();
   }
 
   List<NodeEvent> getRepostsFor(String objectRoot) {
-    return _feedEvents.where((e) => e.isRepost && e.targetRoot == objectRoot).toList();
+    return _feedEvents
+        .where((e) => e.isRepost && e.targetRoot == objectRoot)
+        .toList();
   }
 
   @visibleForTesting
@@ -666,7 +946,9 @@ class NodeService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _client.close();
+    _eventsReconnectTimer?.cancel();
     _eventsSub?.cancel();
     _eventsChannel?.sink.close(ws_status.goingAway);
     _poller?.cancel();

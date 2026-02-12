@@ -9,7 +9,44 @@ import 'package:veil_social/logic/messaging_controller.dart';
 
 void main() {
   group('NodeEvent', () {
-    // ... existing NodeEvent tests ...
+    test('parses modern tagged feed bundle event', () {
+      final event = NodeEvent.fromJson({
+        'seq': 1,
+        'event': 'feed_bundle',
+        'data': {'kind': 'post', 'text': 'hello'},
+      });
+      expect(event.isPost, true);
+      expect(event.postText, 'hello');
+    });
+
+    test('parses legacy externally-tagged feed bundle event', () {
+      final event = NodeEvent.fromJson({
+        'seq': 2,
+        'event': 'feed_bundle',
+        'data': {
+          'Post': {'text': 'legacy post', 'author_pubkey_hex': 'aa'},
+        },
+      });
+      expect(event.isPost, true);
+      expect(event.bundleKind, 'post');
+      expect(event.postText, 'legacy post');
+    });
+
+    test('parses nested bundle envelope shape', () {
+      final event = NodeEvent.fromJson({
+        'seq': 3,
+        'event': 'feed_bundle',
+        'data': {
+          'bundle': {
+            'Repost': {'target_root': 'abc', 'comment': 'boost'},
+          },
+          'object_root': 'root123',
+        },
+      });
+      expect(event.isRepost, true);
+      expect(event.targetRoot, 'abc');
+      expect(event.objectRoot, 'root123');
+    });
   });
 
   group('SocialController', () {
@@ -20,11 +57,7 @@ void main() {
       service.testInjectEvent({
         'seq': 10,
         'event': 'feed_bundle',
-        'data': {
-          'kind': 'post',
-          'object_root': 'root1',
-          'text': 'main post'
-        }
+        'data': {'kind': 'post', 'object_root': 'root1', 'text': 'main post'},
       });
 
       service.testInjectEvent({
@@ -33,17 +66,14 @@ void main() {
         'data': {
           'kind': 'reaction',
           'action_code': 'like',
-          'target_root': 'root1'
-        }
+          'target_root': 'root1',
+        },
       });
 
       service.testInjectEvent({
         'seq': 12,
         'event': 'feed_bundle',
-        'data': {
-          'kind': 'repost',
-          'target_root': 'root1'
-        }
+        'data': {'kind': 'repost', 'target_root': 'root1'},
       });
 
       expect(controller.feed.length, 2); // post + repost
@@ -62,8 +92,8 @@ void main() {
         'data': {
           'kind': 'profile',
           'author_pubkey_hex': 'pub123',
-          'display_name': 'Alice'
-        }
+          'display_name': 'Alice',
+        },
       });
 
       expect(controller.getDisplayName('pub123'), 'Alice');
@@ -80,8 +110,8 @@ void main() {
         'data': {
           'kind': 'post',
           'object_root': 'parent_root',
-          'text': 'parent'
-        }
+          'text': 'parent',
+        },
       });
 
       service.testInjectEvent({
@@ -91,8 +121,8 @@ void main() {
           'kind': 'post',
           'object_root': 'child1',
           'reply_to_root': 'parent_root',
-          'text': 'reply 1'
-        }
+          'text': 'reply 1',
+        },
       });
 
       service.testInjectEvent({
@@ -102,8 +132,8 @@ void main() {
           'kind': 'post',
           'object_root': 'child2',
           'reply_to_root': 'parent_root',
-          'text': 'reply 2'
-        }
+          'text': 'reply 2',
+        },
       });
 
       final comments = controller.getComments('parent_root');
@@ -112,43 +142,58 @@ void main() {
       expect(comments.any((e) => e.postText == 'reply 2'), true);
     });
 
-    test('SocialController filters only posts and reposts for main feed', () {
-      final service = NodeService();
-      final controller = SocialController(service);
+    test(
+      'SocialController filters posts, reposts, and polls for main feed',
+      () {
+        final service = NodeService();
+        final controller = SocialController(service);
 
-      // 1. A standard post (Should be in feed)
-      service.testInjectEvent({
-        'seq': 10,
-        'event': 'feed_bundle',
-        'data': {'kind': 'post', 'text': 'post 1'}
-      });
+        // 1. A standard post (Should be in feed)
+        service.testInjectEvent({
+          'seq': 10,
+          'event': 'feed_bundle',
+          'data': {'kind': 'post', 'text': 'post 1'},
+        });
 
-      // 2. A profile update (Should NOT be in feed)
-      service.testInjectEvent({
-        'seq': 11,
-        'event': 'feed_bundle',
-        'data': {'kind': 'profile', 'display_name': 'Alice'}
-      });
+        // 2. A profile update (Should NOT be in feed)
+        service.testInjectEvent({
+          'seq': 11,
+          'event': 'feed_bundle',
+          'data': {'kind': 'profile', 'display_name': 'Alice'},
+        });
 
-      // 3. A repost (Should be in feed)
-      service.testInjectEvent({
-        'seq': 12,
-        'event': 'feed_bundle',
-        'data': {'kind': 'repost', 'target_root': 'some_root'}
-      });
+        // 3. A repost (Should be in feed)
+        service.testInjectEvent({
+          'seq': 12,
+          'event': 'feed_bundle',
+          'data': {'kind': 'repost', 'target_root': 'some_root'},
+        });
 
-      // 4. A reaction (Should NOT be in feed)
-      service.testInjectEvent({
-        'seq': 13,
-        'event': 'feed_bundle',
-        'data': {'kind': 'reaction', 'action_code': 'like'}
-      });
+        // 3b. A poll (Should be in feed)
+        service.testInjectEvent({
+          'seq': 125,
+          'event': 'feed_bundle',
+          'data': {
+            'kind': 'poll',
+            'question': 'Tea or coffee?',
+            'options': ['Tea', 'Coffee'],
+          },
+        });
 
-      expect(controller.feed.length, 2);
-      expect(controller.feed.any((e) => e.isPost), true);
-      expect(controller.feed.any((e) => e.isRepost), true);
-      expect(controller.feed.any((e) => e.isReaction), false);
-    });
+        // 4. A reaction (Should NOT be in feed)
+        service.testInjectEvent({
+          'seq': 13,
+          'event': 'feed_bundle',
+          'data': {'kind': 'reaction', 'action_code': 'like'},
+        });
+
+        expect(controller.feed.length, 3);
+        expect(controller.feed.any((e) => e.isPost), true);
+        expect(controller.feed.any((e) => e.isRepost), true);
+        expect(controller.feed.any((e) => e.isPoll), true);
+        expect(controller.feed.any((e) => e.isReaction), false);
+      },
+    );
 
     test('SocialController excludes comments from main feed', () {
       final service = NodeService();
@@ -158,14 +203,18 @@ void main() {
       service.testInjectEvent({
         'seq': 20,
         'event': 'feed_bundle',
-        'data': {'kind': 'post', 'text': 'main'}
+        'data': {'kind': 'post', 'text': 'main'},
       });
 
       // Comment (has reply_to_root)
       service.testInjectEvent({
         'seq': 21,
         'event': 'feed_bundle',
-        'data': {'kind': 'post', 'text': 'comment', 'reply_to_root': 'some_root'}
+        'data': {
+          'kind': 'post',
+          'text': 'comment',
+          'reply_to_root': 'some_root',
+        },
       });
 
       expect(controller.feed.length, 1);
@@ -185,8 +234,8 @@ void main() {
           'kind': 'post',
           'author_pubkey_hex': 'my_pubkey',
           'text': 'My own post',
-          'object_root': 'root_self'
-        }
+          'object_root': 'root_self',
+        },
       });
 
       expect(controller.feed.length, 1);
@@ -214,10 +263,7 @@ void main() {
       final msg = NodeEvent.fromJson({
         'seq': 1,
         'event': 'feed_bundle',
-        'data': {
-          'kind': 'direct_message',
-          'ciphertext_root': 'root_enc_1',
-        }
+        'data': {'kind': 'direct_message', 'ciphertext_root': 'root_enc_1'},
       });
 
       // Inject the decrypted payload into service cache
@@ -227,7 +273,7 @@ void main() {
         'data': {
           'object_root': 'root_enc_1',
           'payload_b64': 'SGVsbG8gU2VjcmV0IQ==', // "Hello Secret!"
-        }
+        },
       });
 
       final content = controller.getMessageContent(msg);

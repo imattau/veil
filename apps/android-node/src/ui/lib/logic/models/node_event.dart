@@ -7,17 +7,15 @@ class NodeEvent {
   final String event;
   final Map<String, dynamic> data;
 
-  const NodeEvent({
-    required this.seq,
-    required this.event,
-    required this.data,
-  });
+  const NodeEvent({required this.seq, required this.event, required this.data});
 
   factory NodeEvent.fromJson(Map<String, dynamic> json) {
+    final event = json['event'] as String? ?? 'unknown';
+    final data = _normalizeEventData(event, json['data']);
     return NodeEvent(
       seq: (json['seq'] as num?)?.toInt() ?? 0,
-      event: json['event'] as String? ?? 'unknown',
-      data: (json['data'] as Map<String, dynamic>?) ?? const {},
+      event: event,
+      data: data,
     );
   }
 
@@ -37,7 +35,8 @@ class NodeEvent {
 
   String? get authorPubkey => data['author_pubkey_hex'] as String?;
   String? get channelId => data['channel_id'] as String?;
-  String? get lightningAddress => isProfile ? data['lightning_address'] as String? : null;
+  String? get lightningAddress =>
+      isProfile ? data['lightning_address'] as String? : null;
   int? get createdAt => (data['meta']?['created_at'] as num?)?.toInt();
 
   // Post specific
@@ -47,7 +46,8 @@ class NodeEvent {
   String? get replyToRoot => data['reply_to_root'] as String?;
 
   // Reaction specific
-  String? get reactionAction => isReaction ? data['action_code'] as String? : null;
+  String? get reactionAction =>
+      isReaction ? data['action_code'] as String? : null;
   String? get targetRoot => data['target_root'] as String?;
 
   // Repost specific
@@ -68,6 +68,91 @@ class NodeEvent {
   }
 
   // Live status specific
-  String? get statusText => isLiveStatus ? data['status_text'] as String? : null;
+  String? get statusText =>
+      isLiveStatus ? data['status_text'] as String? : null;
   String? get statusEmoji => isLiveStatus ? data['emoji'] as String? : null;
+}
+
+Map<String, dynamic> _normalizeEventData(String event, dynamic rawData) {
+  final data = rawData is Map
+      ? Map<String, dynamic>.from(rawData)
+      : <String, dynamic>{};
+  if (event != 'feed_bundle') {
+    return data;
+  }
+  return _normalizeFeedBundleData(data);
+}
+
+Map<String, dynamic> _normalizeFeedBundleData(Map<String, dynamic> data) {
+  final kind = data['kind'];
+  if (kind is String && kind.isNotEmpty) {
+    return data;
+  }
+
+  final bundleField = data['bundle'];
+  if (bundleField is Map) {
+    final normalized = _normalizeFeedBundleData(
+      Map<String, dynamic>.from(bundleField),
+    );
+    final root = data['object_root'];
+    if (root is String &&
+        root.isNotEmpty &&
+        normalized['object_root'] == null) {
+      normalized['object_root'] = root;
+    }
+    return normalized;
+  }
+
+  if (data.length == 1) {
+    final key = data.keys.first;
+    final value = data[key];
+    if (value is Map) {
+      final normalizedKind = _normalizeBundleKindKey(key);
+      if (normalizedKind != null) {
+        final flattened = Map<String, dynamic>.from(value);
+        flattened['kind'] = normalizedKind;
+        return flattened;
+      }
+    }
+  }
+  return data;
+}
+
+String? _normalizeBundleKindKey(String raw) {
+  final known = <String>{
+    'profile',
+    'media',
+    'post',
+    'reaction',
+    'direct_message',
+    'group_message',
+    'channel_directory',
+    'endorsement',
+    'follow',
+    'mute',
+    'block',
+    'namespace_signature_policy',
+    'list',
+    'group_metadata',
+    'zap',
+    'app_preferences',
+    'deletion',
+    'repost',
+    'poll',
+    'poll_vote',
+    'live_status',
+  };
+
+  final lower = raw.toLowerCase();
+  if (known.contains(lower)) {
+    return lower;
+  }
+
+  final snake = raw
+      .replaceAllMapped(RegExp(r'([a-z0-9])([A-Z])'), (m) => '${m[1]}_${m[2]}')
+      .toLowerCase();
+  if (known.contains(snake)) {
+    return snake;
+  }
+  return null;
 }

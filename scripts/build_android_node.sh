@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CRATE_DIR="$ROOT_DIR/apps/android-node"
 ASSETS_DIR="$CRATE_DIR/src/ui/android/app/src/main/assets"
+JNILIBS_DIR="$CRATE_DIR/src/ui/android/app/src/main/jniLibs"
 
 ABI_LIST=("arm64-v8a" "armeabi-v7a" "x86_64")
 TARGET_LIST=("aarch64-linux-android" "armv7-linux-androideabi" "x86_64-linux-android")
@@ -47,6 +48,7 @@ for target in "${TARGET_LIST[@]}"; do
 done
 
 mkdir -p "$ASSETS_DIR"
+mkdir -p "$JNILIBS_DIR"
 
 for idx in "${!ABI_LIST[@]}"; do
   abi="${ABI_LIST[$idx]}"
@@ -58,7 +60,17 @@ for idx in "${!ABI_LIST[@]}"; do
     echo "Missing output binary for $abi at $out"
     exit 1
   fi
-  dest="$ASSETS_DIR/veil_node_${abi}"
-  cp "$out" "$dest"
-  echo "Wrote $dest"
+  # Legacy asset copy (kept for compatibility with older launchers/tools).
+  asset_dest="$ASSETS_DIR/veil_node_${abi}"
+  cp "$out" "$asset_dest"
+  chmod +x "$asset_dest" || true
+  echo "Wrote $asset_dest"
+
+  # Runtime path used by NodeForegroundService.
+  abi_dir="$JNILIBS_DIR/$abi"
+  mkdir -p "$abi_dir"
+  so_dest="$abi_dir/libveil_node.so"
+  cp "$out" "$so_dest"
+  chmod +x "$so_dest" || true
+  echo "Wrote $so_dest"
 done

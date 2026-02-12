@@ -99,10 +99,22 @@ class _SocialHomeState extends State<SocialHome> {
             showSelectedLabels: false,
             showUnselectedLabels: false,
             items: const [
-              BottomNavigationBarItem(icon: Icon(Icons.home_filled), label: 'Home'),
-              BottomNavigationBarItem(icon: Icon(Icons.search), label: 'Explore'),
-              BottomNavigationBarItem(icon: Icon(Icons.mail_outline), label: 'Inbox'),
-              BottomNavigationBarItem(icon: Icon(Icons.person_outline), label: 'Profile'),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.home_filled),
+                label: 'Home',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.search),
+                label: 'Explore',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.mail_outline),
+                label: 'Inbox',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.person_outline),
+                label: 'Profile',
+              ),
             ],
           ),
         ),
@@ -123,7 +135,10 @@ class _SocialHomeState extends State<SocialHome> {
       onPressed = () {
         showDialog(
           context: context,
-          builder: (context) => NewMessageDialog(controller: _messagingController),
+          builder: (context) => NewMessageDialog(
+            controller: _messagingController,
+            socialController: _controller,
+          ),
         );
       };
     } else {
@@ -175,7 +190,8 @@ class _FeedView extends StatelessWidget {
                 child: EmptyState(
                   icon: Icons.bubble_chart_outlined,
                   title: 'Welcome to the Veil',
-                  message: 'Your personal social node is active and syncing. Follow people or channels to see content!',
+                  message:
+                      'Your personal social node is active and syncing. Follow people or channels to see content!',
                   onAction: () => controller.nodeService.refresh(),
                   actionLabel: 'Check for Updates',
                 ),
@@ -183,7 +199,7 @@ class _FeedView extends StatelessWidget {
             ),
           );
         }
-        
+
         return RefreshIndicator(
           onRefresh: controller.nodeService.refresh,
           child: ListView.builder(
@@ -193,8 +209,7 @@ class _FeedView extends StatelessWidget {
               if (index == 0) {
                 return Column(
                   children: [
-                    if (!state.hasBackedUp)
-                      const _BackupReminder(),
+                    if (!state.hasBackedUp) const _BackupReminder(),
                     LiveStatusBanner(controller: controller),
                   ],
                 );

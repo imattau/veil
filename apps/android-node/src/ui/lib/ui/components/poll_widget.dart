@@ -7,11 +7,7 @@ class PollWidget extends StatelessWidget {
   final NodeEvent event;
   final SocialController controller;
 
-  const PollWidget({
-    super.key,
-    required this.event,
-    required this.controller,
-  });
+  const PollWidget({super.key, required this.event, required this.controller});
 
   @override
   Widget build(BuildContext context) {
@@ -22,9 +18,14 @@ class PollWidget extends StatelessWidget {
     final root = event.objectRoot;
 
     // Get votes for this poll
-    final votes = controller.nodeService.feedEvents.where(
-      (e) => e.isFeedBundle && e.data['kind'] == 'poll_vote' && e.data['poll_root'] == root
-    ).toList();
+    final votes = controller.nodeService.feedEvents
+        .where(
+          (e) =>
+              e.isFeedBundle &&
+              e.data['kind'] == 'poll_vote' &&
+              e.data['poll_root'] == root,
+        )
+        .toList();
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 12),
@@ -43,16 +44,24 @@ class PollWidget extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           ...List.generate(options.length, (index) {
-            final optionVotes = votes.where((v) => v.data['option_index'] == index).length;
+            final optionVotes = votes
+                .where((v) => v.data['option_index'] == index)
+                .length;
             final totalVotes = votes.length;
             final percent = totalVotes == 0 ? 0.0 : optionVotes / totalVotes;
 
             return Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: InkWell(
-                onTap: () {
-                  // TODO: Cast vote
-                },
+                onTap: root == null
+                    ? null
+                    : () async {
+                        await controller.nodeService.publishPollVote(
+                          pollRoot: root,
+                          optionIndex: index,
+                          channelId: event.channelId ?? 'general',
+                        );
+                      },
                 child: Stack(
                   children: [
                     Container(
@@ -79,7 +88,10 @@ class PollWidget extends StatelessWidget {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text(options[index], style: const TextStyle(fontSize: 13)),
+                          Text(
+                            options[index],
+                            style: const TextStyle(fontSize: 13),
+                          ),
                           if (totalVotes > 0)
                             Text(
                               '${(percent * 100).toInt()}%',

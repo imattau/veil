@@ -31,7 +31,10 @@ class _ComposerViewState extends State<ComposerView> {
   }
 
   Future<void> _pickImage() async {
-    final image = await _picker.pickImage(source: ImageSource.gallery, maxWidth: 1024);
+    final image = await _picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1024,
+    );
     if (image != null) {
       final bytes = await image.readAsBytes();
       setState(() => _selectedImage = bytes);
@@ -52,14 +55,39 @@ class _ComposerViewState extends State<ComposerView> {
       await widget.service.publishPost(
         text: text,
         channelId: _selectedChannel,
-        // TODO: Pass mediaRoot to publishPost if implemented in node_service
+        mediaRoots: mediaRoot != null ? [mediaRoot] : const [],
       );
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to publish: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to publish: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isPublishing = false);
+    }
+  }
+
+  Future<void> _handleCreatePoll() async {
+    final result = await showDialog<_PollDraft>(
+      context: context,
+      builder: (context) => const _CreatePollDialog(),
+    );
+    if (result == null) return;
+    setState(() => _isPublishing = true);
+    try {
+      await widget.service.publishPoll(
+        question: result.question,
+        options: result.options,
+        channelId: _selectedChannel,
+      );
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to publish poll: $e')));
       }
     } finally {
       if (mounted) setState(() => _isPublishing = false);
@@ -88,13 +116,21 @@ class _ComposerViewState extends State<ComposerView> {
                     children: [
                       const CircleAvatar(
                         backgroundColor: VeilTheme.surface,
-                        child: Icon(Icons.person, color: VeilTheme.textSecondary),
+                        child: Icon(
+                          Icons.person,
+                          color: VeilTheme.textSecondary,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
-                          border: Border.all(color: VeilTheme.accent.withOpacity(0.5)),
+                          border: Border.all(
+                            color: VeilTheme.accent.withOpacity(0.5),
+                          ),
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Text(
@@ -140,8 +176,12 @@ class _ComposerViewState extends State<ComposerView> {
                           child: CircleAvatar(
                             backgroundColor: Colors.black54,
                             child: IconButton(
-                              icon: const Icon(Icons.close, color: Colors.white),
-                              onPressed: () => setState(() => _selectedImage = null),
+                              icon: const Icon(
+                                Icons.close,
+                                color: Colors.white,
+                              ),
+                              onPressed: () =>
+                                  setState(() => _selectedImage = null),
                             ),
                           ),
                         ),
@@ -159,12 +199,7 @@ class _ComposerViewState extends State<ComposerView> {
 
   Widget _buildBottomActionToolbar() {
     return Container(
-      padding: const EdgeInsets.only(
-        bottom: 12,
-        left: 16,
-        right: 16,
-        top: 12,
-      ),
+      padding: const EdgeInsets.only(bottom: 12, left: 16, right: 16, top: 12),
       decoration: const BoxDecoration(
         color: VeilTheme.surface,
         border: Border(top: BorderSide(color: Colors.white10)),
@@ -176,7 +211,7 @@ class _ComposerViewState extends State<ComposerView> {
             icon: const Icon(Icons.image_outlined, color: VeilTheme.accent),
           ),
           IconButton(
-            onPressed: () {},
+            onPressed: _isPublishing ? null : _handleCreatePoll,
             icon: const Icon(Icons.poll_outlined, color: VeilTheme.accent),
           ),
           const Spacer(),
@@ -192,11 +227,120 @@ class _ComposerViewState extends State<ComposerView> {
               elevation: 0,
             ),
             child: _isPublishing
-                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Text('Post', style: TextStyle(fontWeight: FontWeight.bold)),
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text(
+                    'Post',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _PollDraft {
+  final String question;
+  final List<String> options;
+
+  const _PollDraft({required this.question, required this.options});
+}
+
+class _CreatePollDialog extends StatefulWidget {
+  const _CreatePollDialog();
+
+  @override
+  State<_CreatePollDialog> createState() => _CreatePollDialogState();
+}
+
+class _CreatePollDialogState extends State<_CreatePollDialog> {
+  final TextEditingController _questionController = TextEditingController();
+  final List<TextEditingController> _optionControllers = [
+    TextEditingController(),
+    TextEditingController(),
+  ];
+
+  @override
+  void dispose() {
+    _questionController.dispose();
+    for (final controller in _optionControllers) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Create Poll'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _questionController,
+              decoration: const InputDecoration(labelText: 'Question'),
+            ),
+            const SizedBox(height: 12),
+            ..._optionControllers.asMap().entries.map((entry) {
+              final index = entry.key;
+              final controller = entry.value;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: TextField(
+                  controller: controller,
+                  decoration: InputDecoration(labelText: 'Option ${index + 1}'),
+                ),
+              );
+            }),
+            if (_optionControllers.length < 4)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _optionControllers.add(TextEditingController());
+                    });
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add option'),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () {
+            final question = _questionController.text.trim();
+            final options = _optionControllers
+                .map((controller) => controller.text.trim())
+                .where((text) => text.isNotEmpty)
+                .toList();
+            if (question.isEmpty || options.length < 2) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Provide a question and at least 2 options'),
+                ),
+              );
+              return;
+            }
+            Navigator.pop(
+              context,
+              _PollDraft(question: question, options: options),
+            );
+          },
+          child: const Text('Create'),
+        ),
+      ],
     );
   }
 }

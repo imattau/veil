@@ -27,21 +27,24 @@ class VeilPostCard extends StatelessWidget {
     final pubkey = event.authorPubkey ?? 'unknown';
     final displayName = controller.getDisplayName(pubkey);
     final text = event.isRepost ? event.repostComment : event.postText;
-    final time = event.createdAt != null 
+    final time = event.createdAt != null
         ? DateTime.fromMillisecondsSinceEpoch(event.createdAt! * 1000)
         : null;
     final root = event.objectRoot;
     final targetRoot = event.isRepost ? event.targetRoot : null;
 
     return InkWell(
-      onTap: isDetail ? null : () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => PostDetailView(post: event, controller: controller),
-          ),
-        );
-      },
+      onTap: isDetail
+          ? null
+          : () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) =>
+                      PostDetailView(post: event, controller: controller),
+                ),
+              );
+            },
       child: Card(
         margin: const EdgeInsets.only(bottom: 12),
         child: Padding(
@@ -55,19 +58,22 @@ class VeilPostCard extends StatelessWidget {
                     backgroundColor: VeilTheme.accent.withOpacity(0.2),
                     backgroundImage: _getAvatarImage(pubkey),
                     child: _getAvatarImage(pubkey) == null
-                      ? Text(displayName.substring(0, 1).toUpperCase())
-                      : null,
+                        ? Text(displayName.substring(0, 1).toUpperCase())
+                        : null,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(displayName, style: Theme.of(context).textTheme.titleMedium),
                         Text(
-                          pubkey.length >= 12 
-                            ? '@${pubkey.substring(0, 12)}...'
-                            : '@$pubkey',
+                          displayName,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        Text(
+                          pubkey.length >= 12
+                              ? '@${pubkey.substring(0, 12)}...'
+                              : '@$pubkey',
                           style: Theme.of(context).textTheme.labelSmall,
                         ),
                       ],
@@ -81,9 +87,15 @@ class VeilPostCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              if (text != null && text.isNotEmpty)
-                RichTextView(text: text),
-              
+              if (text != null && text.isNotEmpty) RichTextView(text: text),
+              if (event.mediaRoots.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _PostMediaGallery(
+                  mediaRoots: event.mediaRoots,
+                  controller: controller,
+                ),
+              ],
+
               if (targetRoot != null) ...[
                 const SizedBox(height: 12),
                 NestedPostCard(targetRoot: targetRoot, controller: controller),
@@ -94,8 +106,10 @@ class VeilPostCard extends StatelessWidget {
                 ReactionTray(objectRoot: root, controller: controller),
                 const SizedBox(height: 16),
                 _PostFooter(
+                  postEvent: event,
                   objectRoot: root,
                   controller: controller,
+                  isDetail: isDetail,
                 ),
               ],
             ],
@@ -122,11 +136,71 @@ class VeilPostCard extends StatelessWidget {
   }
 }
 
-class _PostFooter extends StatelessWidget {
-  final String objectRoot;
+class _PostMediaGallery extends StatelessWidget {
+  final List<String> mediaRoots;
   final SocialController controller;
 
-  const _PostFooter({required this.objectRoot, required this.controller});
+  const _PostMediaGallery({required this.mediaRoots, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: mediaRoots.map((root) {
+        final bytes = controller.imageCache[root];
+        return Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: Colors.white.withOpacity(0.03),
+          ),
+          child: bytes != null
+              ? Image.memory(
+                  bytes,
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                  height: 220,
+                  errorBuilder: (_, __, ___) => _mediaUnavailable(),
+                )
+              : SizedBox(
+                  height: 220,
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: VeilTheme.accent.withOpacity(0.8),
+                    ),
+                  ),
+                ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _mediaUnavailable() {
+    return const SizedBox(
+      height: 220,
+      child: Center(
+        child: Text(
+          'Media unavailable',
+          style: TextStyle(color: VeilTheme.textSecondary),
+        ),
+      ),
+    );
+  }
+}
+
+class _PostFooter extends StatelessWidget {
+  final NodeEvent postEvent;
+  final String objectRoot;
+  final SocialController controller;
+  final bool isDetail;
+
+  const _PostFooter({
+    required this.postEvent,
+    required this.objectRoot,
+    required this.controller,
+    required this.isDetail,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -136,11 +210,9 @@ class _PostFooter extends StatelessWidget {
     final zapTotal = controller.getZapTotal(objectRoot);
     final liked = controller.hasLiked(objectRoot);
 
-    final authorPubkey = controller.nodeService.feedEvents
-        .firstWhere((e) => e.objectRoot == objectRoot, orElse: () => const NodeEvent(seq: 0, event: '', data: {}))
-        .authorPubkey;
-    final lnAddress = authorPubkey != null 
-        ? controller.nodeService.profiles[authorPubkey]?.lightningAddress 
+    final authorPubkey = postEvent.authorPubkey;
+    final lnAddress = authorPubkey != null
+        ? controller.nodeService.profiles[authorPubkey]?.lightningAddress
         : null;
 
     return Row(
@@ -151,7 +223,11 @@ class _PostFooter extends StatelessWidget {
           color: liked ? Colors.red : null,
           onTap: () {
             HapticFeedback.lightImpact();
-            // TODO: Implement like
+            controller.reactToPost(
+              objectRoot,
+              action: 'like',
+              channelId: postEvent.channelId,
+            );
           },
         ),
         const SizedBox(width: 24),
@@ -160,7 +236,15 @@ class _PostFooter extends StatelessWidget {
           count: comments.length,
           onTap: () {
             HapticFeedback.lightImpact();
-            // Navigation handled by the card tap
+            if (!isDetail) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) =>
+                      PostDetailView(post: postEvent, controller: controller),
+                ),
+              );
+            }
           },
         ),
         const SizedBox(width: 24),
@@ -169,7 +253,7 @@ class _PostFooter extends StatelessWidget {
           count: reposts.length,
           onTap: () {
             HapticFeedback.lightImpact();
-            // TODO: Implement boost
+            controller.repost(objectRoot, channelId: postEvent.channelId);
           },
         ),
         const SizedBox(width: 24),
@@ -191,7 +275,9 @@ class _PostFooter extends StatelessWidget {
               );
             } else {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Author has no Lightning Address set')),
+                const SnackBar(
+                  content: Text('Author has no Lightning Address set'),
+                ),
               );
             }
           },
