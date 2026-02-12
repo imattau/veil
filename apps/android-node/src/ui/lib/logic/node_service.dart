@@ -247,6 +247,10 @@ class NodeService extends ChangeNotifier {
     if (_state.busy) return;
     _setState(_state.copyWith(busy: true));
     try {
+      final encodedMediaRoots = mediaRoots
+          .map(_hexRootToBytes)
+          .whereType<List<int>>()
+          .toList();
       final bundle = {
         'meta': {
           'version': 1,
@@ -255,8 +259,8 @@ class NodeService extends ChangeNotifier {
         'channel_id': channelId,
         'author_pubkey_hex': _state.identityHex ?? '',
         'text': text,
-        'media_roots': mediaRoots,
-        'reply_to_root': replyToRoot,
+        'media_roots': encodedMediaRoots,
+        'reply_to_root': _hexRootToBytes(replyToRoot),
       };
 
       final response = await _client
@@ -327,6 +331,11 @@ class NodeService extends ChangeNotifier {
     int namespace = 32,
   }) async {
     if (_state.busy) return;
+    final pollRootBytes = _hexRootToBytes(pollRoot);
+    if (pollRootBytes == null) {
+      _setState(_state.copyWith(lastError: 'Poll vote failed: invalid poll root'));
+      return;
+    }
     _setState(_state.copyWith(busy: true));
     try {
       await _refreshServiceStatus();
@@ -337,7 +346,7 @@ class NodeService extends ChangeNotifier {
         },
         'channel_id': channelId,
         'author_pubkey_hex': _state.identityHex ?? '',
-        'poll_root': pollRoot,
+        'poll_root': pollRootBytes,
         'option_index': optionIndex,
       };
       final response = await _client
@@ -436,6 +445,11 @@ class NodeService extends ChangeNotifier {
     int namespace = 32,
   }) async {
     if (_state.busy) return;
+    final targetRootBytes = _hexRootToBytes(targetRoot);
+    if (targetRootBytes == null) {
+      _setState(_state.copyWith(lastError: 'Reaction failed: invalid target root'));
+      return;
+    }
     _setState(_state.copyWith(busy: true));
     try {
       await _refreshServiceStatus();
@@ -446,7 +460,7 @@ class NodeService extends ChangeNotifier {
         },
         'channel_id': channelId,
         'author_pubkey_hex': _state.identityHex ?? '',
-        'target_root': targetRoot,
+        'target_root': targetRootBytes,
         'action_code': actionCode,
       };
       final response = await _client
@@ -475,6 +489,11 @@ class NodeService extends ChangeNotifier {
     int namespace = 32,
   }) async {
     if (_state.busy) return;
+    final targetRootBytes = _hexRootToBytes(targetRoot);
+    if (targetRootBytes == null) {
+      _setState(_state.copyWith(lastError: 'Boost failed: invalid target root'));
+      return;
+    }
     _setState(_state.copyWith(busy: true));
     try {
       await _refreshServiceStatus();
@@ -485,7 +504,7 @@ class NodeService extends ChangeNotifier {
         },
         'channel_id': channelId,
         'author_pubkey_hex': _state.identityHex ?? '',
-        'target_root': targetRoot,
+        'target_root': targetRootBytes,
         'comment': comment,
       };
       final response = await _client
@@ -515,6 +534,11 @@ class NodeService extends ChangeNotifier {
     String? message,
   }) async {
     if (_state.busy) return;
+    final targetRootBytes = _hexRootToBytes(targetRoot);
+    if (targetRootBytes == null) {
+      _setState(_state.copyWith(lastError: 'Zap failed: invalid target root'));
+      return;
+    }
     _setState(_state.copyWith(busy: true));
     try {
       await _refreshServiceStatus();
@@ -527,7 +551,7 @@ class NodeService extends ChangeNotifier {
         'author_pubkey_hex': _state.identityHex ?? '',
         'amount': amount,
         'unit': 'sats',
-        'target_root': targetRoot,
+        'target_root': targetRootBytes,
         'receipt_proof': null,
         'message': message,
       };
@@ -570,9 +594,8 @@ class NodeService extends ChangeNotifier {
         'channel_id': channelId,
         'author_pubkey_hex': _state.identityHex ?? '',
         'recipient_pubkey_hex': recipientPubkey,
-        'ciphertext_root':
-            'enc_${DateTime.now().millisecondsSinceEpoch}', // Placeholder for actual encryption root
-        'reply_to_root': replyToRoot,
+        'ciphertext_root': _pseudoRootFromText(text),
+        'reply_to_root': _hexRootToBytes(replyToRoot),
       };
 
       final response = await _client
@@ -614,9 +637,8 @@ class NodeService extends ChangeNotifier {
         'channel_id': channelId,
         'author_pubkey_hex': _state.identityHex ?? '',
         'group_id': groupId,
-        // Placeholder until encrypted message objects are wired.
-        'ciphertext_root': 'grp_${DateTime.now().millisecondsSinceEpoch}',
-        'reply_to_root': replyToRoot,
+        'ciphertext_root': _pseudoRootFromText(text),
+        'reply_to_root': _hexRootToBytes(replyToRoot),
       };
 
       final response = await _client
@@ -661,7 +683,7 @@ class NodeService extends ChangeNotifier {
         'author_pubkey_hex': _state.identityHex ?? '',
         'display_name': displayName,
         'bio': bio,
-        'avatar_media_root': avatarMediaRoot,
+        'avatar_media_root': _hexRootToBytes(avatarMediaRoot),
         'lightning_address': lightningAddress,
       };
 
@@ -1006,6 +1028,32 @@ class NodeService extends ChangeNotifier {
       }
     }
     notifyListeners();
+  }
+
+  List<int>? _hexRootToBytes(String? root) {
+    if (root == null) return null;
+    final value = root.trim();
+    if (value.length != 64) return null;
+    final bytes = <int>[];
+    for (var i = 0; i < value.length; i += 2) {
+      final part = value.substring(i, i + 2);
+      final parsed = int.tryParse(part, radix: 16);
+      if (parsed == null) {
+        return null;
+      }
+      bytes.add(parsed);
+    }
+    return bytes;
+  }
+
+  List<int> _pseudoRootFromText(String text) {
+    final out = List<int>.filled(32, 0);
+    final bytes = utf8.encode(text);
+    for (var i = 0; i < bytes.length; i++) {
+      final idx = i % 32;
+      out[idx] = (out[idx] + bytes[i] + i) & 0xFF;
+    }
+    return out;
   }
 
   void clearError() {

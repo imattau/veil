@@ -50,6 +50,11 @@ class _ComposerViewState extends State<ComposerView> {
       String? mediaRoot;
       if (_selectedImage != null) {
         mediaRoot = await widget.service.uploadMedia(_selectedImage!);
+        if (mediaRoot == null) {
+          throw Exception(
+            widget.service.state.lastError ?? 'Image upload failed',
+          );
+        }
       }
 
       await widget.service.publishPost(

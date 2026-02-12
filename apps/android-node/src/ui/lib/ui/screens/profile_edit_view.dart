@@ -27,14 +27,24 @@ class _ProfileEditViewState extends State<ProfileEditView> {
     super.initState();
     // Pre-fill if current profile exists
     final profile = widget.service.profiles[widget.service.state.identityHex];
-    _nameController = TextEditingController(text: profile?.data['display_name'] as String?);
-    _bioController = TextEditingController(text: profile?.data['bio'] as String?);
-    _lnController = TextEditingController(text: profile?.data['lightning_address'] as String?);
+    _nameController = TextEditingController(
+      text: profile?.data['display_name'] as String?,
+    );
+    _bioController = TextEditingController(
+      text: profile?.data['bio'] as String?,
+    );
+    _lnController = TextEditingController(
+      text: profile?.data['lightning_address'] as String?,
+    );
     _avatarMediaRoot = profile?.data['avatar_media_root'] as String?;
   }
 
   Future<void> _pickImage() async {
-    final image = await _picker.pickImage(source: ImageSource.gallery, maxWidth: 512, maxHeight: 512);
+    final image = await _picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 512,
+      maxHeight: 512,
+    );
     if (image != null) {
       final bytes = await image.readAsBytes();
       setState(() {
@@ -54,9 +64,12 @@ class _ProfileEditViewState extends State<ProfileEditView> {
       String? finalAvatarRoot = _avatarMediaRoot;
       if (_selectedImageBytes != null) {
         final root = await widget.service.uploadMedia(_selectedImageBytes!);
-        if (root != null) {
-          finalAvatarRoot = root;
+        if (root == null) {
+          throw Exception(
+            widget.service.state.lastError ?? 'Avatar upload failed',
+          );
         }
+        finalAvatarRoot = root;
       }
 
       await widget.service.publishProfile(
@@ -68,9 +81,9 @@ class _ProfileEditViewState extends State<ProfileEditView> {
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save profile: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to save profile: $e')));
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -85,9 +98,19 @@ class _ProfileEditViewState extends State<ProfileEditView> {
         actions: [
           TextButton(
             onPressed: _isSaving ? null : _handleSave,
-            child: _isSaving 
-              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-              : const Text('Save', style: TextStyle(color: VeilTheme.accent, fontWeight: FontWeight.bold)),
+            child: _isSaving
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text(
+                    'Save',
+                    style: TextStyle(
+                      color: VeilTheme.accent,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
           ),
         ],
       ),
@@ -101,12 +124,17 @@ class _ProfileEditViewState extends State<ProfileEditView> {
                   CircleAvatar(
                     radius: 50,
                     backgroundColor: VeilTheme.surface,
-                    backgroundImage: _selectedImageBytes != null 
-                      ? MemoryImage(_selectedImageBytes!) 
-                      : null,
-                    child: _selectedImageBytes == null && _avatarMediaRoot == null 
-                      ? const Icon(Icons.person, size: 50, color: VeilTheme.accent)
-                      : null,
+                    backgroundImage: _selectedImageBytes != null
+                        ? MemoryImage(_selectedImageBytes!)
+                        : null,
+                    child:
+                        _selectedImageBytes == null && _avatarMediaRoot == null
+                        ? const Icon(
+                            Icons.person,
+                            size: 50,
+                            color: VeilTheme.accent,
+                          )
+                        : null,
                   ),
                   Positioned(
                     right: 0,
@@ -115,7 +143,11 @@ class _ProfileEditViewState extends State<ProfileEditView> {
                       radius: 18,
                       backgroundColor: VeilTheme.accent,
                       child: IconButton(
-                        icon: const Icon(Icons.camera_alt, size: 18, color: Colors.black),
+                        icon: const Icon(
+                          Icons.camera_alt,
+                          size: 18,
+                          color: Colors.black,
+                        ),
                         onPressed: _pickImage,
                       ),
                     ),
@@ -129,7 +161,9 @@ class _ProfileEditViewState extends State<ProfileEditView> {
               decoration: const InputDecoration(
                 labelText: 'Display Name',
                 labelStyle: TextStyle(color: VeilTheme.textSecondary),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white10),
+                ),
               ),
             ),
             const SizedBox(height: 24),
@@ -139,7 +173,9 @@ class _ProfileEditViewState extends State<ProfileEditView> {
               decoration: const InputDecoration(
                 labelText: 'Bio',
                 labelStyle: TextStyle(color: VeilTheme.textSecondary),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white10),
+                ),
               ),
             ),
             const SizedBox(height: 24),
@@ -149,7 +185,9 @@ class _ProfileEditViewState extends State<ProfileEditView> {
                 labelText: 'Lightning Address (Optional)',
                 hintText: 'user@domain.com',
                 labelStyle: TextStyle(color: VeilTheme.textSecondary),
-                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+                enabledBorder: UnderlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white10),
+                ),
               ),
             ),
           ],

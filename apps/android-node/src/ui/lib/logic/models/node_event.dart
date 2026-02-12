@@ -166,6 +166,7 @@ Map<String, dynamic> _normalizeRootFields(Map<String, dynamic> data) {
     'reply_to_root',
     'poll_root',
     'ciphertext_root',
+    'avatar_media_root',
   ];
   for (final key in singleRootKeys) {
     final value = _toHexRoot(normalized[key]);

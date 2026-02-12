@@ -10,57 +10,75 @@ class RichTextView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final effectiveStyle = style ?? Theme.of(context).textTheme.bodyMedium;
     if (!text.contains('#') && !text.contains('@') && !text.contains('http')) {
-      return Text(text, style: style ?? Theme.of(context).textTheme.bodyMedium);
+      return Text(text, style: effectiveStyle, softWrap: true);
     }
 
+    final tokenPattern = RegExp(
+      r'(https?:\/\/[^\s]+|#[A-Za-z0-9_]+|@[A-Za-z0-9_]+)',
+    );
     final List<InlineSpan> spans = [];
-    final words = text.split(RegExp(r'(\s+)'));
-
-    for (final word in words) {
-      if (word.startsWith('#') && word.length > 1) {
-        spans.add(TextSpan(
-          text: word,
-          style: const TextStyle(color: VeilTheme.accent, fontWeight: FontWeight.bold),
-          recognizer: TapGestureRecognizer()
-            ..onTap = () {
-              debugPrint('Tapped hashtag: $word');
-              // TODO: Navigate to channel/search
-            },
-        ));
-      } else if (word.startsWith('@') && word.length > 1) {
-        spans.add(TextSpan(
-          text: word,
-          style: const TextStyle(color: VeilTheme.accent),
-          recognizer: TapGestureRecognizer()
-            ..onTap = () {
-              debugPrint('Tapped mention: $word');
-              // TODO: Navigate to profile
-            },
-        ));
-      } else if (Uri.tryParse(word)?.hasAbsolutePath ?? false) {
-        spans.add(TextSpan(
-          text: word,
-          style: const TextStyle(
-            color: VeilTheme.accent,
-            decoration: TextDecoration.underline,
+    var cursor = 0;
+    for (final match in tokenPattern.allMatches(text)) {
+      if (match.start > cursor) {
+        spans.add(
+          TextSpan(
+            text: text.substring(cursor, match.start),
+            style: effectiveStyle,
           ),
-          recognizer: TapGestureRecognizer()
-            ..onTap = () {
-              debugPrint('Tapped link: $word');
-              // TODO: Launch URL
-            },
-        ));
-      } else {
-        spans.add(TextSpan(text: word, style: style));
+        );
       }
+      final token = match.group(0)!;
+      if (token.startsWith('#')) {
+        spans.add(
+          TextSpan(
+            text: token,
+            style: const TextStyle(
+              color: VeilTheme.accent,
+              fontWeight: FontWeight.bold,
+            ),
+            recognizer: TapGestureRecognizer()
+              ..onTap = () {
+                debugPrint('Tapped hashtag: $token');
+              },
+          ),
+        );
+      } else if (token.startsWith('@')) {
+        spans.add(
+          TextSpan(
+            text: token,
+            style: const TextStyle(color: VeilTheme.accent),
+            recognizer: TapGestureRecognizer()
+              ..onTap = () {
+                debugPrint('Tapped mention: $token');
+              },
+          ),
+        );
+      } else {
+        spans.add(
+          TextSpan(
+            text: token,
+            style: const TextStyle(
+              color: VeilTheme.accent,
+              decoration: TextDecoration.underline,
+            ),
+            recognizer: TapGestureRecognizer()
+              ..onTap = () {
+                debugPrint('Tapped link: $token');
+              },
+          ),
+        );
+      }
+      cursor = match.end;
+    }
+    if (cursor < text.length) {
+      spans.add(TextSpan(text: text.substring(cursor), style: effectiveStyle));
     }
 
     return Text.rich(
-      TextSpan(
-        children: spans,
-        style: style ?? Theme.of(context).textTheme.bodyMedium,
-      ),
+      TextSpan(children: spans, style: effectiveStyle),
+      softWrap: true,
     );
   }
 }
