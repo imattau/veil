@@ -361,6 +361,74 @@ class NodeService extends ChangeNotifier {
     }
   }
 
+  Future<bool> subscribeTag(String tag) async {
+    final normalized = tag.trim().replaceFirst(RegExp(r'^#'), '');
+    if (normalized.isEmpty) {
+      _setState(_state.copyWith(lastError: 'Channel is empty'));
+      return false;
+    }
+    if (_state.busy) return false;
+    _setState(_state.copyWith(busy: true));
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/subscribe'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'tag': normalized}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(
+            lastError: 'Subscribe failed: ${response.statusCode}',
+          ),
+        );
+        return false;
+      }
+      await refresh();
+      return true;
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Subscribe failed: $err'));
+      return false;
+    } finally {
+      _setState(_state.copyWith(busy: false));
+    }
+  }
+
+  Future<bool> unsubscribeTag(String tag) async {
+    final normalized = tag.trim().replaceFirst(RegExp(r'^#'), '');
+    if (normalized.isEmpty) {
+      _setState(_state.copyWith(lastError: 'Channel is empty'));
+      return false;
+    }
+    if (_state.busy) return false;
+    _setState(_state.copyWith(busy: true));
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/unsubscribe'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'tag': normalized}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(
+            lastError: 'Unsubscribe failed: ${response.statusCode}',
+          ),
+        );
+        return false;
+      }
+      await refresh();
+      return true;
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Unsubscribe failed: $err'));
+      return false;
+    } finally {
+      _setState(_state.copyWith(busy: false));
+    }
+  }
+
   Future<void> publishReaction({
     required String targetRoot,
     String actionCode = 'like',

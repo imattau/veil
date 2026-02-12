@@ -86,7 +86,7 @@ class _SocialHomeState extends State<SocialHome> {
         index: _currentIndex,
         children: [
           _FeedView(controller: _controller),
-          const ExploreView(),
+          ExploreView(service: _service),
           InboxView(
             controller: _messagingController,
             socialController: _controller,
@@ -149,8 +149,12 @@ class _SocialHomeState extends State<SocialHome> {
           ),
         );
       };
+    } else if (_currentIndex == 1) {
+      // Explore tab
+      icon = Icons.tag;
+      onPressed = _showAddChannelDialog;
     } else {
-      // Home/Explore tab
+      // Home tab
       onPressed = () {
         Navigator.push(
           context,
@@ -166,6 +170,49 @@ class _SocialHomeState extends State<SocialHome> {
       onPressed: onPressed,
       backgroundColor: VeilTheme.accent,
       child: Icon(icon, color: Colors.black),
+    );
+  }
+
+  Future<void> _showAddChannelDialog() async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Channel'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Channel name',
+            hintText: 'general',
+            prefixText: '#',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+
+    final channel = result?.replaceFirst(RegExp(r'^#'), '').trim() ?? '';
+    if (channel.isEmpty || !mounted) return;
+    final ok = await _service.subscribeTag(channel);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Joined #$channel'
+              : (_service.state.lastError ?? 'Failed to add channel'),
+        ),
+      ),
     );
   }
 }

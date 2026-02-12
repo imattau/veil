@@ -1,76 +1,91 @@
 import 'package:flutter/material.dart';
+
+import '../../logic/node_service.dart';
+import '../components/empty_state.dart';
 import '../theme/veil_theme.dart';
 
 class ExploreView extends StatelessWidget {
-  const ExploreView({super.key});
+  final NodeService service;
+
+  const ExploreView({super.key, required this.service});
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const Text(
-          'Channels',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 16),
-        _ChannelGrid(),
-      ],
-    );
-  }
-}
+    return ListenableBuilder(
+      listenable: service,
+      builder: (context, _) {
+        final subscribed = service.state.subscriptions.toSet();
+        final discovered = service.feedEvents
+            .map((event) => event.channelId)
+            .whereType<String>()
+            .map((channel) => channel.trim())
+            .where((channel) => channel.isNotEmpty)
+            .toSet();
 
-class _ChannelGrid extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final channels = [
-      {'name': 'general', 'about': 'The main town square of the Veil', 'count': '1.2k'},
-      {'name': 'dev', 'about': 'Protocol development and node operations', 'count': '450'},
-      {'name': 'news', 'about': 'Global headlines synced via RSS relays', 'count': '890'},
-      {'name': 'memes', 'about': 'Decentralized comedy', 'count': '2.1k'},
-    ];
+        final channels = <String>{...subscribed, ...discovered}.toList()
+          ..sort();
 
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        childAspectRatio: 1.2,
-      ),
-      itemCount: channels.length,
-      itemBuilder: (context, index) {
-        final channel = channels[index];
-        return Card(
-          child: Padding(
+        if (channels.isEmpty) {
+          return const EmptyState(
+            icon: Icons.tag,
+            title: 'No channels yet',
+            message:
+                'Tap + to add a channel. Channels you post in or discover will show here.',
+          );
+        }
+
+        return RefreshIndicator(
+          onRefresh: service.refresh,
+          child: ListView(
             padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  '#${channel['name']}',
-                  style: const TextStyle(
-                    color: VeilTheme.accent,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
+            children: [
+              const Text(
+                'Channels',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              ...channels.map((channel) {
+                final isSubscribed = subscribed.contains(channel);
+                final postCount = service.feedEvents
+                    .where((event) => event.channelId == channel)
+                    .length;
+
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  child: ListTile(
+                    title: Text(
+                      '#$channel',
+                      style: const TextStyle(
+                        color: VeilTheme.accent,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    subtitle: Text(
+                      '$postCount recent events',
+                      style: const TextStyle(color: VeilTheme.textSecondary),
+                    ),
+                    trailing: TextButton(
+                      onPressed: () async {
+                        final ok = isSubscribed
+                            ? await service.unsubscribeTag(channel)
+                            : await service.subscribeTag(channel);
+                        if (!context.mounted || !ok) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              isSubscribed
+                                  ? 'Unsubscribed from #$channel'
+                                  : 'Subscribed to #$channel',
+                            ),
+                          ),
+                        );
+                      },
+                      child: Text(isSubscribed ? 'Joined' : 'Join'),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  channel['about']!,
-                  style: Theme.of(context).textTheme.labelSmall,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const Spacer(),
-                Text(
-                  '${channel['count']} members',
-                  style: const TextStyle(fontSize: 10, color: VeilTheme.textSecondary),
-                ),
-              ],
-            ),
+                );
+              }),
+            ],
           ),
         );
       },
