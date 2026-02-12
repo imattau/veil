@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::Hash;
 use std::io::{Read, Write};
@@ -7,14 +7,17 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod nostr_bridge;
 mod settings_db;
 
+use bech32::Hrp;
 use nostr_bridge::{start_nostr_bridge, NostrBridgeConfig};
 use rand::RngCore;
 use rusqlite::{params, Connection};
+use serde::Deserialize;
+use serde_json::json;
 use settings_db::SettingsStore;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::flag;
@@ -594,6 +597,22 @@ fn parse_fallback_peer_strings(values: &[String]) -> Vec<FallbackPeer> {
         .collect()
 }
 
+fn fallback_peer_supported(
+    peer: &FallbackPeer,
+    ws_enabled: bool,
+    ws_server_enabled: bool,
+    tor_enabled: bool,
+    #[cfg(feature = "ble")] ble_enabled: bool,
+) -> bool {
+    match peer {
+        FallbackPeer::WebSocket(_) => ws_enabled,
+        FallbackPeer::WebSocketServer(_) => ws_server_enabled,
+        FallbackPeer::Tor(_) => tor_enabled,
+        #[cfg(feature = "ble")]
+        FallbackPeer::Ble(_) => ble_enabled,
+    }
+}
+
 fn encode_fallback_peers(peers: &[FallbackPeer]) -> Vec<String> {
     peers.iter().map(|peer| peer.to_string()).collect()
 }
@@ -662,6 +681,299 @@ struct MetricsState {
     last_fallback_outbound_err: AtomicU64,
     last_fast_inbound: AtomicU64,
     last_fallback_inbound: AtomicU64,
+    nostr_bridge_events_total: AtomicU64,
+    nostr_bridge_payload_bytes_total: AtomicU64,
+    nostr_bridge_enabled: AtomicU64,
+    nostr_bridge_relays_configured: AtomicU64,
+}
+
+#[derive(Debug)]
+struct AdminAuthState {
+    server_pubkey: [u8; 32],
+    server_pubkey_hex: String,
+    session_ttl_secs: u64,
+    session_db_path: PathBuf,
+    settings_db_path: PathBuf,
+    sessions: Mutex<HashMap<String, u64>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminLoginRequest {
+    secret: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdminSettingUpsertRequest {
+    key: String,
+    value: String,
+}
+
+impl AdminAuthState {
+    fn bootstrap_session_db(path: &Path) {
+        if let Err(err) = ensure_parent(path) {
+            eprintln!(
+                "admin auth: failed to create session db parent {}: {err}",
+                path.display()
+            );
+            return;
+        }
+        match Connection::open(path) {
+            Ok(conn) => {
+                if let Err(err) = conn.execute(
+                    "CREATE TABLE IF NOT EXISTS admin_sessions (
+                        token TEXT PRIMARY KEY,
+                        expires_at INTEGER NOT NULL
+                    )",
+                    params![],
+                ) {
+                    eprintln!(
+                        "admin auth: failed to initialize session table {}: {err}",
+                        path.display()
+                    );
+                    return;
+                }
+                let now = now_unix_secs() as i64;
+                let _ = conn.execute(
+                    "DELETE FROM admin_sessions WHERE expires_at <= ?1",
+                    params![now],
+                );
+            }
+            Err(err) => {
+                eprintln!(
+                    "admin auth: failed to open session db {}: {err}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    fn load_sessions_from_db(path: &Path) -> HashMap<String, u64> {
+        let mut out = HashMap::new();
+        let Ok(conn) = Connection::open(path) else {
+            return out;
+        };
+        let now = now_unix_secs() as i64;
+        let _ = conn.execute(
+            "DELETE FROM admin_sessions WHERE expires_at <= ?1",
+            params![now],
+        );
+        let Ok(mut stmt) = conn.prepare("SELECT token, expires_at FROM admin_sessions") else {
+            return out;
+        };
+        let rows = stmt.query_map(params![], |row| {
+            let token: String = row.get(0)?;
+            let expires_at: i64 = row.get(1)?;
+            Ok((token, expires_at))
+        });
+        if let Ok(rows) = rows {
+            for (token, expires_at) in rows.flatten() {
+                if expires_at > 0 {
+                    out.insert(token, expires_at as u64);
+                }
+            }
+        }
+        out
+    }
+
+    fn persist_session_insert(&self, token: &str, expires: u64) {
+        if let Ok(conn) = Connection::open(&self.session_db_path) {
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO admin_sessions (token, expires_at) VALUES (?1, ?2)",
+                params![token, expires as i64],
+            );
+        }
+    }
+
+    fn persist_session_remove(&self, token: &str) {
+        if let Ok(conn) = Connection::open(&self.session_db_path) {
+            let _ = conn.execute(
+                "DELETE FROM admin_sessions WHERE token = ?1",
+                params![token],
+            );
+        }
+    }
+
+    fn persist_expired_prune(&self, now: u64) {
+        if let Ok(conn) = Connection::open(&self.session_db_path) {
+            let _ = conn.execute(
+                "DELETE FROM admin_sessions WHERE expires_at <= ?1",
+                params![now as i64],
+            );
+        }
+    }
+
+    fn add_session(&self, token: String, expires: u64) {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(token.clone(), expires);
+        self.persist_session_insert(&token, expires);
+    }
+
+    fn revoke_session(&self, token: &str) -> bool {
+        let removed = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(token)
+            .is_some();
+        self.persist_session_remove(token);
+        removed
+    }
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn decode_hex_exact<const N: usize>(value: &str) -> Option<[u8; N]> {
+    if value.len() != N * 2 {
+        return None;
+    }
+    let mut out = [0_u8; N];
+    for (idx, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let s = std::str::from_utf8(chunk).ok()?;
+        out[idx] = u8::from_str_radix(s, 16).ok()?;
+    }
+    Some(out)
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn decode_nostr_secret_input(value: &str) -> Option<[u8; 32]> {
+    let trimmed = value.trim();
+    if let Some(key) = decode_hex_exact::<32>(trimmed) {
+        return Some(key);
+    }
+    let hrp = Hrp::parse("nsec").ok()?;
+    let (decoded_hrp, data) = bech32::decode(trimmed).ok()?;
+    if decoded_hrp != hrp {
+        return None;
+    }
+    if data.len() != 32 {
+        return None;
+    }
+    let mut out = [0_u8; 32];
+    out.copy_from_slice(&data);
+    Some(out)
+}
+
+fn read_http_request(
+    stream: &mut std::net::TcpStream,
+) -> Option<(String, String, HashMap<String, String>, Vec<u8>)> {
+    let mut buf = Vec::new();
+    let mut tmp = [0_u8; 2048];
+    let mut header_end: Option<usize> = None;
+    let mut expected_body_len = 0usize;
+    loop {
+        let read = stream.read(&mut tmp).ok()?;
+        if read == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..read]);
+        if header_end.is_none() {
+            if let Some(idx) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                header_end = Some(idx + 4);
+                let header_text = String::from_utf8_lossy(&buf[..idx + 4]);
+                for line in header_text.lines().skip(1) {
+                    let mut parts = line.splitn(2, ':');
+                    let key = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+                    let value = parts.next().unwrap_or("").trim();
+                    if key == "content-length" {
+                        expected_body_len = value.parse::<usize>().unwrap_or(0).min(16 * 1024);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(h_end) = header_end {
+            let body_len = buf.len().saturating_sub(h_end);
+            if body_len >= expected_body_len {
+                break;
+            }
+        }
+        if buf.len() > 64 * 1024 {
+            return None;
+        }
+    }
+
+    let header_end = header_end?;
+    let header = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let mut lines = header.lines();
+    let request_line = lines.next()?.to_string();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next()?.to_string();
+    let path = parts.next()?.to_string();
+    let mut headers = HashMap::new();
+    for line in lines {
+        let mut fields = line.splitn(2, ':');
+        let key = fields.next().unwrap_or("").trim().to_ascii_lowercase();
+        let value = fields.next().unwrap_or("").trim().to_string();
+        if !key.is_empty() {
+            headers.insert(key, value);
+        }
+    }
+    let body = buf[header_end..].to_vec();
+    Some((method, path, headers, body))
+}
+
+fn bearer_token(headers: &HashMap<String, String>) -> Option<&str> {
+    let auth = headers.get("authorization")?;
+    let token = auth.strip_prefix("Bearer ")?;
+    if token.is_empty() {
+        return None;
+    }
+    Some(token)
+}
+
+fn query_param(path: &str, target_key: &str) -> Option<String> {
+    let query = path.split('?').nth(1)?;
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next().unwrap_or("");
+        let value = parts.next().unwrap_or("");
+        if key == target_key && !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn is_admin_authenticated(headers: &HashMap<String, String>, admin: &AdminAuthState) -> bool {
+    let Some(token) = bearer_token(headers) else {
+        return false;
+    };
+    let now = now_unix_secs();
+    let mut sessions = admin.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    let expired_tokens = sessions
+        .iter()
+        .filter_map(|(token, expires)| {
+            if *expires <= now {
+                Some(token.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    sessions.retain(|_, expires| *expires > now);
+    drop(sessions);
+    if !expired_tokens.is_empty() {
+        for token in expired_tokens {
+            admin.persist_session_remove(&token);
+        }
+        admin.persist_expired_prune(now);
+    }
+    let sessions = admin.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    sessions.get(token).is_some_and(|expires| *expires > now)
 }
 
 fn start_health_server(
@@ -669,6 +981,7 @@ fn start_health_server(
     port: u16,
     metrics: Arc<MetricsState>,
     peer_snapshot: Arc<Mutex<Vec<String>>>,
+    admin_auth: Arc<AdminAuthState>,
 ) {
     if port == 0 {
         return;
@@ -682,17 +995,29 @@ fn start_health_server(
             }
         };
         for mut stream in listener.incoming().flatten() {
-            let mut buf = [0_u8; 1024];
-            let _ = stream.read(&mut buf);
-            let req = String::from_utf8_lossy(&buf);
-            let ok = req.starts_with("GET /health") || req.starts_with("GET /healthz");
-            let is_metrics = req.starts_with("GET /metrics");
-            let is_peers = req.starts_with("GET /peers");
-            let (status, body) = if ok {
-                ("200 OK", "ok".to_string())
-            } else if is_metrics {
+            let Some((method, path, headers, body_bytes)) = read_http_request(&mut stream) else {
+                continue;
+            };
+            let path_only = path.split('?').next().unwrap_or(path.as_str());
+            let is_health = method == "GET" && (path_only == "/health" || path_only == "/healthz");
+            let is_metrics = method == "GET" && path_only == "/metrics";
+            let is_peers = method == "GET" && path_only == "/peers";
+            let is_admin_login = method == "POST" && path_only == "/admin-api/login";
+            let is_admin_logout = method == "POST" && path_only == "/admin-api/logout";
+            let is_admin_status = method == "GET" && path_only == "/admin-api/status";
+            let is_admin_metrics = method == "GET" && path_only == "/admin-api/metrics";
+            let is_admin_peers = method == "GET" && path_only == "/admin-api/peers";
+            let is_admin_settings_get = method == "GET" && path_only == "/admin-api/settings";
+            let is_admin_settings_set = method == "POST" && path_only == "/admin-api/settings";
+            let is_admin_settings_delete = method == "DELETE" && path_only == "/admin-api/settings";
+
+            let (status, body, content_type) = if is_health {
+                ("200 OK", "ok".to_string(), "text/plain")
+            } else if is_metrics
+                || (is_admin_metrics && is_admin_authenticated(&headers, &admin_auth))
+            {
                 let body = format!(
-                    "veil_ticks_total {}\nveil_delivered_total {}\nveil_send_failures_total {}\nveil_ack_clears_total {}\nveil_fast_outbound_ok {}\nveil_fast_outbound_err {}\nveil_fallback_outbound_ok {}\nveil_fallback_outbound_err {}\nveil_fast_inbound {}\nveil_fallback_inbound {}\n",
+                    "veil_ticks_total {}\nveil_delivered_total {}\nveil_send_failures_total {}\nveil_ack_clears_total {}\nveil_fast_outbound_ok {}\nveil_fast_outbound_err {}\nveil_fallback_outbound_ok {}\nveil_fallback_outbound_err {}\nveil_fast_inbound {}\nveil_fallback_inbound {}\nveil_nostr_bridge_events_total {}\nveil_nostr_bridge_payload_bytes_total {}\nveil_nostr_bridge_enabled {}\nveil_nostr_bridge_relays_configured {}\n",
                     metrics.ticks.load(Ordering::Relaxed),
                     metrics.delivered.load(Ordering::Relaxed),
                     metrics.send_failures.load(Ordering::Relaxed),
@@ -703,26 +1028,31 @@ fn start_health_server(
                     metrics.last_fallback_outbound_err.load(Ordering::Relaxed),
                     metrics.last_fast_inbound.load(Ordering::Relaxed),
                     metrics.last_fallback_inbound.load(Ordering::Relaxed),
+                    metrics.nostr_bridge_events_total.load(Ordering::Relaxed),
+                    metrics
+                        .nostr_bridge_payload_bytes_total
+                        .load(Ordering::Relaxed),
+                    metrics.nostr_bridge_enabled.load(Ordering::Relaxed),
+                    metrics
+                        .nostr_bridge_relays_configured
+                        .load(Ordering::Relaxed),
                 );
-                ("200 OK", body)
-            } else if is_peers {
+                ("200 OK", body, "text/plain")
+            } else if is_peers || (is_admin_peers && is_admin_authenticated(&headers, &admin_auth))
+            {
                 let mut limit = 200usize;
                 let mut prefix: Option<String> = None;
-                if let Some(line) = req.lines().next() {
-                    if let Some(path) = line.split_whitespace().nth(1) {
-                        if let Some(query) = path.split('?').nth(1) {
-                            for pair in query.split('&') {
-                                let mut parts = pair.splitn(2, '=');
-                                let key = parts.next().unwrap_or("");
-                                let value = parts.next().unwrap_or("");
-                                if key == "limit" {
-                                    if let Ok(parsed) = value.parse::<usize>() {
-                                        limit = parsed.min(1000);
-                                    }
-                                } else if key == "prefix" && !value.is_empty() {
-                                    prefix = Some(value.to_string());
-                                }
+                if let Some(query) = path.split('?').nth(1) {
+                    for pair in query.split('&') {
+                        let mut parts = pair.splitn(2, '=');
+                        let key = parts.next().unwrap_or("");
+                        let value = parts.next().unwrap_or("");
+                        if key == "limit" {
+                            if let Ok(parsed) = value.parse::<usize>() {
+                                limit = parsed.min(1000);
                             }
+                        } else if key == "prefix" && !value.is_empty() {
+                            prefix = Some(value.to_string());
                         }
                     }
                 }
@@ -731,13 +1061,200 @@ fn start_health_server(
                     .iter()
                     .filter(|peer| prefix.as_ref().map(|p| peer.starts_with(p)).unwrap_or(true));
                 let body = iter.take(limit).cloned().collect::<Vec<_>>().join("\n");
-                ("200 OK", body)
+                ("200 OK", body, "text/plain")
+            } else if is_admin_login {
+                let parsed = serde_json::from_slice::<AdminLoginRequest>(&body_bytes).ok();
+                if let Some(payload) = parsed {
+                    if let Some(secret) = decode_nostr_secret_input(&payload.secret) {
+                        if let Ok(signer) = NostrSigner::from_secret(secret) {
+                            if signer.public_key() == admin_auth.server_pubkey {
+                                let mut raw = [0_u8; 32];
+                                rand::thread_rng().fill_bytes(&mut raw);
+                                let token = encode_hex(&raw);
+                                let expires = now_unix_secs() + admin_auth.session_ttl_secs;
+                                admin_auth.add_session(token.clone(), expires);
+                                (
+                                    "200 OK",
+                                    json!({
+                                        "ok": true,
+                                        "token": token,
+                                        "server_pubkey": admin_auth.server_pubkey_hex,
+                                        "expires_at": expires
+                                    })
+                                    .to_string(),
+                                    "application/json",
+                                )
+                            } else {
+                                (
+                                    "401 Unauthorized",
+                                    json!({"ok": false, "error": "wrong identity key"}).to_string(),
+                                    "application/json",
+                                )
+                            }
+                        } else {
+                            (
+                                "400 Bad Request",
+                                json!({"ok": false, "error": "invalid nostr secret"}).to_string(),
+                                "application/json",
+                            )
+                        }
+                    } else {
+                        (
+                            "400 Bad Request",
+                            json!({"ok": false, "error": "secret must be hex or nsec"}).to_string(),
+                            "application/json",
+                        )
+                    }
+                } else {
+                    (
+                        "400 Bad Request",
+                        json!({"ok": false, "error": "invalid JSON payload"}).to_string(),
+                        "application/json",
+                    )
+                }
+            } else if is_admin_logout {
+                if let Some(token) = bearer_token(&headers) {
+                    let _ = admin_auth.revoke_session(token);
+                    (
+                        "200 OK",
+                        json!({"ok": true, "logged_out": true}).to_string(),
+                        "application/json",
+                    )
+                } else {
+                    (
+                        "401 Unauthorized",
+                        json!({"ok": false, "error": "admin auth required"}).to_string(),
+                        "application/json",
+                    )
+                }
+            } else if is_admin_status {
+                let is_auth = is_admin_authenticated(&headers, &admin_auth);
+                (
+                    "200 OK",
+                    json!({
+                        "ok": is_auth,
+                        "server_pubkey": admin_auth.server_pubkey_hex
+                    })
+                    .to_string(),
+                    "application/json",
+                )
+            } else if is_admin_settings_get && is_admin_authenticated(&headers, &admin_auth) {
+                match SettingsStore::open(&admin_auth.settings_db_path) {
+                    Ok(store) => {
+                        if let Some(key) = query_param(&path, "key") {
+                            match store.get(&key) {
+                                Some(value) => (
+                                    "200 OK",
+                                    json!({"ok": true, "key": key, "value": value}).to_string(),
+                                    "application/json",
+                                ),
+                                None => (
+                                    "404 Not Found",
+                                    json!({"ok": false, "error": "setting not found"}).to_string(),
+                                    "application/json",
+                                ),
+                            }
+                        } else {
+                            match store.list() {
+                                Ok(items) => (
+                                    "200 OK",
+                                    json!({"ok": true, "items": items}).to_string(),
+                                    "application/json",
+                                ),
+                                Err(err) => (
+                                    "500 Internal Server Error",
+                                    json!({"ok": false, "error": err}).to_string(),
+                                    "application/json",
+                                ),
+                            }
+                        }
+                    }
+                    Err(err) => (
+                        "500 Internal Server Error",
+                        json!({"ok": false, "error": err}).to_string(),
+                        "application/json",
+                    ),
+                }
+            } else if is_admin_settings_set && is_admin_authenticated(&headers, &admin_auth) {
+                let parsed = serde_json::from_slice::<AdminSettingUpsertRequest>(&body_bytes).ok();
+                if let Some(payload) = parsed {
+                    let key = payload.key.trim().to_string();
+                    if key.is_empty() {
+                        (
+                            "400 Bad Request",
+                            json!({"ok": false, "error": "key is required"}).to_string(),
+                            "application/json",
+                        )
+                    } else {
+                        match SettingsStore::open(&admin_auth.settings_db_path)
+                            .and_then(|store| store.set(&key, payload.value.trim()))
+                        {
+                            Ok(()) => (
+                                "200 OK",
+                                json!({"ok": true, "key": key}).to_string(),
+                                "application/json",
+                            ),
+                            Err(err) => (
+                                "500 Internal Server Error",
+                                json!({"ok": false, "error": err}).to_string(),
+                                "application/json",
+                            ),
+                        }
+                    }
+                } else {
+                    (
+                        "400 Bad Request",
+                        json!({"ok": false, "error": "invalid JSON payload"}).to_string(),
+                        "application/json",
+                    )
+                }
+            } else if is_admin_settings_delete && is_admin_authenticated(&headers, &admin_auth) {
+                if let Some(key) = query_param(&path, "key") {
+                    match SettingsStore::open(&admin_auth.settings_db_path)
+                        .and_then(|store| store.delete(&key))
+                    {
+                        Ok(true) => (
+                            "200 OK",
+                            json!({"ok": true, "deleted": true, "key": key}).to_string(),
+                            "application/json",
+                        ),
+                        Ok(false) => (
+                            "404 Not Found",
+                            json!({"ok": false, "error": "setting not found"}).to_string(),
+                            "application/json",
+                        ),
+                        Err(err) => (
+                            "500 Internal Server Error",
+                            json!({"ok": false, "error": err}).to_string(),
+                            "application/json",
+                        ),
+                    }
+                } else {
+                    (
+                        "400 Bad Request",
+                        json!({"ok": false, "error": "key query parameter is required"})
+                            .to_string(),
+                        "application/json",
+                    )
+                }
+            } else if is_admin_metrics || is_admin_peers || is_admin_logout {
+                (
+                    "401 Unauthorized",
+                    json!({"ok": false, "error": "admin auth required"}).to_string(),
+                    "application/json",
+                )
+            } else if is_admin_settings_get || is_admin_settings_set || is_admin_settings_delete {
+                (
+                    "401 Unauthorized",
+                    json!({"ok": false, "error": "admin auth required"}).to_string(),
+                    "application/json",
+                )
             } else {
-                ("404 Not Found", "not found".to_string())
+                ("404 Not Found", "not found".to_string(), "text/plain")
             };
             let resp = format!(
-                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: text/plain\r\n\r\n{body}",
-                body.len()
+                "HTTP/1.1 {status}\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\n\r\n{body}",
+                body.len(),
             );
             let _ = stream.write_all(resp.as_bytes());
         }
@@ -915,6 +1432,11 @@ fn main() {
     let tick_ms = setting_u64(settings, "VEIL_VPS_TICK_MS", 50);
     let health_bind = setting_string(settings, "VEIL_VPS_HEALTH_BIND", "127.0.0.1");
     let health_port = setting_u64(settings, "VEIL_VPS_HEALTH_PORT", 9090) as u16;
+    let admin_session_db_path = PathBuf::from(setting_string(
+        settings,
+        "VEIL_VPS_ADMIN_SESSION_DB_PATH",
+        "data/admin-sessions.db",
+    ));
     let fast_peers = setting_list(settings, "VEIL_VPS_FAST_PEERS", &[]);
     let core_tags = setting_list(settings, "VEIL_VPS_CORE_TAGS", &[]);
     let tor_peers = setting_list(settings, "VEIL_VPS_TOR_PEERS", &[]);
@@ -1148,6 +1670,11 @@ fn main() {
         #[cfg(feature = "ble")]
         ble_adapter,
     );
+    let ws_enabled = fallback_adapter.ws.is_some();
+    let ws_server_enabled = fallback_adapter.ws_server.is_some();
+    let tor_enabled = fallback_adapter.tor.is_some();
+    #[cfg(feature = "ble")]
+    let ble_enabled_runtime = fallback_adapter.ble.is_some();
     let fallback_peers = parse_fallback_peers(
         ws_peer,
         tor_peers,
@@ -1169,10 +1696,12 @@ fn main() {
         .unwrap_or_default();
     {
         let mut guard = discovered_fast.lock().unwrap_or_else(|e| e.into_inner());
-        for peer in discovered_seed
-            .iter()
-            .filter(|p| !p.starts_with("ws:") && !p.starts_with("tor:") && !p.starts_with("ble:"))
-        {
+        for peer in discovered_seed.iter().filter(|p| {
+            !p.starts_with("ws:")
+                && !p.starts_with("wssrv:")
+                && !p.starts_with("tor:")
+                && !p.starts_with("ble:")
+        }) {
             guard.insert(peer.to_string());
         }
     }
@@ -1182,7 +1711,16 @@ fn main() {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         for peer in fallback_seed {
-            guard.insert(peer);
+            if fallback_peer_supported(
+                &peer,
+                ws_enabled,
+                ws_server_enabled,
+                tor_enabled,
+                #[cfg(feature = "ble")]
+                ble_enabled_runtime,
+            ) {
+                guard.insert(peer);
+            }
         }
     }
 
@@ -1233,15 +1771,39 @@ fn main() {
     let health_log_interval = Duration::from_secs(30);
 
     let metrics = Arc::new(MetricsState::default());
+    metrics
+        .nostr_bridge_enabled
+        .store(u64::from(nostr_bridge_enabled), Ordering::Relaxed);
+    metrics
+        .nostr_bridge_relays_configured
+        .store(nostr_bridge_relays.len() as u64, Ordering::Relaxed);
     let shutdown = Arc::new(AtomicBool::new(false));
     let _ = flag::register(SIGTERM, Arc::clone(&shutdown));
     let _ = flag::register(SIGINT, Arc::clone(&shutdown));
     let peer_snapshot: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    AdminAuthState::bootstrap_session_db(&admin_session_db_path);
+    let restored_sessions = AdminAuthState::load_sessions_from_db(&admin_session_db_path);
+    if !restored_sessions.is_empty() {
+        eprintln!(
+            "admin auth: restored {} active sessions from {}",
+            restored_sessions.len(),
+            admin_session_db_path.display()
+        );
+    }
+    let admin_auth = Arc::new(AdminAuthState {
+        server_pubkey: node_pubkey,
+        server_pubkey_hex: node_pubkey_hex.clone(),
+        session_ttl_secs: 24 * 60 * 60,
+        session_db_path: admin_session_db_path,
+        settings_db_path: settings_db_path.clone(),
+        sessions: Mutex::new(restored_sessions),
+    });
     start_health_server(
         health_bind,
         health_port,
         Arc::clone(&metrics),
         Arc::clone(&peer_snapshot),
+        Arc::clone(&admin_auth),
     );
 
     let mut now_step = 0_u64;
@@ -1272,6 +1834,12 @@ fn main() {
                             item.source_event_id,
                             item.payload.len()
                         );
+                        metrics
+                            .nostr_bridge_events_total
+                            .fetch_add(1, Ordering::Relaxed);
+                        metrics
+                            .nostr_bridge_payload_bytes_total
+                            .fetch_add(item.payload.len() as u64, Ordering::Relaxed);
                         bridge_batcher.enqueue(item.payload);
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,

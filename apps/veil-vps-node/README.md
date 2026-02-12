@@ -52,6 +52,9 @@ docker compose -f apps/veil-vps-node/docker-compose.yml --profile proxy up -d --
 
 When running with the proxy profile, the VPS node serves a landing page at
 `http://<your-domain>/` with a VEIL overview and a QR code for app onboarding.
+An admin page is available at `http://<your-domain>/admin/` and authenticates
+using the node's Nostr identity secret (`VEIL_VPS_NODE_KEY_PATH` key as `nsec` or hex).
+The admin page can also manage settings in `data/settings.db` (list/get/set/delete).
 
 Copy the compose env template:
 
@@ -88,6 +91,7 @@ Optional:
 - `VEIL_VPS_TICK_MS` (default `50`)
 - `VEIL_VPS_HEALTH_BIND` (default `127.0.0.1`)
 - `VEIL_VPS_HEALTH_PORT` (default `9090`, set `0` to disable `/health`, `/metrics`, and `/peers`)
+- `VEIL_VPS_ADMIN_SESSION_DB_PATH` (default `data/admin-sessions.db`)
 - `VEIL_VPS_MAX_CACHE_SHARDS` (default `200000`)
 - `VEIL_VPS_BUCKET_JITTER` (default `0`)
 - `VEIL_VPS_REQUIRED_SIGNED_NAMESPACES` (comma-separated namespace ids)

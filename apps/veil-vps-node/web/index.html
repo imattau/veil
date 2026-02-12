@@ -102,6 +102,12 @@
         margin-top: 12px;
       }
 
+      .stats-subtitle {
+        margin: 14px 0 6px;
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+
       .stat {
         background: rgba(2, 6, 23, 0.6);
         border: 1px solid var(--border);
@@ -200,6 +206,9 @@
           while keeping delivery fast in practical deployments.
         </p>
         <button class="button secondary" id="copyWs">Copy WebSocket URL</button>
+        <a class="button secondary" href="/admin/" style="margin-left: 8px; text-decoration: none;">
+          Open Admin
+        </a>
       </section>
       <section class="card">
         <h2>Node Stats</h2>
@@ -235,6 +244,33 @@
           <div class="stat">
             <div class="label">Fallback Send Err</div>
             <div class="value" id="fallbackErrValue">-</div>
+          </div>
+        </div>
+        <div class="stats-subtitle">Nostr Relay Ingestion</div>
+        <div class="stats-grid">
+          <div class="stat">
+            <div class="label">Nostr Bridged</div>
+            <div class="value" id="nostrEventsValue">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">Nostr Bytes</div>
+            <div class="value" id="nostrBytesValue">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">Nostr Enabled</div>
+            <div class="value" id="nostrEnabledValue">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">Nostr Relays</div>
+            <div class="value" id="nostrRelaysValue">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">Nostr Rate (/min)</div>
+            <div class="value" id="nostrRateValue">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">Nostr Avg Bytes/Event</div>
+            <div class="value" id="nostrAvgValue">-</div>
           </div>
         </div>
         <div class="status-line" id="statsStatus">Polling /health, /metrics, /peers…</div>
@@ -305,7 +341,18 @@
       const fallbackInEl = document.getElementById("fallbackInValue");
       const fastErrEl = document.getElementById("fastErrValue");
       const fallbackErrEl = document.getElementById("fallbackErrValue");
+      const nostrEventsEl = document.getElementById("nostrEventsValue");
+      const nostrBytesEl = document.getElementById("nostrBytesValue");
+      const nostrEnabledEl = document.getElementById("nostrEnabledValue");
+      const nostrRelaysEl = document.getElementById("nostrRelaysValue");
+      const nostrRateEl = document.getElementById("nostrRateValue");
+      const nostrAvgEl = document.getElementById("nostrAvgValue");
       const statsStatusEl = document.getElementById("statsStatus");
+      let lastNostrSample = null;
+
+      function fmtInt(value) {
+        return Number.isFinite(value) ? Math.round(value).toLocaleString() : "-";
+      }
 
       function parseMetricsText(text) {
         const out = {};
@@ -355,6 +402,31 @@
             fallbackInEl.textContent = m.veil_fallback_inbound || "-";
             fastErrEl.textContent = m.veil_fast_outbound_err || "-";
             fallbackErrEl.textContent = m.veil_fallback_outbound_err || "-";
+            nostrEventsEl.textContent = m.veil_nostr_bridge_events_total || "0";
+            nostrBytesEl.textContent = m.veil_nostr_bridge_payload_bytes_total || "0";
+            nostrEnabledEl.textContent = (m.veil_nostr_bridge_enabled || "0") === "1" ? "yes" : "no";
+            nostrRelaysEl.textContent = m.veil_nostr_bridge_relays_configured || "0";
+            const totalEvents = Number(m.veil_nostr_bridge_events_total || "0");
+            const totalBytes = Number(m.veil_nostr_bridge_payload_bytes_total || "0");
+            if (totalEvents > 0) {
+              nostrAvgEl.textContent = fmtInt(totalBytes / totalEvents);
+            } else {
+              nostrAvgEl.textContent = "0";
+            }
+            const nowMs = Date.now();
+            if (
+              lastNostrSample &&
+              Number.isFinite(totalEvents) &&
+              totalEvents >= lastNostrSample.events &&
+              nowMs > lastNostrSample.timestampMs
+            ) {
+              const deltaEvents = totalEvents - lastNostrSample.events;
+              const deltaSecs = (nowMs - lastNostrSample.timestampMs) / 1000;
+              nostrRateEl.textContent = deltaSecs > 0 ? fmtInt((deltaEvents / deltaSecs) * 60) : "0";
+            } else {
+              nostrRateEl.textContent = "0";
+            }
+            lastNostrSample = { events: totalEvents, timestampMs: nowMs };
           } else if (metrics.status === 401 || metrics.status === 403) {
             ticksEl.textContent = "auth";
             deliveredEl.textContent = "auth";
@@ -362,6 +434,12 @@
             fallbackInEl.textContent = "auth";
             fastErrEl.textContent = "auth";
             fallbackErrEl.textContent = "auth";
+            nostrEventsEl.textContent = "auth";
+            nostrBytesEl.textContent = "auth";
+            nostrEnabledEl.textContent = "auth";
+            nostrRelaysEl.textContent = "auth";
+            nostrRateEl.textContent = "auth";
+            nostrAvgEl.textContent = "auth";
           }
 
           if (peers.ok) {
