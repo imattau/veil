@@ -109,6 +109,17 @@ impl ProtocolEngine {
         self.publish_with_tag(payload, namespace, tag).await
     }
 
+    pub async fn publish_batch(
+        &self,
+        payloads: Vec<Vec<u8>>,
+        namespace: Option<u16>,
+    ) -> Result<(), String> {
+        let namespace = Namespace(namespace.unwrap_or(self.config.namespace.0));
+        let pubkey = *self.identity_pubkey.lock().await;
+        let tag = derive_feed_tag(&pubkey, namespace);
+        self.publish_batch_with_tag(payloads, namespace, tag).await
+    }
+
     pub async fn publish_with_tag(
         &self,
         payload: Vec<u8>,
@@ -138,6 +149,47 @@ impl ProtocolEngine {
                 now_step: step,
                 flags: 0,
                 interactive_flush: true,
+                fast_peers: &fast_peers,
+                fallback_peers: &fallback_peers,
+            })
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn publish_batch_with_tag(
+        &self,
+        payloads: Vec<Vec<u8>>,
+        namespace: Namespace,
+        tag: [u8; 32],
+    ) -> Result<(), String> {
+        if payloads.is_empty() {
+            return Ok(());
+        }
+        let mut runtime = self.inner.lock().await;
+        for payload in payloads {
+            runtime.enqueue(payload);
+        }
+        let step = self.steps.fetch_add(1, Ordering::Relaxed) + 1;
+        let fast_peers = self.fast_peers().await;
+        let fast_peers = if fast_peers.is_empty() {
+            vec!["peer".to_string()]
+        } else {
+            fast_peers
+        };
+        let fallback_peers = self.fallback_peers().await;
+        let fallback_peers = if fallback_peers.is_empty() {
+            fast_peers.clone()
+        } else {
+            fallback_peers
+        };
+        runtime
+            .tick(PublisherTickInput {
+                namespace,
+                epoch: current_epoch(),
+                tag,
+                now_step: step,
+                flags: 0,
+                interactive_flush: false,
                 fast_peers: &fast_peers,
                 fallback_peers: &fallback_peers,
             })

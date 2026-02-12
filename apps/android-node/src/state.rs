@@ -210,6 +210,85 @@ impl NodeState {
         Some(item)
     }
 
+    pub fn take_next_queued_batch(
+        &self,
+        now_ms: u64,
+        max_items: usize,
+        target_batch_bytes: usize,
+        max_item_bytes: usize,
+    ) -> Vec<QueueItem> {
+        if max_items == 0 {
+            return Vec::new();
+        }
+        let mut inner = self.inner.lock().expect("state lock");
+        let first_index = match inner.queue.iter().position(|item| {
+            inner
+                .queue_next_attempt
+                .get(&item.id)
+                .copied()
+                .map(|next| now_ms >= next)
+                .unwrap_or(true)
+        }) {
+            Some(index) => index,
+            None => return Vec::new(),
+        };
+
+        let mut batch = Vec::with_capacity(max_items);
+        let first = match inner.queue.remove(first_index) {
+            Some(item) => item,
+            None => return Vec::new(),
+        };
+        let namespace = first.namespace;
+        let mut total_bytes = first.payload.len();
+        inner.queue_inflight = inner.queue_inflight.saturating_add(1);
+        let attempts = inner.queue_attempts.entry(first.id).or_insert(0);
+        *attempts += 1;
+        batch.push(first);
+
+        // Only aggregate additional small items. Large payloads still flow as
+        // single-item publishes to avoid starving queue order.
+        if total_bytes <= max_item_bytes && target_batch_bytes > total_bytes {
+            let mut index = 0usize;
+            while index < inner.queue.len()
+                && batch.len() < max_items
+                && total_bytes < target_batch_bytes
+            {
+                let due = inner
+                    .queue_next_attempt
+                    .get(&inner.queue[index].id)
+                    .copied()
+                    .map(|next| now_ms >= next)
+                    .unwrap_or(true);
+                if !due {
+                    index += 1;
+                    continue;
+                }
+                let candidate = &inner.queue[index];
+                if candidate.namespace != namespace {
+                    index += 1;
+                    continue;
+                }
+                let item_len = candidate.payload.len();
+                if item_len > max_item_bytes || total_bytes + item_len > target_batch_bytes {
+                    index += 1;
+                    continue;
+                }
+                let item = match inner.queue.remove(index) {
+                    Some(item) => item,
+                    None => continue,
+                };
+                total_bytes += item.payload.len();
+                inner.queue_inflight = inner.queue_inflight.saturating_add(1);
+                let attempts = inner.queue_attempts.entry(item.id).or_insert(0);
+                *attempts += 1;
+                batch.push(item);
+            }
+        }
+
+        update_queue_counts(&mut inner);
+        batch
+    }
+
     pub fn complete_success(&self, item: &QueueItem) {
         let mut inner = self.inner.lock().expect("state lock");
         inner.queue_inflight = inner.queue_inflight.saturating_sub(1);
@@ -866,6 +945,60 @@ mod tests {
         let status = state.status();
         assert_eq!(status.queue.pending, 0);
         assert_eq!(status.queue.inflight, 0);
+    }
+
+    #[test]
+    fn take_next_queued_batch_groups_small_same_namespace_items() {
+        let state = NodeState::new("0.1-test");
+        let _ = state.enqueue_publish(PublishRequest {
+            namespace: 32,
+            payload: "a".repeat(32),
+        });
+        let _ = state.enqueue_publish(PublishRequest {
+            namespace: 32,
+            payload: "b".repeat(24),
+        });
+        // Different namespace should not be coalesced into the same batch.
+        let _ = state.enqueue_publish(PublishRequest {
+            namespace: 64,
+            payload: "c".repeat(24),
+        });
+
+        let batch = state.take_next_queued_batch(now_millis(), 16, 96 * 1024, 4 * 1024);
+        assert_eq!(batch.len(), 2);
+        assert!(batch.iter().all(|item| item.namespace == 32));
+
+        for item in &batch {
+            state.complete_success(item);
+        }
+
+        let next = state
+            .take_next_queued(now_millis())
+            .expect("remaining item");
+        assert_eq!(next.namespace, 64);
+    }
+
+    #[test]
+    fn take_next_queued_batch_leaves_large_payload_as_single_item() {
+        let state = NodeState::new("0.1-test");
+        let _ = state.enqueue_publish(PublishRequest {
+            namespace: 32,
+            payload: "x".repeat(8 * 1024),
+        });
+        let _ = state.enqueue_publish(PublishRequest {
+            namespace: 32,
+            payload: "y".repeat(32),
+        });
+
+        let batch = state.take_next_queued_batch(now_millis(), 16, 96 * 1024, 4 * 1024);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].payload.len(), 8 * 1024);
+
+        state.complete_success(&batch[0]);
+        let next = state
+            .take_next_queued(now_millis())
+            .expect("small item remains");
+        assert_eq!(next.payload.len(), 32);
     }
 
     #[test]

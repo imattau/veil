@@ -9,6 +9,10 @@ use crate::protocol::ProtocolEngine;
 use crate::state::NodeState;
 use veil_node::receive::ReceiveEvent;
 
+const APP_TARGET_BATCH_SIZE_BYTES: usize = 96 * 1024;
+const APP_MAX_BATCH_ITEMS: usize = 64;
+const APP_MAX_BATCHABLE_ITEM_BYTES: usize = 4 * 1024;
+
 #[derive(Clone)]
 pub struct QueueWorker {
     state: Arc<NodeState>,
@@ -78,24 +82,42 @@ impl QueueWorker {
             worker.state.mark_lane_details(details);
             if any_connected {
                 let now_ms = now_millis();
-                if let Some(item) = worker.state.take_next_queued(now_ms) {
-                    let attempts = worker.state.attempts_for(&item);
-                    if attempts > worker.config.max_attempts {
-                        worker.state.drop_item(&item);
-                    } else {
-                        let result = worker
-                            .protocol
-                            .publish(item.payload.clone().into_bytes(), Some(item.namespace))
-                            .await;
+                let batch = worker.state.take_next_queued_batch(
+                    now_ms,
+                    APP_MAX_BATCH_ITEMS,
+                    APP_TARGET_BATCH_SIZE_BYTES,
+                    APP_MAX_BATCHABLE_ITEM_BYTES,
+                );
+                if !batch.is_empty() {
+                    let mut executable = Vec::with_capacity(batch.len());
+                    let mut namespace = None;
+                    let mut payloads = Vec::with_capacity(batch.len());
+                    for item in batch {
+                        let attempts = worker.state.attempts_for(&item);
+                        if attempts > worker.config.max_attempts {
+                            worker.state.drop_item(&item);
+                            continue;
+                        }
+                        namespace = Some(item.namespace);
+                        payloads.push(item.payload.as_bytes().to_vec());
+                        executable.push(item);
+                    }
+                    if !executable.is_empty() {
+                        let result = worker.protocol.publish_batch(payloads, namespace).await;
                         if result.is_ok() {
-                            worker.state.complete_success(&item);
+                            for item in &executable {
+                                worker.state.complete_success(item);
+                            }
                         } else {
-                            let backoff = retry_backoff_ms(
-                                attempts,
-                                worker.config.backoff_base_ms,
-                                worker.config.backoff_max_ms,
-                            );
-                            worker.state.complete_failure(item, backoff);
+                            for item in executable {
+                                let attempts = worker.state.attempts_for(&item);
+                                let backoff = retry_backoff_ms(
+                                    attempts,
+                                    worker.config.backoff_base_ms,
+                                    worker.config.backoff_max_ms,
+                                );
+                                worker.state.complete_failure(item, backoff);
+                            }
                         }
                     }
                 }
