@@ -8,6 +8,7 @@ import '../components/live_status_banner.dart';
 import '../components/empty_state.dart';
 import '../components/feed_shimmer.dart';
 import '../components/network_pulse.dart';
+import '../components/network_status_drawer.dart';
 import '../theme/veil_theme.dart';
 import './profile_view.dart';
 import './composer_view.dart';
@@ -50,6 +51,7 @@ class _SocialHomeState extends State<SocialHome> {
     return Scaffold(
       extendBody: true,
       extendBodyBehindAppBar: true,
+      endDrawer: NetworkStatusDrawer(service: _service),
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(kToolbarHeight),
         child: ClipRect(
@@ -65,9 +67,15 @@ class _SocialHomeState extends State<SocialHome> {
                 ],
               ),
               actions: [
-                Padding(
-                  padding: const EdgeInsets.only(right: 20),
-                  child: Center(child: NetworkPulse(service: _service)),
+                Builder(
+                  builder: (context) => Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: IconButton(
+                      tooltip: 'Network status',
+                      onPressed: () => Scaffold.of(context).openEndDrawer(),
+                      icon: NetworkPulse(service: _service),
+                    ),
+                  ),
                 ),
               ],
             ),
