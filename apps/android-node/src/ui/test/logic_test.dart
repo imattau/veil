@@ -47,6 +47,27 @@ void main() {
       expect(event.targetRoot, 'abc');
       expect(event.objectRoot, 'root123');
     });
+
+    test('normalizes byte-array roots to hex strings', () {
+      final bytes = List<int>.generate(32, (i) => i);
+      final event = NodeEvent.fromJson({
+        'seq': 4,
+        'event': 'feed_bundle',
+        'data': {
+          'kind': 'reaction',
+          'target_root': bytes,
+          'object_root': bytes,
+        },
+      });
+      expect(
+        event.targetRoot,
+        '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f',
+      );
+      expect(
+        event.objectRoot,
+        '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f',
+      );
+    });
   });
 
   group('SocialController', () {
@@ -140,6 +161,37 @@ void main() {
       expect(comments.length, 2);
       expect(comments.any((e) => e.postText == 'reply 1'), true);
       expect(comments.any((e) => e.postText == 'reply 2'), true);
+    });
+
+    test('matches comments and reactions when roots come as byte arrays', () {
+      final service = NodeService();
+      final controller = SocialController(service);
+      final root = List<int>.generate(32, (i) => i);
+      const rootHex =
+          '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';
+
+      service.testInjectEvent({
+        'seq': 200,
+        'event': 'feed_bundle',
+        'data': {'kind': 'post', 'object_root': root, 'text': 'parent'},
+      });
+      service.testInjectEvent({
+        'seq': 201,
+        'event': 'feed_bundle',
+        'data': {'kind': 'post', 'reply_to_root': root, 'text': 'reply'},
+      });
+      service.testInjectEvent({
+        'seq': 202,
+        'event': 'feed_bundle',
+        'data': {
+          'kind': 'reaction',
+          'target_root': root,
+          'action_code': 'like',
+        },
+      });
+
+      expect(controller.getComments(rootHex).length, 1);
+      expect(controller.getReactions(rootHex).length, 1);
     });
 
     test(

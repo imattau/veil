@@ -183,10 +183,18 @@ async fn publish_object(
         Ok(bytes) => bytes,
         Err(_) => return bad_request("invalid_base64", "payload must be base64 encoded"),
     };
+    if payload.len() > MAX_RAW_PAYLOAD_BYTES {
+        return bad_request("payload_too_large", "payload exceeds max size");
+    }
     let object_root = blake3::hash(&payload);
+    let wrapped_payload = serde_json::json!({
+        "kind": "raw_b64",
+        "payload_b64": request.payload_b64,
+    })
+    .to_string();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: request.payload_b64, // Keep as b64 for the publish worker
+        payload: wrapped_payload,
     });
     Json(ObjectPublishResponse {
         object_root: hex::encode(object_root.as_bytes()),

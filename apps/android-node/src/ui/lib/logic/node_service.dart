@@ -933,6 +933,16 @@ class NodeService extends ChangeNotifier {
           }
         }
 
+        if (event.event == 'publish_failed') {
+          final attempts = (event.data['attempts'] as num?)?.toInt();
+          final dropped = event.data['dropped'] == true;
+          final retryAfterMs = (event.data['retry_after_ms'] as num?)?.toInt();
+          final message = dropped
+              ? 'Publish dropped after retries'
+              : 'Publish failed${attempts != null ? ' (attempt $attempts)' : ''}${retryAfterMs != null ? ', retry in ${retryAfterMs}ms' : ''}';
+          _setState(_state.copyWith(lastError: message));
+        }
+
         notifyListeners();
       }
     } catch (e) {

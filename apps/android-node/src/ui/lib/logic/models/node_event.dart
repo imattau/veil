@@ -86,7 +86,7 @@ Map<String, dynamic> _normalizeEventData(String event, dynamic rawData) {
 Map<String, dynamic> _normalizeFeedBundleData(Map<String, dynamic> data) {
   final kind = data['kind'];
   if (kind is String && kind.isNotEmpty) {
-    return data;
+    return _normalizeRootFields(data);
   }
 
   final bundleField = data['bundle'];
@@ -100,7 +100,7 @@ Map<String, dynamic> _normalizeFeedBundleData(Map<String, dynamic> data) {
         normalized['object_root'] == null) {
       normalized['object_root'] = root;
     }
-    return normalized;
+    return _normalizeRootFields(normalized);
   }
 
   if (data.length == 1) {
@@ -111,11 +111,11 @@ Map<String, dynamic> _normalizeFeedBundleData(Map<String, dynamic> data) {
       if (normalizedKind != null) {
         final flattened = Map<String, dynamic>.from(value);
         flattened['kind'] = normalizedKind;
-        return flattened;
+        return _normalizeRootFields(flattened);
       }
     }
   }
-  return data;
+  return _normalizeRootFields(data);
 }
 
 String? _normalizeBundleKindKey(String raw) {
@@ -153,6 +153,53 @@ String? _normalizeBundleKindKey(String raw) {
       .toLowerCase();
   if (known.contains(snake)) {
     return snake;
+  }
+  return null;
+}
+
+Map<String, dynamic> _normalizeRootFields(Map<String, dynamic> data) {
+  final normalized = Map<String, dynamic>.from(data);
+
+  const singleRootKeys = <String>[
+    'object_root',
+    'target_root',
+    'reply_to_root',
+    'poll_root',
+    'ciphertext_root',
+  ];
+  for (final key in singleRootKeys) {
+    final value = _toHexRoot(normalized[key]);
+    if (value != null) {
+      normalized[key] = value;
+    }
+  }
+
+  final mediaRoots = normalized['media_roots'];
+  if (mediaRoots is List) {
+    normalized['media_roots'] = mediaRoots
+        .map((entry) => _toHexRoot(entry) ?? entry?.toString() ?? '')
+        .where((entry) => entry.isNotEmpty)
+        .toList();
+  }
+
+  return normalized;
+}
+
+String? _toHexRoot(dynamic value) {
+  if (value is String) {
+    return value;
+  }
+  if (value is List && value.length == 32) {
+    final bytes = <int>[];
+    for (final b in value) {
+      if (b is! num) return null;
+      bytes.add(b.toInt() & 0xFF);
+    }
+    final buffer = StringBuffer();
+    for (final b in bytes) {
+      buffer.write(b.toRadixString(16).padLeft(2, '0'));
+    }
+    return buffer.toString();
   }
   return null;
 }

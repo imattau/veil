@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
 use tokio::time::sleep;
 
 use crate::api::QueueWorkerConfig;
@@ -99,7 +100,7 @@ impl QueueWorker {
                             continue;
                         }
                         namespace = Some(item.namespace);
-                        payloads.push(item.payload.as_bytes().to_vec());
+                        payloads.push(queued_payload_to_bytes(&item.payload));
                         executable.push(item);
                     }
                     if !executable.is_empty() {
@@ -139,4 +140,45 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn queued_payload_to_bytes(payload: &str) -> Vec<u8> {
+    let parsed = match serde_json::from_str::<serde_json::Value>(payload) {
+        Ok(value) => value,
+        Err(_) => return payload.as_bytes().to_vec(),
+    };
+    let kind = parsed.get("kind").and_then(|v| v.as_str());
+    if kind != Some("raw_b64") {
+        return payload.as_bytes().to_vec();
+    }
+    let b64 = match parsed.get("payload_b64").and_then(|v| v.as_str()) {
+        Some(value) => value,
+        None => return payload.as_bytes().to_vec(),
+    };
+    base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .unwrap_or_else(|_| payload.as_bytes().to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::queued_payload_to_bytes;
+
+    #[test]
+    fn decode_wrapped_raw_b64_payload() {
+        let wrapped = serde_json::json!({
+            "kind": "raw_b64",
+            "payload_b64": "aGVsbG8=",
+        })
+        .to_string();
+        let bytes = queued_payload_to_bytes(&wrapped);
+        assert_eq!(bytes, b"hello");
+    }
+
+    #[test]
+    fn non_wrapped_payload_falls_back_to_utf8_bytes() {
+        let payload = r#"{"kind":"post","text":"hello"}"#;
+        let bytes = queued_payload_to_bytes(payload);
+        assert_eq!(bytes, payload.as_bytes());
+    }
 }
