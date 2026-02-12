@@ -223,6 +223,11 @@ class _ProfileViewState extends State<ProfileView> {
               ),
               const SizedBox(height: 24),
               _ProfileSection(
+                title: 'Nodes',
+                children: [_NodeContactsCard(service: widget.service)],
+              ),
+              const SizedBox(height: 24),
+              _ProfileSection(
                 title: 'Security',
                 children: [
                   _ProfileTile(
@@ -490,6 +495,198 @@ class _PubkeyList extends StatelessWidget {
           ),
       ],
     );
+  }
+}
+
+class _NodeContactsCard extends StatelessWidget {
+  final NodeService service;
+
+  const _NodeContactsCard({required this.service});
+
+  @override
+  Widget build(BuildContext context) {
+    final contacts = service.contacts;
+    return Card(
+      elevation: 0,
+      color: VeilTheme.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Connected Nodes',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Add node',
+                  onPressed: () => _showNodeContactDialog(context, service),
+                  icon: const Icon(Icons.add_circle_outline),
+                ),
+              ],
+            ),
+            if (contacts.isEmpty)
+              const Text(
+                'No nodes configured. Add a VPS node to enable outbound relay.',
+                style: TextStyle(color: VeilTheme.textSecondary, fontSize: 12),
+              )
+            else
+              ...contacts.map(
+                (contact) => _NodeContactTile(
+                  contact: contact,
+                  onEdit: () => _showNodeContactDialog(
+                    context,
+                    service,
+                    existing: contact,
+                  ),
+                  onDelete: () async {
+                    final peerId = (contact['peer_id'] as String?) ?? '';
+                    await service.deleteContact(peerId);
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NodeContactTile extends StatelessWidget {
+  final Map<String, dynamic> contact;
+  final VoidCallback onEdit;
+  final Future<void> Function() onDelete;
+
+  const _NodeContactTile({
+    required this.contact,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final peerId = (contact['peer_id'] as String?) ?? '';
+    final wsUrl = (contact['ws_url'] as String?) ?? '';
+    final quicAddr = (contact['quic_addr'] as String?) ?? '';
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(peerId.isEmpty ? '(unnamed)' : peerId),
+      subtitle: Text(
+        [
+          if (wsUrl.isNotEmpty) 'WS: $wsUrl',
+          if (quicAddr.isNotEmpty) 'QUIC: $quicAddr',
+        ].join('\n'),
+      ),
+      isThreeLine: wsUrl.isNotEmpty && quicAddr.isNotEmpty,
+      trailing: Wrap(
+        spacing: 0,
+        children: [
+          IconButton(
+            tooltip: 'Edit',
+            onPressed: onEdit,
+            icon: const Icon(Icons.edit_outlined),
+          ),
+          IconButton(
+            tooltip: 'Delete',
+            onPressed: () async => await onDelete(),
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+Future<void> _showNodeContactDialog(
+  BuildContext context,
+  NodeService service, {
+  Map<String, dynamic>? existing,
+}) async {
+  final peerIdController = TextEditingController(
+    text: (existing?['peer_id'] as String?) ?? '',
+  );
+  final wsUrlController = TextEditingController(
+    text: (existing?['ws_url'] as String?) ?? '',
+  );
+  final quicController = TextEditingController(
+    text: (existing?['quic_addr'] as String?) ?? '',
+  );
+  final pubkeyController = TextEditingController(
+    text: (existing?['pubkey_hex'] as String?) ?? '',
+  );
+
+  final saved = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(existing == null ? 'Add Node' : 'Edit Node'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: peerIdController,
+              decoration: const InputDecoration(
+                labelText: 'Peer ID',
+                hintText: 'veilnode.3nostr.com',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: wsUrlController,
+              decoration: const InputDecoration(
+                labelText: 'WebSocket URL',
+                hintText: 'wss://veilnode.3nostr.com/ws',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: quicController,
+              decoration: const InputDecoration(
+                labelText: 'QUIC Address',
+                hintText: 'veilnode.3nostr.com:5000',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: pubkeyController,
+              decoration: const InputDecoration(
+                labelText: 'Node Pubkey (hex)',
+                hintText: '64 hex chars',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('Save'),
+        ),
+      ],
+    ),
+  );
+
+  if (saved == true) {
+    await service.saveContact(
+      peerId: peerIdController.text,
+      wsUrl: wsUrlController.text,
+      quicAddr: quicController.text,
+      pubkeyHex: pubkeyController.text,
+    );
+    if (!context.mounted) return;
+    final err = service.state.lastError;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(err ?? 'Node saved')));
   }
 }
 

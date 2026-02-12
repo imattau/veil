@@ -447,6 +447,16 @@ pub struct ContactImportResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContactDeleteRequest {
+    pub peer_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContactDeleteResponse {
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContactListResponse {
     pub contacts: Vec<ContactBundle>,
 }

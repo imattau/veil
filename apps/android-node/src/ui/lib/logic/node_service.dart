@@ -24,6 +24,7 @@ class NodeService extends ChangeNotifier {
   final List<NodeEvent> _feedEvents = [];
   final Map<String, NodeEvent> _profiles = {};
   final Map<String, String> _decryptedPayloads = {};
+  List<Map<String, dynamic>> _contacts = const [];
   Map<String, List<String>> _policyLists = const {
     'trusted_pubkeys': [],
     'muted_pubkeys': [],
@@ -35,6 +36,7 @@ class NodeService extends ChangeNotifier {
   Map<String, NodeEvent> get profiles => Map.unmodifiable(_profiles);
   Map<String, String> get decryptedPayloads =>
       Map.unmodifiable(_decryptedPayloads);
+  List<Map<String, dynamic>> get contacts => List.unmodifiable(_contacts);
   Map<String, List<String>> get policyLists => Map.unmodifiable(_policyLists);
 
   NodeState get state => _state;
@@ -178,10 +180,14 @@ class NodeService extends ChangeNotifier {
       final status = await _getJson('/status');
       final policy = await _getJson('/policy');
       final policyLists = await _getJson('/policy/lists');
+      final contactList = await _getJson('/contact');
       final subs = await _getJson('/subscriptions');
 
       if (policyLists != null) {
         _policyLists = _parsePolicyLists(policyLists);
+      }
+      if (contactList != null) {
+        _contacts = _parseContacts(contactList);
       }
 
       _setState(
@@ -716,11 +722,12 @@ class NodeService extends ChangeNotifier {
         // Optimistically update the local cache for immediate UI feedback
         final selfPubkey = _state.identityHex;
         if (selfPubkey != null) {
-          _profiles[selfPubkey] = NodeEvent(
-            seq: 999999, // High seq to override historical ones
-            event: 'feed_bundle',
-            data: bundle,
-          );
+          final optimisticEvent = NodeEvent.fromJson({
+            'seq': 999999, // High seq to override historical ones
+            'event': 'feed_bundle',
+            'data': {'kind': 'profile', ...bundle},
+          });
+          _profiles[selfPubkey] = optimisticEvent;
         }
         await refresh();
         await fetchFeed();
@@ -1007,6 +1014,94 @@ class NodeService extends ChangeNotifier {
     }
   }
 
+  Future<void> saveContact({
+    required String peerId,
+    String? wsUrl,
+    String? quicAddr,
+    String? pubkeyHex,
+    String? rpcUrl,
+  }) async {
+    final normalizedPeerId = peerId.trim();
+    if (normalizedPeerId.isEmpty) {
+      _setState(_state.copyWith(lastError: 'Contact failed: peer id is empty'));
+      return;
+    }
+    final normalizedPubkey = (pubkeyHex ?? '').trim().toLowerCase();
+    if (normalizedPubkey.isNotEmpty && !_isValidPubkeyHex(normalizedPubkey)) {
+      _setState(_state.copyWith(lastError: 'Contact failed: invalid pubkey'));
+      return;
+    }
+    if (_state.busy) return;
+    _setState(_state.copyWith(busy: true));
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/contact'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({
+              'contact': {
+                'peer_id': normalizedPeerId,
+                'ws_url': (wsUrl ?? '').trim().isEmpty ? null : wsUrl!.trim(),
+                'quic_addr': (quicAddr ?? '').trim().isEmpty
+                    ? null
+                    : quicAddr!.trim(),
+                'pubkey_hex': normalizedPubkey,
+                'rpc_url': (rpcUrl ?? '').trim().isEmpty
+                    ? null
+                    : rpcUrl!.trim(),
+                'lan_addrs': const <String>[],
+              },
+            }),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(
+            lastError: 'Contact save failed: ${response.statusCode}',
+          ),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Contact save failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+      await refresh();
+    }
+  }
+
+  Future<void> deleteContact(String peerId) async {
+    final normalizedPeerId = peerId.trim();
+    if (normalizedPeerId.isEmpty) {
+      _setState(
+        _state.copyWith(lastError: 'Contact delete failed: peer id empty'),
+      );
+      return;
+    }
+    if (_state.busy) return;
+    _setState(_state.copyWith(busy: true));
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/contact/delete'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'peer_id': normalizedPeerId}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(
+            lastError: 'Contact delete failed: ${response.statusCode}',
+          ),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Contact delete failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+      await refresh();
+    }
+  }
+
   Future<Map<String, dynamic>?> _getJson(String path) async {
     await _refreshServiceStatus();
     final uri = Uri.parse('$_baseUrl$path');
@@ -1224,6 +1319,15 @@ class NodeService extends ChangeNotifier {
       'muted_pubkeys': readList('muted_pubkeys'),
       'blocked_pubkeys': readList('blocked_pubkeys'),
     };
+  }
+
+  List<Map<String, dynamic>> _parseContacts(Map<String, dynamic> json) {
+    final raw = json['contacts'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((entry) => Map<String, dynamic>.from(entry))
+        .toList();
   }
 
   List<int> _pseudoRootFromText(String text) {

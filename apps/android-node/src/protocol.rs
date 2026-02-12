@@ -128,18 +128,7 @@ impl ProtocolEngine {
         let mut runtime = self.inner.lock().await;
         runtime.enqueue(payload);
         let step = self.steps.fetch_add(1, Ordering::Relaxed) + 1;
-        let fast_peers = self.fast_peers().await;
-        let fast_peers = if fast_peers.is_empty() {
-            vec!["peer".to_string()]
-        } else {
-            fast_peers
-        };
-        let fallback_peers = self.fallback_peers().await;
-        let fallback_peers = if fallback_peers.is_empty() {
-            fast_peers.clone()
-        } else {
-            fallback_peers
-        };
+        let (fast_peers, fallback_peers) = self.publish_peer_lists().await?;
         runtime
             .tick(PublisherTickInput {
                 namespace,
@@ -169,18 +158,7 @@ impl ProtocolEngine {
             runtime.enqueue(payload);
         }
         let step = self.steps.fetch_add(1, Ordering::Relaxed) + 1;
-        let fast_peers = self.fast_peers().await;
-        let fast_peers = if fast_peers.is_empty() {
-            vec!["peer".to_string()]
-        } else {
-            fast_peers
-        };
-        let fallback_peers = self.fallback_peers().await;
-        let fallback_peers = if fallback_peers.is_empty() {
-            fast_peers.clone()
-        } else {
-            fallback_peers
-        };
+        let (fast_peers, fallback_peers) = self.publish_peer_lists().await?;
         runtime
             .tick(PublisherTickInput {
                 namespace,
@@ -257,6 +235,38 @@ impl ProtocolEngine {
                 }
             }
         }
+    }
+
+    pub async fn sync_contacts(&self, contacts: &[crate::api::ContactBundle]) {
+        let mut fast = Vec::<String>::new();
+        let mut fallback = Vec::<String>::new();
+        let mut peer_map = HashMap::<String, [u8; 32]>::new();
+
+        for contact in contacts {
+            if let Some(quic_addr) = &contact.quic_addr {
+                if !quic_addr.trim().is_empty() && !fast.contains(quic_addr) {
+                    fast.push(quic_addr.clone());
+                }
+            }
+            if let Some(ws_url) = &contact.ws_url {
+                if !ws_url.trim().is_empty() && !fallback.contains(ws_url) {
+                    fallback.push(ws_url.clone());
+                }
+            }
+            if contact.pubkey_hex.len() == 64 {
+                if let Ok(bytes) = hex::decode(&contact.pubkey_hex) {
+                    if bytes.len() == 32 {
+                        let mut key = [0u8; 32];
+                        key.copy_from_slice(&bytes);
+                        peer_map.insert(contact.peer_id.clone(), key);
+                    }
+                }
+            }
+        }
+
+        *self.dynamic_fast_peers.lock().await = fast;
+        *self.dynamic_fallback_peers.lock().await = fallback;
+        *self.dynamic_peer_map.lock().await = peer_map;
     }
 
     pub async fn get_cached_shard(&self, shard_id: [u8; 32]) -> Option<Vec<u8>> {
@@ -365,18 +375,7 @@ impl ProtocolEngine {
     pub async fn pump_inbound(&self) -> Result<Option<ReceiveEvent>, String> {
         let mut runtime = self.inner.lock().await;
         let mut stats = self.runtime_stats.lock().await;
-        let fast_peers = self.fast_peers().await;
-        let fast_peers = if fast_peers.is_empty() {
-            vec!["peer".to_string()]
-        } else {
-            fast_peers
-        };
-        let fallback_peers = self.fallback_peers().await;
-        let fallback_peers = if fallback_peers.is_empty() {
-            fast_peers.clone()
-        } else {
-            fallback_peers
-        };
+        let (fast_peers, fallback_peers) = self.publish_peer_lists().await?;
         let cfg = self.config.runtime_config.clone();
         let PublisherRuntime {
             state,
@@ -447,6 +446,22 @@ impl ProtocolEngine {
             }
         }
         peers
+    }
+
+    async fn publish_peer_lists(&self) -> Result<(Vec<String>, Vec<String>), String> {
+        let fast = self.fast_peers().await;
+        let mut fallback = self.fallback_peers().await;
+        if fallback.is_empty() {
+            if let Some(ws_url) = &self.config.ws_url {
+                if !ws_url.trim().is_empty() {
+                    fallback.push(ws_url.clone());
+                }
+            }
+        }
+        if fast.is_empty() && fallback.is_empty() {
+            return Err("no peers configured for publish".to_string());
+        }
+        Ok((fast, fallback))
     }
 }
 
@@ -599,8 +614,9 @@ fn build_lane_details(role: &str, snapshots: Vec<LaneSnapshot>) -> Vec<LaneDetai
             LaneDetail {
                 role: role.to_string(),
                 lane: snapshot.label.to_string(),
-                connected: snapshot.connected
-                    || snapshot.health.outbound_send_ok > 0
+                // "connected" should indicate observed traffic success, not merely
+                // that an adapter worker thread is running.
+                connected: snapshot.health.outbound_send_ok > 0
                     || snapshot.health.inbound_received > 0,
                 last_error,
                 stats: LaneStats {

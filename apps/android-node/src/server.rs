@@ -12,24 +12,24 @@ use tracing::info;
 
 use crate::api::{
     AppPreferencesPublishRequest, AppPreferencesPublishResponse, BlockPublishRequest,
-    BlockPublishResponse, ContactImportRequest, ContactImportResponse, ContactListResponse,
-    DeletionPublishRequest, DeletionPublishResponse, DirectMessagePublishRequest,
-    DirectMessagePublishResponse, DiscoveryAnnounceRequest, DiscoveryGossipRequest,
-    DiscoveryGossipResponse, DiscoveryLookupRequest, DiscoveryLookupResponse, ErrorResponse,
-    FeedResponse, FollowPublishRequest, FollowPublishResponse, GroupMessagePublishRequest,
-    GroupMessagePublishResponse, GroupMetadataPublishRequest, GroupMetadataPublishResponse,
-    HealthResponse, IdentityExportResponse, IdentityImportRequest, IdentityResponse,
-    IdentityRotateResponse, ListPublishRequest, ListPublishResponse, LiveStatusPublishRequest,
-    LiveStatusPublishResponse, MediaPublishRequest, MediaPublishResponse, MutePublishRequest,
-    MutePublishResponse, ObjectFetchResponse, ObjectPublishRequest, ObjectPublishResponse,
-    PolicyConfigRequest, PolicyConfigResponse, PolicyListsResponse, PolicySetRequest,
-    PolicySetResponse, PolicySummaryResponse, PollPublishRequest, PollPublishResponse,
-    PollVotePublishRequest, PollVotePublishResponse, PostPublishRequest, PostPublishResponse,
-    ProfilePublishRequest, ProfilePublishResponse, PublishRequest, PublishResponse,
-    ReactionPublishRequest, ReactionPublishResponse, RepostPublishRequest, RepostPublishResponse,
-    ShardFetchResponse, StatusResponse, SubscribeRequest, SubscribeResponse,
-    SubscriptionListResponse, UnsubscribeRequest, UnsubscribeResponse, ZapPublishRequest,
-    ZapPublishResponse,
+    BlockPublishResponse, ContactDeleteRequest, ContactDeleteResponse, ContactImportRequest,
+    ContactImportResponse, ContactListResponse, DeletionPublishRequest, DeletionPublishResponse,
+    DirectMessagePublishRequest, DirectMessagePublishResponse, DiscoveryAnnounceRequest,
+    DiscoveryGossipRequest, DiscoveryGossipResponse, DiscoveryLookupRequest,
+    DiscoveryLookupResponse, ErrorResponse, FeedResponse, FollowPublishRequest,
+    FollowPublishResponse, GroupMessagePublishRequest, GroupMessagePublishResponse,
+    GroupMetadataPublishRequest, GroupMetadataPublishResponse, HealthResponse,
+    IdentityExportResponse, IdentityImportRequest, IdentityResponse, IdentityRotateResponse,
+    ListPublishRequest, ListPublishResponse, LiveStatusPublishRequest, LiveStatusPublishResponse,
+    MediaPublishRequest, MediaPublishResponse, MutePublishRequest, MutePublishResponse,
+    ObjectFetchResponse, ObjectPublishRequest, ObjectPublishResponse, PolicyConfigRequest,
+    PolicyConfigResponse, PolicyListsResponse, PolicySetRequest, PolicySetResponse,
+    PolicySummaryResponse, PollPublishRequest, PollPublishResponse, PollVotePublishRequest,
+    PollVotePublishResponse, PostPublishRequest, PostPublishResponse, ProfilePublishRequest,
+    ProfilePublishResponse, PublishRequest, PublishResponse, ReactionPublishRequest,
+    ReactionPublishResponse, RepostPublishRequest, RepostPublishResponse, ShardFetchResponse,
+    StatusResponse, SubscribeRequest, SubscribeResponse, SubscriptionListResponse,
+    UnsubscribeRequest, UnsubscribeResponse, ZapPublishRequest, ZapPublishResponse,
 };
 use crate::discovery::{
     build_self_contact, handle_discovery_announce, handle_discovery_gossip,
@@ -91,6 +91,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/policy/unblock", post(policy_unblock))
         .route("/contact", get(contact_list))
         .route("/contact", post(contact_import))
+        .route("/contact/delete", post(contact_delete))
         .route("/contact/self", get(contact_self))
         .route("/discovery/announce", post(discovery_announce))
         .route("/discovery/lookup", post(discovery_lookup))
@@ -1253,9 +1254,30 @@ async fn contact_import(
     if request.contact.pubkey_hex.len() != 64 {
         return bad_request("invalid_pubkey", "pubkey invalid");
     }
-    state.node.add_contact(request.contact.clone());
-    state.protocol.add_contact(&request.contact).await;
+    state.node.set_contact(request.contact);
+    let contacts = state.node.contacts();
+    state.protocol.sync_contacts(&contacts).await;
     Json(ContactImportResponse { imported: true }).into_response()
+}
+
+async fn contact_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ContactDeleteRequest>,
+) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let peer_id = request.peer_id.trim();
+    if peer_id.is_empty() {
+        return bad_request("invalid_peer_id", "peer id is empty");
+    }
+    let deleted = state.node.remove_contact(peer_id);
+    if deleted {
+        let contacts = state.node.contacts();
+        state.protocol.sync_contacts(&contacts).await;
+    }
+    Json(ContactDeleteResponse { deleted }).into_response()
 }
 
 async fn discovery_announce(
@@ -1831,6 +1853,140 @@ mod tests {
             .unwrap_or_else(|_| Bytes::new());
         let parsed: ContactListResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.contacts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn contact_import_replaces_existing_contact() {
+        let app = build_router(test_state());
+        let original = ContactBundle {
+            peer_id: "peer-a".to_string(),
+            ws_url: Some("ws://127.0.0.1:9001/ws".to_string()),
+            quic_addr: Some("127.0.0.1:9000".to_string()),
+            pubkey_hex: "11".repeat(32),
+            rpc_url: None,
+            lan_addrs: Vec::new(),
+        };
+        let body = serde_json::to_string(&ContactImportRequest { contact: original }).unwrap();
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/contact")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let updated = ContactBundle {
+            peer_id: "peer-a".to_string(),
+            ws_url: Some("ws://example.com/ws".to_string()),
+            quic_addr: Some("198.51.100.4:5000".to_string()),
+            pubkey_hex: "22".repeat(32),
+            rpc_url: Some("https://example.com/rpc".to_string()),
+            lan_addrs: vec!["192.168.1.10:5000".to_string()],
+        };
+        let body = serde_json::to_string(&ContactImportRequest { contact: updated }).unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/contact")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/contact")
+                    .header("x-veil-token", "secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: ContactListResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.contacts.len(), 1);
+        let only = &parsed.contacts[0];
+        assert_eq!(only.peer_id, "peer-a");
+        assert_eq!(only.ws_url.as_deref(), Some("ws://example.com/ws"));
+        assert_eq!(only.quic_addr.as_deref(), Some("198.51.100.4:5000"));
+        assert_eq!(only.pubkey_hex, "22".repeat(32));
+    }
+
+    #[tokio::test]
+    async fn contact_delete_removes_contact() {
+        let app = build_router(test_state());
+        let contact = ContactBundle {
+            peer_id: "peer-delete".to_string(),
+            ws_url: Some("ws://127.0.0.1:9001/ws".to_string()),
+            quic_addr: Some("127.0.0.1:9000".to_string()),
+            pubkey_hex: "33".repeat(32),
+            rpc_url: None,
+            lan_addrs: Vec::new(),
+        };
+        let body = serde_json::to_string(&ContactImportRequest { contact }).unwrap();
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/contact")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = serde_json::to_string(&ContactDeleteRequest {
+            peer_id: "peer-delete".to_string(),
+        })
+        .unwrap();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/contact/delete")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/contact")
+                    .header("x-veil-token", "secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: ContactListResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(parsed.contacts.is_empty());
     }
 
     #[tokio::test]

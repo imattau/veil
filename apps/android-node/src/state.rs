@@ -523,6 +523,42 @@ impl NodeState {
         self.persist_policy_locked(&mut inner);
     }
 
+    pub fn set_contact(&self, contact: ContactBundle) {
+        let mut inner = self.inner.lock().expect("state lock");
+        if let Some(existing) = inner
+            .contacts
+            .iter_mut()
+            .find(|existing| existing.peer_id == contact.peer_id)
+        {
+            *existing = contact.clone();
+        } else {
+            inner.contacts.push(contact.clone());
+        }
+        inner.discovery.upsert(contact);
+        self.persist_policy_locked(&mut inner);
+    }
+
+    pub fn remove_contact(&self, peer_id: &str) -> bool {
+        let mut inner = self.inner.lock().expect("state lock");
+        let before = inner.contacts.len();
+        inner.contacts.retain(|contact| contact.peer_id != peer_id);
+        let removed = inner.contacts.len() != before;
+        if removed {
+            // Rebuild discovery table from remaining contacts to ensure removed peers
+            // are no longer served by local lookup.
+            let table = std::sync::Arc::new(std::sync::Mutex::new(DiscoveryTable::default()));
+            {
+                let mut guard = table.lock().expect("discovery lock");
+                for contact in &inner.contacts {
+                    guard.upsert(contact.clone());
+                }
+            }
+            inner.discovery = DiscoveryStateHandle::new(table);
+            self.persist_policy_locked(&mut inner);
+        }
+        removed
+    }
+
     pub fn discovery_lookup_peer(&self, peer_id: &str, limit: usize) -> Vec<ContactBundle> {
         let inner = self.inner.lock().expect("state lock");
         inner.discovery.lookup_peer(peer_id, limit)
