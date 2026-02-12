@@ -14,7 +14,7 @@ use crate::api::{
 };
 use crate::discovery::{DiscoveryStateHandle, DiscoveryTable};
 use crate::state_store::{IdentityRecord, QueueItem, StateStore, StoreSnapshot};
-use veil_crypto::signing::{Ed25519Signer, Signer};
+use veil_crypto::signing::{NostrSigner, Signer};
 use veil_node::policy::{
     parse_endorsement_payload, EndorsementIngestResult, LocalWotPolicy, WotConfig, WotSummary,
 };
@@ -59,8 +59,8 @@ pub struct NodeIdentity {
 }
 
 impl NodeIdentity {
-    pub fn signer(&self) -> Ed25519Signer {
-        Ed25519Signer::from_secret(self.secret_key)
+    pub fn signer(&self) -> NostrSigner {
+        NostrSigner::from_secret(self.secret_key).expect("stored identity secret must be valid")
     }
 
     pub fn public_key_hex(&self) -> String {
@@ -384,7 +384,8 @@ impl NodeState {
         }
         let mut secret_key = [0u8; 32];
         secret_key.copy_from_slice(&sec_bytes);
-        let signer = Ed25519Signer::from_secret(secret_key);
+        let signer = NostrSigner::from_secret(secret_key)
+            .map_err(|_| "secret key is not a valid Nostr secp256k1 secret".to_string())?;
         let public_key = signer.public_key();
         let identity = NodeIdentity {
             public_key,
@@ -454,6 +455,31 @@ impl NodeState {
     pub fn wot_policy(&self) -> LocalWotPolicy {
         let inner = self.inner.lock().expect("state lock");
         inner.wot_policy.clone()
+    }
+
+    pub fn policy_lists(&self) -> crate::api::PolicyListsResponse {
+        let inner = self.inner.lock().expect("state lock");
+        let json = inner.wot_policy.export_json().ok();
+        let Some(json) = json else {
+            return crate::api::PolicyListsResponse::default();
+        };
+        let parsed = serde_json::from_str::<PolicyJsonLists>(&json).ok();
+        let Some(parsed) = parsed else {
+            return crate::api::PolicyListsResponse::default();
+        };
+        crate::api::PolicyListsResponse {
+            trusted_pubkeys: parsed
+                .trusted
+                .iter()
+                .map(|value| hex_encode(value))
+                .collect(),
+            muted_pubkeys: parsed.muted.iter().map(|value| hex_encode(value)).collect(),
+            blocked_pubkeys: parsed
+                .blocked
+                .iter()
+                .map(|value| hex_encode(value))
+                .collect(),
+        }
     }
 
     pub fn contacts(&self) -> Vec<ContactBundle> {
@@ -786,6 +812,16 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct PolicyJsonLists {
+    #[serde(default)]
+    trusted: Vec<[u8; 32]>,
+    #[serde(default)]
+    muted: Vec<[u8; 32]>,
+    #[serde(default)]
+    blocked: Vec<[u8; 32]>,
+}
+
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -806,7 +842,7 @@ fn parse_identity(record: &IdentityRecord) -> Option<NodeIdentity> {
     let mut secret_key = [0u8; 32];
     public_key.copy_from_slice(&pub_bytes);
     secret_key.copy_from_slice(&sec_bytes);
-    let derived = Ed25519Signer::from_secret(secret_key).public_key();
+    let derived = NostrSigner::from_secret(secret_key).ok()?.public_key();
     if derived != public_key {
         return None;
     }
@@ -817,9 +853,13 @@ fn parse_identity(record: &IdentityRecord) -> Option<NodeIdentity> {
 }
 
 fn generate_identity() -> NodeIdentity {
-    let mut secret_key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut secret_key);
-    let signer = Ed25519Signer::from_secret(secret_key);
+    let (secret_key, signer) = loop {
+        let mut secret_key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut secret_key);
+        if let Ok(signer) = NostrSigner::from_secret(secret_key) {
+            break (secret_key, signer);
+        }
+    };
     let public_key = signer.public_key();
     NodeIdentity {
         public_key,

@@ -9,7 +9,11 @@ class ProfileView extends StatefulWidget {
   final NodeService service;
   final SocialController controller;
 
-  const ProfileView({super.key, required this.service, required this.controller});
+  const ProfileView({
+    super.key,
+    required this.service,
+    required this.controller,
+  });
 
   @override
   State<ProfileView> createState() => _ProfileViewState();
@@ -30,13 +34,19 @@ class _ProfileViewState extends State<ProfileView> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text('Public Key:'),
-            SelectableText(result['public_key_hex'],
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+            SelectableText(
+              result['public_key_hex'],
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
             const SizedBox(height: 12),
-            const Text('Secret Key (KEEP PRIVATE!):',
-                style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
-            SelectableText(result['secret_key_hex'],
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+            const Text(
+              'Secret Key (KEEP PRIVATE!):',
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+            ),
+            SelectableText(
+              result['secret_key_hex'],
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
           ],
         ),
         actions: [
@@ -87,11 +97,13 @@ class _ProfileViewState extends State<ProfileView> {
       builder: (context, _) {
         final pubkey = widget.service.state.identityHex ?? 'Unknown';
         final profile = widget.service.profiles[pubkey];
-        final displayName = profile?.data['display_name'] as String? ?? 'Set Name';
-        final bio = profile?.data['bio'] as String? ?? 'Add a bio to your profile';
+        final displayName =
+            profile?.data['display_name'] as String? ?? 'Set Name';
+        final bio =
+            profile?.data['bio'] as String? ?? 'Add a bio to your profile';
         final avatarRoot = profile?.data['avatar_media_root'] as String?;
 
-        final shortPubkey = pubkey.length > 16 
+        final shortPubkey = pubkey.length > 16
             ? '${pubkey.substring(0, 8)}...${pubkey.substring(pubkey.length - 8)}'
             : pubkey;
 
@@ -104,19 +116,30 @@ class _ProfileViewState extends State<ProfileView> {
                 child: CircleAvatar(
                   radius: 50,
                   backgroundColor: VeilTheme.surface,
-                  backgroundImage: avatarRoot != null && widget.controller.imageCache.containsKey(avatarRoot)
-                    ? MemoryImage(widget.controller.imageCache[avatarRoot]!)
-                    : null,
-                  child: (avatarRoot == null || !widget.controller.imageCache.containsKey(avatarRoot))
-                    ? const Icon(Icons.person, size: 50, color: VeilTheme.accent)
-                    : null,
+                  backgroundImage:
+                      avatarRoot != null &&
+                          widget.controller.imageCache.containsKey(avatarRoot)
+                      ? MemoryImage(widget.controller.imageCache[avatarRoot]!)
+                      : null,
+                  child:
+                      (avatarRoot == null ||
+                          !widget.controller.imageCache.containsKey(avatarRoot))
+                      ? const Icon(
+                          Icons.person,
+                          size: 50,
+                          color: VeilTheme.accent,
+                        )
+                      : null,
                 ),
               ),
               const SizedBox(height: 16),
               Center(
                 child: Text(
                   displayName,
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
               Center(
@@ -137,10 +160,16 @@ class _ProfileViewState extends State<ProfileView> {
                         Clipboard.setData(ClipboardData(text: pubkey));
                         HapticFeedback.mediumImpact();
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Public Key copied to clipboard')),
+                          const SnackBar(
+                            content: Text('Public Key copied to clipboard'),
+                          ),
                         );
                       },
-                      child: const Icon(Icons.copy, size: 14, color: VeilTheme.accent),
+                      child: const Icon(
+                        Icons.copy,
+                        size: 14,
+                        color: VeilTheme.accent,
+                      ),
                     ),
                   ],
                 ),
@@ -150,7 +179,10 @@ class _ProfileViewState extends State<ProfileView> {
                 child: Text(
                   bio,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 14, color: VeilTheme.textSecondary),
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: VeilTheme.textSecondary,
+                  ),
                 ),
               ),
               const SizedBox(height: 32),
@@ -164,7 +196,10 @@ class _ProfileViewState extends State<ProfileView> {
                     onTap: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (context) => ProfileEditView(service: widget.service)),
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              ProfileEditView(service: widget.service),
+                        ),
                       );
                     },
                   ),
@@ -173,6 +208,16 @@ class _ProfileViewState extends State<ProfileView> {
                     title: 'Lightning Address',
                     subtitle: 'Configure your zap address',
                     onTap: () {},
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              _ProfileSection(
+                title: 'Connections',
+                children: [
+                  _ConnectionsCard(
+                    service: widget.service,
+                    controller: widget.controller,
                   ),
                 ],
               ),
@@ -228,6 +273,221 @@ class _ProfileSection extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         ...children,
+      ],
+    );
+  }
+}
+
+class _ConnectionsCard extends StatefulWidget {
+  final NodeService service;
+  final SocialController controller;
+
+  const _ConnectionsCard({required this.service, required this.controller});
+
+  @override
+  State<_ConnectionsCard> createState() => _ConnectionsCardState();
+}
+
+class _ConnectionsCardState extends State<_ConnectionsCard> {
+  final TextEditingController _pubkeyController = TextEditingController();
+  String _selectedAction = 'follow';
+
+  @override
+  void dispose() {
+    _pubkeyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _applyAction() async {
+    final pubkey = _pubkeyController.text.trim().toLowerCase();
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(pubkey)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid 64-char hex pubkey')),
+      );
+      return;
+    }
+    switch (_selectedAction) {
+      case 'follow':
+        await widget.service.followPubkey(pubkey);
+        break;
+      case 'unfollow':
+        await widget.service.unfollowPubkey(pubkey);
+        break;
+      case 'mute':
+        await widget.service.mutePubkey(pubkey);
+        break;
+      case 'unmute':
+        await widget.service.unmutePubkey(pubkey);
+        break;
+      case 'block':
+        await widget.service.blockPubkey(pubkey);
+        break;
+      case 'unblock':
+        await widget.service.unblockPubkey(pubkey);
+        break;
+    }
+    if (!mounted) return;
+    final err = widget.service.state.lastError;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          err ??
+              switch (_selectedAction) {
+                'follow' => 'Followed',
+                'unfollow' => 'Unfollowed',
+                'mute' => 'Muted',
+                'unmute' => 'Unmuted',
+                'block' => 'Blocked',
+                _ => 'Unblocked',
+              },
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final following = widget.controller.followedPubkeys.toList()..sort();
+    final muted = widget.controller.mutedPubkeys.toList()..sort();
+    final blocked = widget.controller.blockedPubkeys.toList()..sort();
+
+    return Card(
+      elevation: 0,
+      color: VeilTheme.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Manage follow/mute/block',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _pubkeyController,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              decoration: const InputDecoration(
+                labelText: 'Pubkey (hex)',
+                hintText: '64 hex characters',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: _selectedAction,
+                    items: const [
+                      DropdownMenuItem(value: 'follow', child: Text('Follow')),
+                      DropdownMenuItem(
+                        value: 'unfollow',
+                        child: Text('Unfollow'),
+                      ),
+                      DropdownMenuItem(value: 'mute', child: Text('Mute')),
+                      DropdownMenuItem(value: 'unmute', child: Text('Unmute')),
+                      DropdownMenuItem(value: 'block', child: Text('Block')),
+                      DropdownMenuItem(
+                        value: 'unblock',
+                        child: Text('Unblock'),
+                      ),
+                    ],
+                    onChanged: widget.service.state.busy
+                        ? null
+                        : (value) {
+                            if (value != null) {
+                              setState(() => _selectedAction = value);
+                            }
+                          },
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                ElevatedButton(
+                  onPressed: widget.service.state.busy ? null : _applyAction,
+                  child: const Text('Apply'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            _PubkeyList(
+              title: 'Following',
+              pubkeys: following,
+              onRemove: (value) => widget.service.unfollowPubkey(value),
+            ),
+            const SizedBox(height: 8),
+            _PubkeyList(
+              title: 'Muted',
+              pubkeys: muted,
+              onRemove: (value) => widget.service.unmutePubkey(value),
+            ),
+            const SizedBox(height: 8),
+            _PubkeyList(
+              title: 'Blocked',
+              pubkeys: blocked,
+              onRemove: (value) => widget.service.unblockPubkey(value),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PubkeyList extends StatelessWidget {
+  final String title;
+  final List<String> pubkeys;
+  final Future<void> Function(String pubkey) onRemove;
+
+  const _PubkeyList({
+    required this.title,
+    required this.pubkeys,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        if (pubkeys.isEmpty)
+          const Text(
+            'None',
+            style: TextStyle(color: VeilTheme.textSecondary, fontSize: 12),
+          )
+        else
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: pubkeys
+                .map(
+                  (value) => InputChip(
+                    label: Text(
+                      value.length > 12
+                          ? '${value.substring(0, 12)}...'
+                          : value,
+                      style: const TextStyle(fontFamily: 'monospace'),
+                    ),
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: value));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Pubkey copied')),
+                      );
+                    },
+                    onDeleted: () async => await onRemove(value),
+                  ),
+                )
+                .toList(),
+          ),
       ],
     );
   }

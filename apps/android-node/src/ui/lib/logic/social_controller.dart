@@ -111,6 +111,21 @@ class SocialController extends ChangeNotifier {
     return pubkey.length >= 8 ? pubkey.substring(0, 8) : pubkey;
   }
 
+  Set<String> get followedPubkeys =>
+      nodeService.policyLists['trusted_pubkeys']?.toSet() ?? const {};
+
+  Set<String> get mutedPubkeys =>
+      nodeService.policyLists['muted_pubkeys']?.toSet() ?? const {};
+
+  Set<String> get blockedPubkeys =>
+      nodeService.policyLists['blocked_pubkeys']?.toSet() ?? const {};
+
+  bool isFollowed(String pubkey) => followedPubkeys.contains(pubkey);
+
+  bool isMuted(String pubkey) => mutedPubkeys.contains(pubkey);
+
+  bool isBlocked(String pubkey) => blockedPubkeys.contains(pubkey);
+
   Future<void> submitReply(
     String text,
     String parentRoot, {
@@ -145,6 +160,30 @@ class SocialController extends ChangeNotifier {
       comment: comment,
       channelId: channelId ?? 'general',
     );
+  }
+
+  Future<void> followUser(String pubkey, {String? channelId}) {
+    return nodeService.followPubkey(pubkey, channelId: channelId ?? 'general');
+  }
+
+  Future<void> unfollowUser(String pubkey) {
+    return nodeService.unfollowPubkey(pubkey);
+  }
+
+  Future<void> muteUser(String pubkey, {String? channelId}) {
+    return nodeService.mutePubkey(pubkey, channelId: channelId ?? 'general');
+  }
+
+  Future<void> unmuteUser(String pubkey) {
+    return nodeService.unmutePubkey(pubkey);
+  }
+
+  Future<void> blockUser(String pubkey, {String? channelId}) {
+    return nodeService.blockPubkey(pubkey, channelId: channelId ?? 'general');
+  }
+
+  Future<void> unblockUser(String pubkey) {
+    return nodeService.unblockPubkey(pubkey);
   }
 
   @override

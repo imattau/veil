@@ -24,12 +24,18 @@ class NodeService extends ChangeNotifier {
   final List<NodeEvent> _feedEvents = [];
   final Map<String, NodeEvent> _profiles = {};
   final Map<String, String> _decryptedPayloads = {};
+  Map<String, List<String>> _policyLists = const {
+    'trusted_pubkeys': [],
+    'muted_pubkeys': [],
+    'blocked_pubkeys': [],
+  };
 
   List<NodeEvent> get events => List.unmodifiable(_events);
   List<NodeEvent> get feedEvents => List.unmodifiable(_feedEvents);
   Map<String, NodeEvent> get profiles => Map.unmodifiable(_profiles);
   Map<String, String> get decryptedPayloads =>
       Map.unmodifiable(_decryptedPayloads);
+  Map<String, List<String>> get policyLists => Map.unmodifiable(_policyLists);
 
   NodeState get state => _state;
 
@@ -171,7 +177,12 @@ class NodeService extends ChangeNotifier {
       final identity = await _getJson('/identity');
       final status = await _getJson('/status');
       final policy = await _getJson('/policy');
+      final policyLists = await _getJson('/policy/lists');
       final subs = await _getJson('/subscriptions');
+
+      if (policyLists != null) {
+        _policyLists = _parsePolicyLists(policyLists);
+      }
 
       _setState(
         _state.copyWith(
@@ -333,7 +344,9 @@ class NodeService extends ChangeNotifier {
     if (_state.busy) return;
     final pollRootBytes = _hexRootToBytes(pollRoot);
     if (pollRootBytes == null) {
-      _setState(_state.copyWith(lastError: 'Poll vote failed: invalid poll root'));
+      _setState(
+        _state.copyWith(lastError: 'Poll vote failed: invalid poll root'),
+      );
       return;
     }
     _setState(_state.copyWith(busy: true));
@@ -447,7 +460,9 @@ class NodeService extends ChangeNotifier {
     if (_state.busy) return;
     final targetRootBytes = _hexRootToBytes(targetRoot);
     if (targetRootBytes == null) {
-      _setState(_state.copyWith(lastError: 'Reaction failed: invalid target root'));
+      _setState(
+        _state.copyWith(lastError: 'Reaction failed: invalid target root'),
+      );
       return;
     }
     _setState(_state.copyWith(busy: true));
@@ -491,7 +506,9 @@ class NodeService extends ChangeNotifier {
     if (_state.busy) return;
     final targetRootBytes = _hexRootToBytes(targetRoot);
     if (targetRootBytes == null) {
-      _setState(_state.copyWith(lastError: 'Boost failed: invalid target root'));
+      _setState(
+        _state.copyWith(lastError: 'Boost failed: invalid target root'),
+      );
       return;
     }
     _setState(_state.copyWith(busy: true));
@@ -783,6 +800,145 @@ class NodeService extends ChangeNotifier {
     }
   }
 
+  Future<void> followPubkey(
+    String followeePubkeyHex, {
+    String channelId = 'general',
+    int namespace = 32,
+  }) async {
+    final value = followeePubkeyHex.trim().toLowerCase();
+    if (!_isValidPubkeyHex(value)) {
+      _setState(_state.copyWith(lastError: 'Follow failed: invalid pubkey'));
+      return;
+    }
+    if (_state.busy) return;
+    _setState(_state.copyWith(busy: true));
+    try {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final bundle = {
+        'meta': {'version': 1, 'created_at': now},
+        'channel_id': channelId,
+        'follower_pubkey_hex': _state.identityHex ?? '',
+        'followee_pubkey_hex': value,
+        'at_step': now,
+      };
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/follow'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(lastError: 'Follow failed: ${response.statusCode}'),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Follow failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+      await refresh();
+    }
+  }
+
+  Future<void> unfollowPubkey(String pubkeyHex) async {
+    await updatePolicyAction('untrust', pubkeyHex);
+  }
+
+  Future<void> mutePubkey(
+    String mutedPubkeyHex, {
+    String channelId = 'general',
+    String? reason,
+    int namespace = 32,
+  }) async {
+    final value = mutedPubkeyHex.trim().toLowerCase();
+    if (!_isValidPubkeyHex(value)) {
+      _setState(_state.copyWith(lastError: 'Mute failed: invalid pubkey'));
+      return;
+    }
+    if (_state.busy) return;
+    _setState(_state.copyWith(busy: true));
+    try {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final bundle = {
+        'meta': {'version': 1, 'created_at': now},
+        'channel_id': channelId,
+        'muter_pubkey_hex': _state.identityHex ?? '',
+        'muted_pubkey_hex': value,
+        'reason': reason,
+        'at_step': now,
+      };
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/mute'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(lastError: 'Mute failed: ${response.statusCode}'),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Mute failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+      await refresh();
+    }
+  }
+
+  Future<void> unmutePubkey(String pubkeyHex) async {
+    await updatePolicyAction('unmute', pubkeyHex);
+  }
+
+  Future<void> blockPubkey(
+    String blockedPubkeyHex, {
+    String channelId = 'general',
+    String? reason,
+    int namespace = 32,
+  }) async {
+    final value = blockedPubkeyHex.trim().toLowerCase();
+    if (!_isValidPubkeyHex(value)) {
+      _setState(_state.copyWith(lastError: 'Block failed: invalid pubkey'));
+      return;
+    }
+    if (_state.busy) return;
+    _setState(_state.copyWith(busy: true));
+    try {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final bundle = {
+        'meta': {'version': 1, 'created_at': now},
+        'channel_id': channelId,
+        'blocker_pubkey_hex': _state.identityHex ?? '',
+        'blocked_pubkey_hex': value,
+        'reason': reason,
+        'at_step': now,
+      };
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/block'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
+          )
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(lastError: 'Block failed: ${response.statusCode}'),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Block failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+      await refresh();
+    }
+  }
+
+  Future<void> unblockPubkey(String pubkeyHex) async {
+    await updatePolicyAction('unblock', pubkeyHex);
+  }
+
   Future<Map<String, dynamic>?> explainPolicy(String pubkeyHex) async {
     if (pubkeyHex.trim().isEmpty) {
       _setState(_state.copyWith(lastError: 'Pubkey is empty'));
@@ -1044,6 +1200,30 @@ class NodeService extends ChangeNotifier {
       bytes.add(parsed);
     }
     return bytes;
+  }
+
+  bool _isValidPubkeyHex(String value) {
+    return RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(value);
+  }
+
+  Map<String, List<String>> _parsePolicyLists(Map<String, dynamic> json) {
+    List<String> readList(String key) {
+      final raw = json[key];
+      if (raw is! List) return const [];
+      return raw
+          .whereType<String>()
+          .map((entry) => entry.trim().toLowerCase())
+          .where(_isValidPubkeyHex)
+          .toSet()
+          .toList()
+        ..sort();
+    }
+
+    return {
+      'trusted_pubkeys': readList('trusted_pubkeys'),
+      'muted_pubkeys': readList('muted_pubkeys'),
+      'blocked_pubkeys': readList('blocked_pubkeys'),
+    };
   }
 
   List<int> _pseudoRootFromText(String text) {

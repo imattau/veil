@@ -25,6 +25,8 @@ class VeilPostCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pubkey = event.authorPubkey ?? 'unknown';
+    final selfPubkey = controller.nodeService.state.identityHex;
+    final isSelf = selfPubkey != null && selfPubkey == pubkey;
     final displayName = controller.getDisplayName(pubkey);
     final text = event.isRepost ? event.repostComment : event.postText;
     final time = event.createdAt != null
@@ -79,6 +81,38 @@ class VeilPostCard extends StatelessWidget {
                       ],
                     ),
                   ),
+                  if (!isSelf && pubkey != 'unknown')
+                    PopupMenuButton<_AuthorAction>(
+                      tooltip: 'Author actions',
+                      icon: const Icon(Icons.more_horiz),
+                      onSelected: (action) =>
+                          _applyAuthorAction(context, action, pubkey),
+                      itemBuilder: (context) {
+                        final followed = controller.isFollowed(pubkey);
+                        final muted = controller.isMuted(pubkey);
+                        final blocked = controller.isBlocked(pubkey);
+                        return [
+                          PopupMenuItem(
+                            value: followed
+                                ? _AuthorAction.unfollow
+                                : _AuthorAction.follow,
+                            child: Text(followed ? 'Unfollow' : 'Follow'),
+                          ),
+                          PopupMenuItem(
+                            value: muted
+                                ? _AuthorAction.unmute
+                                : _AuthorAction.mute,
+                            child: Text(muted ? 'Unmute' : 'Mute'),
+                          ),
+                          PopupMenuItem(
+                            value: blocked
+                                ? _AuthorAction.unblock
+                                : _AuthorAction.block,
+                            child: Text(blocked ? 'Unblock' : 'Block'),
+                          ),
+                        ];
+                      },
+                    ),
                   if (time != null)
                     Text(
                       _formatTime(time),
@@ -119,6 +153,50 @@ class VeilPostCard extends StatelessWidget {
     );
   }
 
+  Future<void> _applyAuthorAction(
+    BuildContext context,
+    _AuthorAction action,
+    String pubkey,
+  ) async {
+    switch (action) {
+      case _AuthorAction.follow:
+        await controller.followUser(pubkey, channelId: event.channelId);
+        break;
+      case _AuthorAction.unfollow:
+        await controller.unfollowUser(pubkey);
+        break;
+      case _AuthorAction.mute:
+        await controller.muteUser(pubkey, channelId: event.channelId);
+        break;
+      case _AuthorAction.unmute:
+        await controller.unmuteUser(pubkey);
+        break;
+      case _AuthorAction.block:
+        await controller.blockUser(pubkey, channelId: event.channelId);
+        break;
+      case _AuthorAction.unblock:
+        await controller.unblockUser(pubkey);
+        break;
+    }
+    if (!context.mounted) return;
+    final err = controller.nodeService.state.lastError;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          err ??
+              switch (action) {
+                _AuthorAction.follow => 'Followed',
+                _AuthorAction.unfollow => 'Unfollowed',
+                _AuthorAction.mute => 'Muted',
+                _AuthorAction.unmute => 'Unmuted',
+                _AuthorAction.block => 'Blocked',
+                _AuthorAction.unblock => 'Unblocked',
+              },
+        ),
+      ),
+    );
+  }
+
   ImageProvider? _getAvatarImage(String pubkey) {
     final profile = controller.nodeService.profiles[pubkey];
     final root = profile?.data['avatar_media_root'] as String?;
@@ -135,6 +213,8 @@ class VeilPostCard extends StatelessWidget {
     return '${diff.inDays}d';
   }
 }
+
+enum _AuthorAction { follow, unfollow, mute, unmute, block, unblock }
 
 class _PostMediaGallery extends StatelessWidget {
   final List<String> mediaRoots;

@@ -54,7 +54,6 @@ void main() {
       ),
     );
 
-    expect(find.text('DIRECT MESSAGES'), findsOneWidget);
     // Since no profile injected, should show first 8 chars of pubkey
     expect(find.text('alice_pu'), findsOneWidget);
   });

@@ -93,33 +93,40 @@ void main() {
 
   testWidgets('NewMessageDialog handles input', (WidgetTester tester) async {
     final service = NodeService();
+    service.testSetIdentity('me');
+    final socialController = SocialController(service);
     final controller = MessagingController(service);
+
+    service.testInjectEvent({
+      'seq': 1,
+      'event': 'feed_bundle',
+      'data': {
+        'kind': 'direct_message',
+        'author_pubkey_hex': 'alice_pubkey',
+        'recipient_pubkey_hex': 'me',
+        'ciphertext_root': 'root1',
+      }
+    });
 
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: NewMessageDialog(controller: controller),
+          body: NewMessageDialog(
+            controller: controller,
+            socialController: socialController,
+          ),
         ),
       ),
     );
 
     expect(find.text('New Message'), findsOneWidget);
-    
-    // Find text fields by their label text
-    final pubkeyField = find.ancestor(
-      of: find.text('Recipient Public Key'),
-      matching: find.byType(TextField),
-    );
-    final messageField = find.ancestor(
-      of: find.text('Message'),
-      matching: find.byType(TextField),
-    );
+    expect(find.text('Find contact'), findsOneWidget);
+    expect(find.text('Suggested'), findsOneWidget);
+    expect(find.text('alice_pu'), findsOneWidget);
 
-    await tester.enterText(pubkeyField, 'pub123');
-    await tester.enterText(messageField, 'Hello Alice');
+    await tester.enterText(find.byType(TextField), 'alice');
     await tester.pump();
 
-    expect(find.text('pub123'), findsOneWidget);
-    expect(find.text('Hello Alice'), findsOneWidget);
+    expect(find.text('alice_pu'), findsOneWidget);
   });
 }

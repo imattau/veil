@@ -417,6 +417,13 @@ pub struct PolicySetResponse {
     pub applied: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PolicyListsResponse {
+    pub trusted_pubkeys: Vec<String>,
+    pub muted_pubkeys: Vec<String>,
+    pub blocked_pubkeys: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContactBundle {
     pub peer_id: String,

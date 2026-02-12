@@ -22,13 +22,14 @@ use crate::api::{
     IdentityRotateResponse, ListPublishRequest, ListPublishResponse, LiveStatusPublishRequest,
     LiveStatusPublishResponse, MediaPublishRequest, MediaPublishResponse, MutePublishRequest,
     MutePublishResponse, ObjectFetchResponse, ObjectPublishRequest, ObjectPublishResponse,
-    PolicyConfigRequest, PolicyConfigResponse, PolicySetRequest, PolicySetResponse,
-    PolicySummaryResponse, PollPublishRequest, PollPublishResponse, PollVotePublishRequest,
-    PollVotePublishResponse, PostPublishRequest, PostPublishResponse, ProfilePublishRequest,
-    ProfilePublishResponse, PublishRequest, PublishResponse, ReactionPublishRequest,
-    ReactionPublishResponse, RepostPublishRequest, RepostPublishResponse, ShardFetchResponse,
-    StatusResponse, SubscribeRequest, SubscribeResponse, SubscriptionListResponse,
-    UnsubscribeRequest, UnsubscribeResponse, ZapPublishRequest, ZapPublishResponse,
+    PolicyConfigRequest, PolicyConfigResponse, PolicyListsResponse, PolicySetRequest,
+    PolicySetResponse, PolicySummaryResponse, PollPublishRequest, PollPublishResponse,
+    PollVotePublishRequest, PollVotePublishResponse, PostPublishRequest, PostPublishResponse,
+    ProfilePublishRequest, ProfilePublishResponse, PublishRequest, PublishResponse,
+    ReactionPublishRequest, ReactionPublishResponse, RepostPublishRequest, RepostPublishResponse,
+    ShardFetchResponse, StatusResponse, SubscribeRequest, SubscribeResponse,
+    SubscriptionListResponse, UnsubscribeRequest, UnsubscribeResponse, ZapPublishRequest,
+    ZapPublishResponse,
 };
 use crate::discovery::{
     build_self_contact, handle_discovery_announce, handle_discovery_gossip,
@@ -79,6 +80,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/subscribe", post(subscribe))
         .route("/unsubscribe", post(unsubscribe))
         .route("/policy", get(policy_summary))
+        .route("/policy/lists", get(policy_lists))
         .route("/policy/explain", post(policy_explain))
         .route("/policy/config", post(update_policy_config))
         .route("/policy/trust", post(policy_trust))
@@ -1060,6 +1062,19 @@ async fn policy_summary(State(state): State<AppState>, headers: HeaderMap) -> Re
     .into_response()
 }
 
+async fn policy_lists(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !authorized(&headers, &state.auth_token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let lists = state.node.policy_lists();
+    Json(PolicyListsResponse {
+        trusted_pubkeys: lists.trusted_pubkeys,
+        muted_pubkeys: lists.muted_pubkeys,
+        blocked_pubkeys: lists.blocked_pubkeys,
+    })
+    .into_response()
+}
+
 async fn policy_explain(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1702,6 +1717,55 @@ mod tests {
             .unwrap_or_else(|_| Bytes::new());
         let parsed: PolicySummaryResponse = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed.trusted, 1);
+    }
+
+    #[tokio::test]
+    async fn policy_lists_include_trusted_muted_and_blocked() {
+        let app = build_router(test_state());
+        let trusted = "aa".repeat(32);
+        let muted = "bb".repeat(32);
+        let blocked = "cc".repeat(32);
+
+        for (route, pubkey_hex) in [
+            ("/policy/trust", trusted.clone()),
+            ("/policy/mute", muted.clone()),
+            ("/policy/block", blocked.clone()),
+        ] {
+            let body = serde_json::to_string(&PolicySetRequest { pubkey_hex }).unwrap();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(route)
+                        .method("POST")
+                        .header("content-type", "application/json")
+                        .header("x-veil-token", "secret")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/policy/lists")
+                    .header("x-veil-token", "secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: PolicyListsResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(parsed.trusted_pubkeys.contains(&trusted));
+        assert!(parsed.muted_pubkeys.contains(&muted));
+        assert!(parsed.blocked_pubkeys.contains(&blocked));
     }
 
     #[tokio::test]

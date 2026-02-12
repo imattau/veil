@@ -79,46 +79,47 @@ impl QueueWorker {
                 worker.state.persist();
             }
             let details = worker.protocol.lane_details().await;
-            let any_connected = details.iter().any(|detail| detail.connected);
             worker.state.mark_lane_details(details);
-            if any_connected {
-                let now_ms = now_millis();
-                let batch = worker.state.take_next_queued_batch(
-                    now_ms,
-                    APP_MAX_BATCH_ITEMS,
-                    APP_TARGET_BATCH_SIZE_BYTES,
-                    APP_MAX_BATCHABLE_ITEM_BYTES,
-                );
-                if !batch.is_empty() {
-                    let mut executable = Vec::with_capacity(batch.len());
-                    let mut namespace = None;
-                    let mut payloads = Vec::with_capacity(batch.len());
-                    for item in batch {
-                        let attempts = worker.state.attempts_for(&item);
-                        if attempts > worker.config.max_attempts {
-                            worker.state.drop_item(&item);
-                            continue;
-                        }
-                        namespace = Some(item.namespace);
-                        payloads.push(queued_payload_to_bytes(&item.payload));
-                        executable.push(item);
+
+            // Do not gate outbound draining on "connected" snapshots. Some transports
+            // can make progress while reconnecting and stale snapshots can otherwise
+            // leave the queue permanently stalled.
+            let now_ms = now_millis();
+            let batch = worker.state.take_next_queued_batch(
+                now_ms,
+                APP_MAX_BATCH_ITEMS,
+                APP_TARGET_BATCH_SIZE_BYTES,
+                APP_MAX_BATCHABLE_ITEM_BYTES,
+            );
+            if !batch.is_empty() {
+                let mut executable = Vec::with_capacity(batch.len());
+                let mut namespace = None;
+                let mut payloads = Vec::with_capacity(batch.len());
+                for item in batch {
+                    let attempts = worker.state.attempts_for(&item);
+                    if attempts > worker.config.max_attempts {
+                        worker.state.drop_item(&item);
+                        continue;
                     }
-                    if !executable.is_empty() {
-                        let result = worker.protocol.publish_batch(payloads, namespace).await;
-                        if result.is_ok() {
-                            for item in &executable {
-                                worker.state.complete_success(item);
-                            }
-                        } else {
-                            for item in executable {
-                                let attempts = worker.state.attempts_for(&item);
-                                let backoff = retry_backoff_ms(
-                                    attempts,
-                                    worker.config.backoff_base_ms,
-                                    worker.config.backoff_max_ms,
-                                );
-                                worker.state.complete_failure(item, backoff);
-                            }
+                    namespace = Some(item.namespace);
+                    payloads.push(queued_payload_to_bytes(&item.payload));
+                    executable.push(item);
+                }
+                if !executable.is_empty() {
+                    let result = worker.protocol.publish_batch(payloads, namespace).await;
+                    if result.is_ok() {
+                        for item in &executable {
+                            worker.state.complete_success(item);
+                        }
+                    } else {
+                        for item in executable {
+                            let attempts = worker.state.attempts_for(&item);
+                            let backoff = retry_backoff_ms(
+                                attempts,
+                                worker.config.backoff_base_ms,
+                                worker.config.backoff_max_ms,
+                            );
+                            worker.state.complete_failure(item, backoff);
                         }
                     }
                 }
