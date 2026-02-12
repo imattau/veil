@@ -15,9 +15,6 @@ PROXY_HTTP_PORT=${PROXY_HTTP_PORT:-80}
 PROXY_HTTPS_PORT=${PROXY_HTTPS_PORT:-443}
 PROXY_WS_PORT=${PROXY_WS_PORT:-8080}
 PROXY_HEALTH_PORT=${PROXY_HEALTH_PORT:-9090}
-PROXY_HEALTH_USER=${PROXY_HEALTH_USER:-veil-health}
-PROXY_HEALTH_PASS=${PROXY_HEALTH_PASS:-}
-PROXY_HEALTH_HTPASSWD=${PROXY_HEALTH_HTPASSWD:-/etc/nginx/veil-vps-node.htpasswd}
 
 NGINX_SITE_PATH=${NGINX_SITE_PATH:-/etc/nginx/sites-available/veil-vps-node.conf}
 NGINX_SITE_LINK=${NGINX_SITE_LINK:-/etc/nginx/sites-enabled/veil-vps-node.conf}
@@ -32,18 +29,6 @@ env_file_value() {
     return 1
   fi
   grep "^${key}=" "$ENV_FILE" | tail -n 1 | cut -d= -f2-
-}
-
-random_string() {
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 12
-    return
-  fi
-  if [[ -r /dev/urandom ]]; then
-    head -c 18 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 16
-    return
-  fi
-  echo "veilhealth$(date +%s)"
 }
 
 if [[ "${EUID}" -ne 0 ]]; then
@@ -309,9 +294,6 @@ set_env_var() {
 }
 
 HOSTNAME_FQDN=$(hostname -f 2>/dev/null || hostname)
-if [[ -z "$PROXY_HEALTH_PASS" ]]; then
-  PROXY_HEALTH_PASS=$(random_string)
-fi
 set_env_var "VEIL_VPS_STATE_PATH" "${PREFIX}/data/node_state.cbor"
 set_env_var "VEIL_VPS_NODE_KEY_PATH" "${PREFIX}/data/node_identity.key"
 set_env_var "VEIL_VPS_QUIC_CERT_PATH" "${PREFIX}/data/quic_cert.der"
@@ -339,8 +321,6 @@ set_env_var "VEIL_VPS_SNAPSHOT_SECS" "60"
 set_env_var "VEIL_VPS_TICK_MS" "50"
 set_env_var "VEIL_VPS_HEALTH_BIND" "127.0.0.1"
 set_env_var "VEIL_VPS_HEALTH_PORT" "${PROXY_HEALTH_PORT}"
-set_env_var "PROXY_HEALTH_USER" "${PROXY_HEALTH_USER}"
-set_env_var "PROXY_HEALTH_PASS" "${PROXY_HEALTH_PASS}"
 set_env_var "PROXY_DOMAIN" "${PROXY_DOMAIN}"
 set_env_var "VEIL_VPS_OPEN_RELAY" "0"
 set_env_var "VEIL_VPS_BLOCKED_PEERS" ""
@@ -381,15 +361,9 @@ if [[ -d apps/veil-vps-node/web ]]; then
       quic_cert_b64=$(base64 -w0 "${quic_cert_path}" 2>/dev/null || base64 "${quic_cert_path}" | tr -d '\n')
     fi
   fi
-  health_user_js=${PROXY_HEALTH_USER//\\/\\\\}
-  health_user_js=${health_user_js//\"/\\\"}
-  health_pass_js=${PROXY_HEALTH_PASS//\\/\\\\}
-  health_pass_js=${health_pass_js//\"/\\\"}
   {
     echo "window.VEIL_VPS_QUIC_PORT = ${quic_port:-5000};"
     echo "window.VEIL_VPS_QUIC_CERT_B64 = \"${quic_cert_b64}\";"
-    echo "window.VEIL_VPS_HEALTH_USER = \"${health_user_js}\";"
-    echo "window.VEIL_VPS_HEALTH_PASS = \"${health_pass_js}\";"
   } > "${WEB_ROOT}/config.js"
   chown -R "$RUN_USER:$RUN_GROUP" "$WEB_ROOT" || true
 fi
@@ -402,28 +376,6 @@ configure_nginx() {
   if [[ -z "$PROXY_DOMAIN" ]]; then
     echo "PROXY_DOMAIN not set; skipping nginx config"
     return 0
-  fi
-  local health_auth_snippet=""
-  if ! command -v openssl >/dev/null 2>&1; then
-    local mgr
-    mgr=$(detect_pkg_mgr)
-    if [[ "$mgr" != "none" ]]; then
-      install_pkgs "$mgr" openssl || true
-    fi
-  fi
-  if command -v openssl >/dev/null 2>&1; then
-    install -d -m 0755 "$(dirname "$PROXY_HEALTH_HTPASSWD")"
-    local health_hash
-    health_hash=$(openssl passwd -apr1 "$PROXY_HEALTH_PASS")
-    echo "${PROXY_HEALTH_USER}:${health_hash}" > "$PROXY_HEALTH_HTPASSWD"
-    chmod 0640 "$PROXY_HEALTH_HTPASSWD" || true
-    health_auth_snippet=$(cat <<EOF
-        auth_basic "Veil Health";
-        auth_basic_user_file ${PROXY_HEALTH_HTPASSWD};
-EOF
-)
-  else
-    echo "openssl not available; skipping health basic auth for nginx."
   fi
   cat <<NGINXCONF > "$NGINX_SITE_PATH"
 limit_req_zone \$binary_remote_addr zone=veil_ws:10m rate=30r/s;
@@ -452,19 +404,16 @@ server {
         proxy_pass http://127.0.0.1:${PROXY_HEALTH_PORT};
         proxy_set_header Host $host;
         limit_req zone=veil_health burst=10 nodelay;
-        ${health_auth_snippet}
     }
     location /metrics {
         proxy_pass http://127.0.0.1:${PROXY_HEALTH_PORT};
         proxy_set_header Host $host;
         limit_req zone=veil_health burst=10 nodelay;
-        ${health_auth_snippet}
     }
     location /peers {
         proxy_pass http://127.0.0.1:${PROXY_HEALTH_PORT};
         proxy_set_header Host $host;
         limit_req zone=veil_health burst=10 nodelay;
-        ${health_auth_snippet}
     }
 }
 NGINXCONF
@@ -483,30 +432,12 @@ configure_caddy() {
     echo "PROXY_DOMAIN not set; skipping caddy config"
     return 0
   fi
-  local health_auth_block=""
-  if command -v caddy >/dev/null 2>&1; then
-    local health_hash
-    health_hash=$(caddy hash-password --plaintext "$PROXY_HEALTH_PASS" 2>/dev/null || true)
-    if [[ -n "$health_hash" ]]; then
-      health_auth_block=$(cat <<EOF
-  @veil_health path /health /metrics /peers
-  basic_auth @veil_health {
-    ${PROXY_HEALTH_USER} ${health_hash}
-  }
-EOF
-)
-    fi
-  fi
-  if [[ -z "$health_auth_block" ]]; then
-    echo "Warning: unable to generate Caddy basic auth hash for health endpoints."
-  fi
   install -d -m 0755 "$CADDY_CONF_DIR"
   cat <<CADDYCONF > "$CADDY_SITE_PATH"
 ${PROXY_DOMAIN} {
   root * ${WEB_ROOT}
   file_server
   reverse_proxy /ws* 127.0.0.1:${PROXY_WS_PORT}
-${health_auth_block}
   reverse_proxy /health 127.0.0.1:${PROXY_HEALTH_PORT}
   reverse_proxy /metrics 127.0.0.1:${PROXY_HEALTH_PORT}
   reverse_proxy /peers 127.0.0.1:${PROXY_HEALTH_PORT}

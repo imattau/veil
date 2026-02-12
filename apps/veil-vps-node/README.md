@@ -114,6 +114,5 @@ Optional:
 - WebSocket is best-effort outbound; Tor SOCKS5 is outbound-only in this profile.
 - BLE fallback uses btleplug when the `ble-btleplug` feature is enabled.
 - `/peers` supports optional query params: `limit` (max 1000), `prefix` (e.g., `ws:`, `wssrv:`, `tor:`, `ble:`).
-- When installed via the installer, `/health` and `/metrics` are protected with basic auth
-  using `PROXY_HEALTH_USER` and `PROXY_HEALTH_PASS` from the env file.
-  The landing page auto-attaches these credentials for internal stats polling.
+- When installed via the installer, the landing page and `/health`, `/metrics`, `/peers`
+  are publicly readable through the reverse proxy by default.

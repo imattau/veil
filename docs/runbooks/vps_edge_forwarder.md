@@ -98,7 +98,7 @@ You can tail systemd logs or stdout for:
 
 Health check, metrics, peers:
 - Local HTTP health endpoint: `http://127.0.0.1:9090/health` (bind configurable via `VEIL_VPS_HEALTH_BIND`)
-- Metrics endpoint: `http://127.0.0.1:9090/metrics` (basic auth when behind installer-managed proxy)
+- Metrics endpoint: `http://127.0.0.1:9090/metrics`
 - Peers endpoint: `http://127.0.0.1:9090/peers`
   - Optional query params: `limit` (max 1000), `prefix` (e.g., `ws:`, `wssrv:`, `tor:`, `ble:`)
 
