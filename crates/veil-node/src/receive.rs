@@ -4,7 +4,7 @@ use veil_codec::error::CodecError;
 use veil_codec::object::{
     decode_object_cbor_prefix, object_signature_message_digest, OBJECT_FLAG_SIGNED,
 };
-use veil_codec::shard::{encode_shard_cbor, ShardV1};
+use veil_codec::shard::{encode_shard_cbor, ShardErasureMode, ShardV1};
 use veil_core::{Epoch, Namespace, ObjectRoot, Tag};
 use veil_crypto::aead::{build_veil_aad, AeadCipher, AeadError};
 use veil_crypto::signing::{SigningError, Verifier};
@@ -12,7 +12,7 @@ use veil_fec::profile::ErasureCodingMode;
 use veil_fec::sharder::{reconstruct_object_padded_with_mode, shard_id, FecError};
 
 use crate::cache::{cache_put, cache_put_with_policy};
-use crate::forwarding::should_forward;
+use crate::config::ProbabilisticForwardingConfig;
 use crate::policy::{TrustTier, WotPolicy};
 use crate::state::NodeState;
 
@@ -73,6 +73,8 @@ pub struct ReceiveCachePolicy<'a> {
     pub bucket_jitter_extra_levels: usize,
     /// Namespaces that require signed objects at ingest.
     pub required_signed_namespaces: Option<&'a HashSet<u16>>,
+    /// Replica-estimate probabilistic forwarding controls.
+    pub probabilistic_forwarding: ProbabilisticForwardingConfig,
 }
 
 /// Decodes a queue-batched app payload into its original item list.
@@ -119,12 +121,15 @@ pub fn receive_shard_with_policy(
         .and_then(|p| p.required_signed_namespaces)
         .map(|required| required.contains(&shard.header.namespace.0))
         .unwrap_or(false);
-    if !should_forward(node, sid, &shard.header.tag) {
-        if node.cache.contains_key(&sid) {
-            return Ok(ReceiveEvent::IgnoredDuplicate);
-        }
+    node.seen_shards.retain(|_, expiry| *expiry > now_step);
+    if node.seen_shards.contains_key(&sid) {
+        return Ok(ReceiveEvent::IgnoredDuplicate);
+    }
+    if !node.subscriptions.contains(&shard.header.tag) {
+        node.seen_shards.insert(sid, now_step + ttl_steps);
         return Ok(ReceiveEvent::IgnoredNotSubscribed);
     }
+    node.seen_shards.insert(sid, now_step + ttl_steps);
 
     let encoded_shard = encode_shard_cbor(shard)?;
     if !require_signed_namespace {
@@ -158,10 +163,10 @@ pub fn receive_shard_with_policy(
     }
 
     let collected: Vec<_> = root_inbox.values().cloned().collect();
-    let erasure_mode = cache_policy
-        .as_ref()
-        .map(|p| p.erasure_coding_mode)
-        .unwrap_or(ErasureCodingMode::HardenedNonSystematic);
+    let erasure_mode = match shard.header.erasure_mode {
+        ShardErasureMode::Systematic => ErasureCodingMode::Systematic,
+        ShardErasureMode::HardenedNonSystematic => ErasureCodingMode::HardenedNonSystematic,
+    };
     let reconstructed = reconstruct_object_padded_with_mode(&collected, root, erasure_mode)?;
     let (object, _) = decode_object_cbor_prefix(&reconstructed)?;
 
@@ -431,6 +436,7 @@ mod tests {
             erasure_coding_mode: ErasureCodingMode::HardenedNonSystematic,
             bucket_jitter_extra_levels: 0,
             required_signed_namespaces: None,
+            probabilistic_forwarding: crate::config::ProbabilisticForwardingConfig::default(),
         };
 
         let first_obj =
@@ -462,6 +468,7 @@ mod tests {
                 erasure_coding_mode: cache_policy.erasure_coding_mode,
                 bucket_jitter_extra_levels: cache_policy.bucket_jitter_extra_levels,
                 required_signed_namespaces: cache_policy.required_signed_namespaces,
+                probabilistic_forwarding: cache_policy.probabilistic_forwarding,
             }),
         )
         .expect("receive should work");
@@ -513,6 +520,7 @@ mod tests {
             erasure_coding_mode: ErasureCodingMode::HardenedNonSystematic,
             bucket_jitter_extra_levels: 0,
             required_signed_namespaces: Some(&required),
+            probabilistic_forwarding: crate::config::ProbabilisticForwardingConfig::default(),
         };
 
         let mut got_required_sig_err = false;

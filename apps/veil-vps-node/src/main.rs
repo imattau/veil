@@ -16,7 +16,10 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::flag;
 use veil_crypto::aead::XChaCha20Poly1305Cipher;
 use veil_crypto::signing::Ed25519Verifier;
-use veil_node::config::{AdaptiveLaneScoringConfig, NodeRuntimeConfig};
+use veil_node::config::{
+    AdaptiveLaneScoringConfig, BloomExchangeConfig, NodeRuntimeConfig,
+    ProbabilisticForwardingConfig,
+};
 use veil_node::persistence::{load_state_or_default, save_state_to_path};
 use veil_node::service::{NodeRuntime, NodeRuntimeCallbacks};
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
@@ -241,7 +244,11 @@ impl TransportAdapter for CombinedFallbackAdapter {
 
     fn can_send(&self) -> bool {
         let ok = self.ws.as_ref().map(|w| w.can_send()).unwrap_or(false)
-            || self.ws_server.as_ref().map(|w| w.can_send()).unwrap_or(false)
+            || self
+                .ws_server
+                .as_ref()
+                .map(|w| w.can_send())
+                .unwrap_or(false)
             || self.tor.as_ref().map(|t| t.can_send()).unwrap_or(false);
         #[cfg(feature = "ble")]
         {
@@ -252,7 +259,11 @@ impl TransportAdapter for CombinedFallbackAdapter {
 
     fn can_recv(&self) -> bool {
         let ok = self.ws.as_ref().map(|w| w.can_recv()).unwrap_or(false)
-            || self.ws_server.as_ref().map(|w| w.can_recv()).unwrap_or(false);
+            || self
+                .ws_server
+                .as_ref()
+                .map(|w| w.can_recv())
+                .unwrap_or(false);
         #[cfg(feature = "ble")]
         {
             return ok || self.ble.as_ref().map(|b| b.can_recv()).unwrap_or(false);
@@ -339,6 +350,13 @@ fn env_u64(key: &str, default: u64) -> u64 {
     env::var(key)
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn env_f64(key: &str, default: f64) -> f64 {
+    env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(default)
 }
 
@@ -729,6 +747,12 @@ fn main() {
     let tor_socks_addr = env::var("VEIL_VPS_TOR_SOCKS_ADDR").ok();
 
     let adaptive_scoring = env_bool("VEIL_VPS_ADAPTIVE_LANE_SCORING", true);
+    let probabilistic_forwarding = env_bool("VEIL_VPS_PROBABILISTIC_FORWARDING", true);
+    let forwarding_min_probability = env_f64("VEIL_VPS_FORWARD_MIN_PROBABILITY", 0.10);
+    let forwarding_replica_divisor = env_u64("VEIL_VPS_FORWARD_REPLICA_DIVISOR", 8);
+    let bloom_exchange = env_bool("VEIL_VPS_BLOOM_EXCHANGE", true);
+    let bloom_interval_steps = env_u64("VEIL_VPS_BLOOM_INTERVAL_STEPS", 128);
+    let bloom_false_positive_rate = env_f64("VEIL_VPS_BLOOM_FALSE_POSITIVE_RATE", 0.05);
     let max_cache_shards = env_usize("VEIL_VPS_MAX_CACHE_SHARDS", 200_000);
     let bucket_jitter = env_usize("VEIL_VPS_BUCKET_JITTER", 0);
     let required_signed =
@@ -774,6 +798,16 @@ fn main() {
     cfg.adaptive_lane_scoring = AdaptiveLaneScoringConfig {
         enabled: adaptive_scoring,
         ..AdaptiveLaneScoringConfig::default()
+    };
+    cfg.probabilistic_forwarding = ProbabilisticForwardingConfig {
+        enabled: probabilistic_forwarding,
+        min_probability: forwarding_min_probability.clamp(0.0, 1.0),
+        replica_divisor: forwarding_replica_divisor.max(1),
+    };
+    cfg.bloom_exchange = BloomExchangeConfig {
+        enabled: bloom_exchange,
+        interval_steps: bloom_interval_steps.max(1),
+        false_positive_rate: bloom_false_positive_rate.clamp(0.001, 0.5),
     };
 
     let quic_bind_addr = match quic_bind.parse() {

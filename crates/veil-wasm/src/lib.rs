@@ -161,7 +161,8 @@ mod tests {
     };
     use veil_codec::object::{encode_object_cbor, ObjectV1, OBJECT_V1_VERSION};
     use veil_codec::shard::{
-        encode_shard_cbor, ShardHeaderV1, ShardV1, SHARD_HEADER_LEN, SHARD_V1_VERSION,
+        encode_shard_cbor, ShardErasureMode, ShardHeaderV1, ShardV1, SHARD_HEADER_LEN,
+        SHARD_V1_VERSION,
     };
     use veil_core::{Epoch, Namespace};
 
@@ -187,6 +188,9 @@ mod tests {
                 epoch: Epoch(2),
                 tag: [0x11; 32],
                 object_root: [0x22; 32],
+                profile_id: 2,
+                erasure_mode: ShardErasureMode::HardenedNonSystematic,
+                bucket_size: (16 * 1024) as u32,
                 k: 6,
                 n: 10,
                 index: 1,

@@ -4,17 +4,18 @@ use std::time::Duration;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use veil_node::config::{BloomExchangeConfig, ProbabilisticForwardingConfig};
+
 use veil_android_node::{
     build_self_contact, default_protocol_config, serve, AppState, DiscoveryConfig, DiscoveryWorker,
-    LanDiscoveryConfig, LanDiscoveryWorker, NodeState, ProtocolEngine, QueueWorker, QueueWorkerConfig,
+    LanDiscoveryConfig, LanDiscoveryWorker, NodeState, ProtocolEngine, QueueWorker,
+    QueueWorkerConfig,
 };
 
 #[tokio::main]
 async fn main() {
     let filter = std::env::var("VEIL_NODE_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let token = std::env::var("VEIL_NODE_TOKEN").unwrap_or_default();
     let host = std::env::var("VEIL_NODE_HOST")
@@ -26,9 +27,7 @@ async fn main() {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(7788);
 
-    let store_path = std::env::var("VEIL_NODE_STATE")
-        .map(PathBuf::from)
-        .ok();
+    let store_path = std::env::var("VEIL_NODE_STATE").map(PathBuf::from).ok();
     let node = NodeState::new_with_store(env!("CARGO_PKG_VERSION"), store_path);
     let node_arc = Arc::new(node.clone());
     let identity = node.identity();
@@ -93,7 +92,9 @@ async fn main() {
                 if bytes.len() == 32 {
                     let mut key = [0u8; 32];
                     key.copy_from_slice(&bytes);
-                    protocol_config.runtime_config.bind_peer_publisher(peer, key);
+                    protocol_config
+                        .runtime_config
+                        .bind_peer_publisher(peer, key);
                 }
             }
         }
@@ -130,9 +131,51 @@ async fn main() {
             protocol_config.discovery_namespace = veil_core::Namespace(value);
         }
     }
-    let protocol = Arc::new(
-        ProtocolEngine::new(protocol_config).expect("protocol engine init"),
-    );
+    protocol_config.runtime_config.probabilistic_forwarding = ProbabilisticForwardingConfig {
+        enabled: env_bool(
+            "VEIL_NODE_PROBABILISTIC_FORWARDING",
+            protocol_config
+                .runtime_config
+                .probabilistic_forwarding
+                .enabled,
+        ),
+        min_probability: env_f64(
+            "VEIL_NODE_FORWARD_MIN_PROBABILITY",
+            protocol_config
+                .runtime_config
+                .probabilistic_forwarding
+                .min_probability,
+        )
+        .clamp(0.0, 1.0),
+        replica_divisor: env_u64(
+            "VEIL_NODE_FORWARD_REPLICA_DIVISOR",
+            protocol_config
+                .runtime_config
+                .probabilistic_forwarding
+                .replica_divisor,
+        )
+        .max(1),
+    };
+    protocol_config.runtime_config.bloom_exchange = BloomExchangeConfig {
+        enabled: env_bool(
+            "VEIL_NODE_BLOOM_EXCHANGE",
+            protocol_config.runtime_config.bloom_exchange.enabled,
+        ),
+        interval_steps: env_u64(
+            "VEIL_NODE_BLOOM_INTERVAL_STEPS",
+            protocol_config.runtime_config.bloom_exchange.interval_steps,
+        )
+        .max(1),
+        false_positive_rate: env_f64(
+            "VEIL_NODE_BLOOM_FALSE_POSITIVE_RATE",
+            protocol_config
+                .runtime_config
+                .bloom_exchange
+                .false_positive_rate,
+        )
+        .clamp(0.001, 0.5),
+    };
+    let protocol = Arc::new(ProtocolEngine::new(protocol_config).expect("protocol engine init"));
 
     let discovery_config = DiscoveryConfig {
         bootstrap_urls: std::env::var("VEIL_DISCOVERY_BOOTSTRAP")
@@ -181,11 +224,8 @@ async fn main() {
     );
     tokio::spawn(worker.run());
 
-    let discovery_worker = DiscoveryWorker::new(
-        Arc::new(node.clone()),
-        protocol.clone(),
-        discovery_config,
-    );
+    let discovery_worker =
+        DiscoveryWorker::new(Arc::new(node.clone()), protocol.clone(), discovery_config);
     tokio::spawn(discovery_worker.run());
     let lan_worker = LanDiscoveryWorker::new(Arc::new(node.clone()), protocol.clone(), lan_config);
     let self_contact = build_self_contact(&node, &protocol);
@@ -200,4 +240,25 @@ async fn main() {
 
     let addr = SocketAddr::new(host, port);
     serve(addr, state).await;
+}
+
+fn env_bool(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(default)
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn env_f64(key: &str, default: f64) -> f64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(default)
 }

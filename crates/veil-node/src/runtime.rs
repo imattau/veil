@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use veil_codec::object::OBJECT_FLAG_ACK_REQUESTED;
 use veil_codec::shard::decode_shard_cbor;
+use veil_core::hash::blake3_32;
 use veil_crypto::aead::AeadCipher;
 use veil_crypto::signing::Verifier;
 use veil_fec::profile::ErasureCodingMode;
@@ -10,7 +11,8 @@ use crate::ack::{
     ack_received, build_ack_shard_bytes_with_mode_and_padding, decode_ack_payload,
     next_ack_escalation_batch,
 };
-use crate::config::NodeRuntimeConfig;
+use crate::bloom::decode_bloom_exchange_packet;
+use crate::config::{NodeRuntimeConfig, ProbabilisticForwardingConfig};
 use crate::policy::{TrustTier, WotPolicy};
 use crate::receive::{receive_shard_with_policy, ReceiveCachePolicy, ReceiveError, ReceiveEvent};
 use crate::state::NodeState;
@@ -54,6 +56,8 @@ pub struct RuntimeStats {
     pub ack_messages: usize,
     /// Inbound payloads that failed shard decode.
     pub malformed_messages: usize,
+    /// Inbound control-plane Bloom exchange packets.
+    pub bloom_messages: usize,
     /// Outbound send attempts that failed at transport level.
     pub send_failures: usize,
     /// Inbound message counts grouped by source trust tier.
@@ -129,6 +133,7 @@ pub struct RuntimePolicyHooks<'a, P> {
     pub erasure_coding_mode: ErasureCodingMode,
     pub bucket_jitter_extra_levels: usize,
     pub required_signed_namespaces: Option<&'a HashSet<u16>>,
+    pub probabilistic_forwarding: ProbabilisticForwardingConfig,
 }
 
 impl<'a, P> Default for RuntimePolicyHooks<'a, P> {
@@ -141,6 +146,7 @@ impl<'a, P> Default for RuntimePolicyHooks<'a, P> {
             erasure_coding_mode: ErasureCodingMode::HardenedNonSystematic,
             bucket_jitter_extra_levels: 0,
             required_signed_namespaces: None,
+            probabilistic_forwarding: ProbabilisticForwardingConfig::default(),
         }
     }
 }
@@ -156,6 +162,7 @@ struct InboundProcessParams<'a, P> {
     ttl_steps: u64,
     decrypt_key: &'a [u8; 32],
     cache_policy: Option<ReceiveCachePolicy<'a>>,
+    probabilistic_forwarding: ProbabilisticForwardingConfig,
     stats: &'a mut RuntimeStats,
 }
 
@@ -164,6 +171,37 @@ fn is_forwardable(event: &ReceiveEvent) -> bool {
         event,
         ReceiveEvent::Buffered { .. } | ReceiveEvent::Delivered { .. }
     )
+}
+
+fn forwarding_probability(replica_estimate: u64, cfg: ProbabilisticForwardingConfig) -> f64 {
+    if !cfg.enabled {
+        return 1.0;
+    }
+    let divisor = cfg.replica_divisor.max(1) as f64;
+    let p = 1.0 / (1.0 + (replica_estimate as f64 / divisor));
+    p.max(cfg.min_probability.clamp(0.0, 1.0))
+}
+
+fn probabilistic_allow(
+    shard_id: [u8; 32],
+    peer_ordinal: usize,
+    now_step: u64,
+    probability: f64,
+) -> bool {
+    if probability >= 1.0 {
+        return true;
+    }
+    if probability <= 0.0 {
+        return false;
+    }
+    let mut preimage = Vec::with_capacity(32 + 8 + 8 + 10);
+    preimage.extend_from_slice(b"pfwd-v1");
+    preimage.extend_from_slice(&shard_id);
+    preimage.extend_from_slice(&(peer_ordinal as u64).to_be_bytes());
+    preimage.extend_from_slice(&now_step.to_be_bytes());
+    let sample = blake3_32(&preimage);
+    let draw = u16::from_be_bytes([sample[0], sample[1]]) as f64 / u16::MAX as f64;
+    draw <= probability
 }
 
 fn process_inbound<A: TransportAdapter>(
@@ -184,11 +222,19 @@ fn process_inbound<A: TransportAdapter>(
         ttl_steps,
         decrypt_key,
         cache_policy,
+        probabilistic_forwarding,
         stats,
     } = params;
+    let sid = blake3_32(bytes);
 
     stats.inbound_messages += 1;
     stats.inbound_by_tier.incr(inbound_tier, 1);
+
+    if decode_bloom_exchange_packet(bytes).is_some() {
+        stats.bloom_messages += 1;
+        stats.ignored_messages += 1;
+        return Ok(ReceiveEvent::IgnoredMalformed);
+    }
 
     let shard = match decode_shard_cbor(bytes) {
         Ok(shard) => shard,
@@ -228,7 +274,12 @@ fn process_inbound<A: TransportAdapter>(
         stats
             .dropped_by_tier
             .incr(inbound_tier, candidates.len().saturating_sub(fanout));
-        for peer in candidates.into_iter().take(fanout) {
+        for (ordinal, peer) in candidates.into_iter().take(fanout).enumerate() {
+            let replica = *node.replica_estimate.get(&sid).unwrap_or(&0);
+            let p = forwarding_probability(replica, probabilistic_forwarding);
+            if !probabilistic_allow(sid, ordinal, now_step, p) {
+                continue;
+            }
             if adapter.send(peer, bytes).is_ok() {
                 stats.forwarded_messages += 1;
                 stats.forwarded_by_tier.incr(inbound_tier, 1);
@@ -330,6 +381,7 @@ pub fn pump_once<A: TransportAdapter>(
             erasure_coding_mode: policy_hooks.erasure_coding_mode,
             bucket_jitter_extra_levels: policy_hooks.bucket_jitter_extra_levels,
             required_signed_namespaces: policy_hooks.required_signed_namespaces,
+            probabilistic_forwarding: policy_hooks.probabilistic_forwarding,
         });
     let event = process_inbound(
         node,
@@ -345,6 +397,7 @@ pub fn pump_once<A: TransportAdapter>(
             ttl_steps,
             decrypt_key,
             cache_policy,
+            probabilistic_forwarding: policy_hooks.probabilistic_forwarding,
             stats,
         },
         cipher,
@@ -429,6 +482,7 @@ pub fn pump_once_with_config_resolver<A: TransportAdapter>(
                 erasure_coding_mode: config.erasure_coding_mode,
                 bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
                 required_signed_namespaces: Some(&config.required_signed_namespaces),
+                probabilistic_forwarding: config.probabilistic_forwarding,
             },
             decrypt_key,
             stats,
@@ -495,6 +549,7 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 erasure_coding_mode: fast_policy_hooks.erasure_coding_mode,
                 bucket_jitter_extra_levels: fast_policy_hooks.bucket_jitter_extra_levels,
                 required_signed_namespaces: fast_policy_hooks.required_signed_namespaces,
+                probabilistic_forwarding: fast_policy_hooks.probabilistic_forwarding,
             }),
             _ => None,
         };
@@ -516,6 +571,7 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 ttl_steps,
                 decrypt_key,
                 cache_policy,
+                probabilistic_forwarding: fast_policy_hooks.probabilistic_forwarding,
                 stats,
             },
             cipher,
@@ -563,6 +619,7 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 erasure_coding_mode: fallback_policy_hooks.erasure_coding_mode,
                 bucket_jitter_extra_levels: fallback_policy_hooks.bucket_jitter_extra_levels,
                 required_signed_namespaces: fallback_policy_hooks.required_signed_namespaces,
+                probabilistic_forwarding: fallback_policy_hooks.probabilistic_forwarding,
             }),
             _ => None,
         };
@@ -584,6 +641,7 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 ttl_steps,
                 decrypt_key,
                 cache_policy,
+                probabilistic_forwarding: fallback_policy_hooks.probabilistic_forwarding,
                 stats,
             },
             cipher,
@@ -700,6 +758,7 @@ where
                 erasure_coding_mode: config.erasure_coding_mode,
                 bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
                 required_signed_namespaces: Some(&config.required_signed_namespaces),
+                probabilistic_forwarding: config.probabilistic_forwarding,
             },
             fallback_policy_hooks: RuntimePolicyHooks {
                 fanout_for_peer: Some(&fallback_fanout_fn),
@@ -709,6 +768,7 @@ where
                 erasure_coding_mode: config.erasure_coding_mode,
                 bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
                 required_signed_namespaces: Some(&config.required_signed_namespaces),
+                probabilistic_forwarding: config.probabilistic_forwarding,
             },
             decrypt_key,
             stats,
@@ -952,13 +1012,13 @@ mod tests {
     use veil_transport::adapter::InMemoryAdapter;
 
     use super::{
-        pump_ack_timeouts, pump_multi_lane_once, pump_multi_lane_once_with_config,
-        pump_multi_lane_tick_with_config, pump_once, pump_once_with_config,
-        ConfigMultiLanePumpParams, ConfigPumpParams, LaneForwardParams, MultiLanePumpParams,
-        PumpParams, RuntimePolicyHooks, RuntimeStats,
+        forwarding_probability, probabilistic_allow, pump_ack_timeouts, pump_multi_lane_once,
+        pump_multi_lane_once_with_config, pump_multi_lane_tick_with_config, pump_once,
+        pump_once_with_config, ConfigMultiLanePumpParams, ConfigPumpParams, LaneForwardParams,
+        MultiLanePumpParams, PumpParams, RuntimePolicyHooks, RuntimeStats,
     };
     use crate::ack::{encode_ack_payload, register_pending_ack, AckRetryPolicy};
-    use crate::config::NodeRuntimeConfig;
+    use crate::config::{NodeRuntimeConfig, ProbabilisticForwardingConfig};
     use crate::state::NodeState;
 
     fn make_encoded_object_with_flags(
@@ -1270,6 +1330,119 @@ mod tests {
         assert_eq!(stats.inbound_by_tier.blocked, 1);
         assert_eq!(stats.forwarded_by_tier.blocked, 0);
         assert_eq!(stats.dropped_by_tier.blocked, 2);
+    }
+
+    #[test]
+    fn probabilistic_forwarding_probability_drops_as_replica_estimate_rises() {
+        let cfg = ProbabilisticForwardingConfig {
+            enabled: true,
+            min_probability: 0.10,
+            replica_divisor: 8,
+        };
+        let rare = forwarding_probability(0, cfg);
+        let common = forwarding_probability(80, cfg);
+        assert!(rare > common);
+        assert!(common >= 0.10);
+    }
+
+    #[test]
+    fn probabilistic_allow_is_deterministic_for_same_inputs() {
+        let sid = [0xAB; 32];
+        let a = probabilistic_allow(sid, 3, 42, 0.35);
+        let b = probabilistic_allow(sid, 3, 42, 0.35);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn probabilistic_forwarding_reduces_forward_traffic_for_common_shards() {
+        let mut node_off = NodeState::default();
+        let mut node_on = NodeState::default();
+        let tag = [0x7A; 32];
+        node_off.subscriptions.insert(tag);
+        node_on.subscriptions.insert(tag);
+        let key = [0xD7_u8; 32];
+
+        let peers = vec![
+            "origin".to_string(),
+            "peer-a".to_string(),
+            "peer-b".to_string(),
+            "peer-c".to_string(),
+            "peer-d".to_string(),
+            "peer-e".to_string(),
+        ];
+
+        let mut adapter_off = InMemoryAdapter::default();
+        let mut adapter_on = InMemoryAdapter::default();
+        let mut stats_off = RuntimeStats::default();
+        let mut stats_on = RuntimeStats::default();
+
+        for i in 0..20u8 {
+            let payload = vec![i; 128];
+            let encoded = make_encoded_object(&payload, tag, &key);
+            let root = blake3_32(&encoded);
+            let shard = object_to_shards(&encoded, Namespace(20 + i as u16), Epoch(77), tag, root)
+                .expect("sharding should succeed")
+                .remove(0);
+            let bytes = encode_shard_cbor(&shard).expect("shard encode");
+            let sid = blake3_32(&bytes);
+
+            // Mark as high-replica (common) to trigger aggressive downsampling.
+            node_on.replica_estimate.insert(sid, 100);
+
+            adapter_off.enqueue_inbound("origin", bytes.clone());
+            adapter_on.enqueue_inbound("origin", bytes);
+        }
+
+        for step in 0..20u64 {
+            let _ = pump_once(
+                &mut node_off,
+                &mut adapter_off,
+                PumpParams {
+                    peers: &peers,
+                    now_step: step,
+                    ttl_steps: 100,
+                    fanout: 5,
+                    policy_hooks: RuntimePolicyHooks::default(),
+                    decrypt_key: &key,
+                    stats: &mut stats_off,
+                },
+                &XChaCha20Poly1305Cipher,
+                &Ed25519Verifier,
+            )
+            .expect("baseline pump should succeed");
+
+            let _ = pump_once(
+                &mut node_on,
+                &mut adapter_on,
+                PumpParams {
+                    peers: &peers,
+                    now_step: step,
+                    ttl_steps: 100,
+                    fanout: 5,
+                    policy_hooks: RuntimePolicyHooks {
+                        probabilistic_forwarding: ProbabilisticForwardingConfig {
+                            enabled: true,
+                            min_probability: 0.05,
+                            replica_divisor: 1,
+                        },
+                        ..RuntimePolicyHooks::default()
+                    },
+                    decrypt_key: &key,
+                    stats: &mut stats_on,
+                },
+                &XChaCha20Poly1305Cipher,
+                &Ed25519Verifier,
+            )
+            .expect("probabilistic pump should succeed");
+        }
+
+        eprintln!(
+            "probabilistic forwarding traffic estimate: baseline={}, probabilistic={}",
+            stats_off.forwarded_messages, stats_on.forwarded_messages
+        );
+        assert!(stats_on.forwarded_messages < stats_off.forwarded_messages);
+        // Estimated impact threshold for this synthetic "common shard" workload.
+        assert!(stats_on.forwarded_messages * 2 < stats_off.forwarded_messages);
     }
 
     #[test]

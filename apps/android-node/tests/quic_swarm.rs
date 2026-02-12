@@ -26,8 +26,7 @@ fn run_swarm(peer_count: usize, min_success: usize, timeout: Duration) {
     let mut identities = Vec::new();
     let mut certs = Vec::new();
     for _ in 0..peer_count {
-        let id =
-            QuicIdentity::generate_self_signed("localhost").expect("identity");
+        let id = QuicIdentity::generate_self_signed("localhost").expect("identity");
         certs.push(id.cert_der.clone());
         identities.push(id);
     }
@@ -37,8 +36,7 @@ fn run_swarm(peer_count: usize, min_success: usize, timeout: Duration) {
     for identity in identities {
         let port = reserve_port();
         let addr = format!("127.0.0.1:{port}");
-        let mut cfg =
-            QuicAdapterConfig::new(addr.parse().unwrap(), server_name, identity);
+        let mut cfg = QuicAdapterConfig::new(addr.parse().unwrap(), server_name, identity);
         cfg.trusted_peer_certs_der = certs.clone();
         adapters.push(QuicAdapter::connect(cfg).expect("adapter"));
         addrs.push(addr);
@@ -51,7 +49,11 @@ fn run_swarm(peer_count: usize, min_success: usize, timeout: Duration) {
     while Instant::now() < deadline {
         for idx in 0..adapters.len() {
             let sender = idx;
-            let target = if idx == 0 { adapters.len() - 1 } else { idx - 1 };
+            let target = if idx == 0 {
+                adapters.len() - 1
+            } else {
+                idx - 1
+            };
             let payload = format!("ping-{sender}-to-{target}").into_bytes();
             let _ = adapters[sender].send(&addrs[target], &payload);
         }

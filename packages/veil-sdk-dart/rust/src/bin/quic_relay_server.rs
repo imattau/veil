@@ -83,8 +83,7 @@ fn build_insecure_client_config() -> Result<ClientConfig, String> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let identity =
-        QuicIdentity::generate_self_signed("127.0.0.1").map_err(|e| e.to_string())?;
+    let identity = QuicIdentity::generate_self_signed("127.0.0.1").map_err(|e| e.to_string())?;
     let bind_addr = free_udp_addr();
     let server_cfg = build_server_config(&identity)?;
     let mut endpoint = Endpoint::server(server_cfg, bind_addr)
@@ -131,11 +130,9 @@ async fn main() -> Result<(), String> {
                                         eprintln!("relay connect to {peer}");
                                     }
                                     if let Ok(connecting) = endpoint.connect(peer, "127.0.0.1") {
-                                        if let Ok(Ok(conn)) = tokio::time::timeout(
-                                            Duration::from_secs(5),
-                                            connecting,
-                                        )
-                                        .await
+                                        if let Ok(Ok(conn)) =
+                                            tokio::time::timeout(Duration::from_secs(5), connecting)
+                                                .await
                                         {
                                             if debug {
                                                 eprintln!("relay connected to {peer}");

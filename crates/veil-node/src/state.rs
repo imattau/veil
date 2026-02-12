@@ -49,6 +49,8 @@ pub struct NodeState {
     pub shard_requested: HashMap<ShardId, u64>,
     /// Reconstruction inbox grouped by object root and shard index.
     pub inbox: HashMap<ObjectRoot, HashMap<u16, ShardV1>>,
+    /// Recently seen shard ids used for duplicate suppression independent of cache policy.
+    pub seen_shards: HashMap<ShardId, u64>,
     /// Pending ACK entries for timeout escalation.
     pub pending_acks: HashMap<ObjectRoot, PendingAck>,
 }
@@ -66,6 +68,7 @@ mod tests {
         assert!(state.shard_tier.is_empty());
         assert!(state.shard_requested.is_empty());
         assert!(state.inbox.is_empty());
+        assert!(state.seen_shards.is_empty());
         assert!(state.pending_acks.is_empty());
     }
 }

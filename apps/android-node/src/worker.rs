@@ -4,9 +4,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
 use crate::api::QueueWorkerConfig;
+use crate::discovery::handle_discovery_payload;
 use crate::protocol::ProtocolEngine;
 use crate::state::NodeState;
-use crate::discovery::handle_discovery_payload;
 use veil_node::receive::ReceiveEvent;
 
 #[derive(Clone)]
@@ -18,7 +18,11 @@ pub struct QueueWorker {
 }
 
 impl QueueWorker {
-    pub fn new(state: Arc<NodeState>, protocol: Arc<ProtocolEngine>, config: QueueWorkerConfig) -> Self {
+    pub fn new(
+        state: Arc<NodeState>,
+        protocol: Arc<ProtocolEngine>,
+        config: QueueWorkerConfig,
+    ) -> Self {
         Self {
             state,
             protocol,
@@ -43,7 +47,8 @@ impl QueueWorker {
                 }) = event
                 {
                     if namespace == worker.protocol.discovery_namespace() {
-                        let _ = handle_discovery_payload(&worker.state, &worker.protocol, &payload).await;
+                        let _ = handle_discovery_payload(&worker.state, &worker.protocol, &payload)
+                            .await;
                     }
                     worker.state.emit_payload(
                         &object_root,

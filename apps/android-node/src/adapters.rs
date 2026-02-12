@@ -30,7 +30,10 @@ pub type FallbackAdapter = MultiLaneAdapter;
 
 impl MultiLaneAdapter {
     pub fn new(lanes: Vec<LaneAdapter>) -> Self {
-        Self { lanes, recv_cursor: 0 }
+        Self {
+            lanes,
+            recv_cursor: 0,
+        }
     }
 
     pub fn labels(&self) -> Vec<&'static str> {
@@ -82,12 +85,24 @@ impl MultiLaneAdapter {
                 LaneAdapter::Tor(adapter) => adapter.health_snapshot(),
                 LaneAdapter::InMemory(adapter) => adapter.health_snapshot(),
             };
-            snapshot.outbound_queued = snapshot.outbound_queued.saturating_add(lane_snapshot.outbound_queued);
-            snapshot.outbound_send_ok = snapshot.outbound_send_ok.saturating_add(lane_snapshot.outbound_send_ok);
-            snapshot.outbound_send_err = snapshot.outbound_send_err.saturating_add(lane_snapshot.outbound_send_err);
-            snapshot.inbound_received = snapshot.inbound_received.saturating_add(lane_snapshot.inbound_received);
-            snapshot.inbound_dropped = snapshot.inbound_dropped.saturating_add(lane_snapshot.inbound_dropped);
-            snapshot.reconnect_attempts = snapshot.reconnect_attempts.saturating_add(lane_snapshot.reconnect_attempts);
+            snapshot.outbound_queued = snapshot
+                .outbound_queued
+                .saturating_add(lane_snapshot.outbound_queued);
+            snapshot.outbound_send_ok = snapshot
+                .outbound_send_ok
+                .saturating_add(lane_snapshot.outbound_send_ok);
+            snapshot.outbound_send_err = snapshot
+                .outbound_send_err
+                .saturating_add(lane_snapshot.outbound_send_err);
+            snapshot.inbound_received = snapshot
+                .inbound_received
+                .saturating_add(lane_snapshot.inbound_received);
+            snapshot.inbound_dropped = snapshot
+                .inbound_dropped
+                .saturating_add(lane_snapshot.inbound_dropped);
+            snapshot.reconnect_attempts = snapshot
+                .reconnect_attempts
+                .saturating_add(lane_snapshot.reconnect_attempts);
         }
         snapshot
     }
@@ -108,10 +123,16 @@ impl TransportAdapter for MultiLaneAdapter {
         let mut ok = false;
         for lane in &mut self.lanes {
             let result = match lane {
-                LaneAdapter::Quic(adapter) => adapter.send(peer, bytes).map_err(MultiLaneError::Quic),
-                LaneAdapter::WebSocket(adapter) => adapter.send(peer, bytes).map_err(MultiLaneError::WebSocket),
+                LaneAdapter::Quic(adapter) => {
+                    adapter.send(peer, bytes).map_err(MultiLaneError::Quic)
+                }
+                LaneAdapter::WebSocket(adapter) => {
+                    adapter.send(peer, bytes).map_err(MultiLaneError::WebSocket)
+                }
                 LaneAdapter::Tor(adapter) => adapter.send(peer, bytes).map_err(MultiLaneError::Tor),
-                LaneAdapter::InMemory(adapter) => adapter.send(peer, bytes).map_err(|_| MultiLaneError::InMemory),
+                LaneAdapter::InMemory(adapter) => adapter
+                    .send(peer, bytes)
+                    .map_err(|_| MultiLaneError::InMemory),
             };
             match result {
                 Ok(()) => ok = true,
@@ -189,7 +210,10 @@ pub fn build_quic_adapter(
     QuicAdapter::connect(cfg)
 }
 
-pub fn build_ws_adapter(url: String, peer_id: String) -> Result<WebSocketAdapter, WebSocketAdapterError> {
+pub fn build_ws_adapter(
+    url: String,
+    peer_id: String,
+) -> Result<WebSocketAdapter, WebSocketAdapterError> {
     WebSocketAdapter::connect(WebSocketAdapterConfig::new(url, peer_id))
 }
 

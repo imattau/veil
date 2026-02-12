@@ -1,5 +1,5 @@
-mod api;
 mod adapters;
+mod api;
 mod discovery;
 mod protocol;
 mod server;
@@ -7,10 +7,10 @@ mod state;
 mod state_store;
 mod worker;
 
-pub use api::*;
 pub use adapters::{
-    build_quic_adapter, build_tor_adapter, build_ws_adapter, FastAdapter, FallbackAdapter,
+    build_quic_adapter, build_tor_adapter, build_ws_adapter, FallbackAdapter, FastAdapter,
 };
+pub use api::*;
 pub use discovery::{
     build_self_contact, discovery_tag, handle_discovery_payload, DiscoveryConfig, DiscoveryMessage,
     DiscoveryWorker, LanDiscoveryConfig, LanDiscoveryWorker,

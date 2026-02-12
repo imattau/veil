@@ -2,14 +2,21 @@ use reed_solomon_erasure::galois_8::ReedSolomon;
 use thiserror::Error;
 use veil_codec::error::CodecError;
 use veil_codec::shard::{
-    encode_shard_cbor, ShardHeaderV1, ShardV1, SHARD_BUCKET_SIZES, SHARD_HEADER_LEN,
-    SHARD_V1_VERSION,
+    encode_shard_cbor, ShardErasureMode, ShardHeaderV1, ShardV1, SHARD_BUCKET_SIZES,
+    SHARD_HEADER_LEN, SHARD_V1_VERSION,
 };
 use veil_core::hash::blake3_32;
 use veil_core::types::{Epoch, Namespace};
 use veil_core::{ObjectRoot, ShardId, Tag};
 
 use crate::profile::{choose_profile, ErasureCodingMode, Profile};
+
+fn mode_to_wire(mode: ErasureCodingMode) -> ShardErasureMode {
+    match mode {
+        ErasureCodingMode::Systematic => ShardErasureMode::Systematic,
+        ErasureCodingMode::HardenedNonSystematic => ShardErasureMode::HardenedNonSystematic,
+    }
+}
 
 /// Errors returned by FEC profile/sharding/reconstruction helpers.
 #[derive(Debug, Error)]
@@ -181,6 +188,9 @@ pub fn object_to_shards_with_mode_and_padding(
                 epoch,
                 tag,
                 object_root,
+                profile_id: profile.id,
+                erasure_mode: mode_to_wire(mode),
+                bucket_size: bucket as u32,
                 k: profile.k,
                 n: profile.n,
                 index: idx as u16,
@@ -270,6 +280,9 @@ pub fn reconstruct_object_padded_with_mode(
             || shard.header.namespace != first.namespace
             || shard.header.epoch != first.epoch
             || shard.header.tag != first.tag
+            || shard.header.profile_id != first.profile_id
+            || shard.header.erasure_mode != first.erasure_mode
+            || shard.header.bucket_size != first.bucket_size
         {
             return Err(FecError::InvalidShardSet("mixed shard set"));
         }
@@ -390,12 +403,12 @@ mod tests {
     use veil_core::types::{Epoch, Namespace};
 
     #[test]
-    fn choose_profile_and_bucket_picks_small_16k_for_small_object() {
+    fn choose_profile_and_bucket_picks_micro_2k_for_small_object() {
         let (profile, bucket) =
             choose_profile_and_bucket(1024).expect("small object should fit profile");
-        assert_eq!(profile.k, 6);
-        assert_eq!(profile.n, 10);
-        assert_eq!(bucket, 16 * 1024);
+        assert_eq!(profile.k, 2);
+        assert_eq!(profile.n, 3);
+        assert_eq!(bucket, 2 * 1024);
     }
 
     #[test]
@@ -405,8 +418,8 @@ mod tests {
             choose_profile_and_bucket_with_jitter(object_len, [0x00; 32], 0).expect("fits");
         let (_, jitter_bucket) =
             choose_profile_and_bucket_with_jitter(object_len, [0x01; 32], 1).expect("fits");
-        assert_eq!(min_bucket, 16 * 1024);
-        assert!(jitter_bucket == 16 * 1024 || jitter_bucket == 32 * 1024);
+        assert_eq!(min_bucket, 2 * 1024);
+        assert!(jitter_bucket == 2 * 1024 || jitter_bucket == 4 * 1024);
     }
 
     #[test]
@@ -416,7 +429,7 @@ mod tests {
         let shards = object_to_shards(object, Namespace(7), Epoch(9), [0x11; 32], root)
             .expect("object should shard");
 
-        assert_eq!(shards.len(), 10);
+        assert_eq!(shards.len(), shards[0].header.n as usize);
         for (i, shard) in shards.iter().enumerate() {
             assert_eq!(shard.header.index as usize, i);
             assert_eq!(shard.header.object_root, root);
@@ -433,9 +446,8 @@ mod tests {
             .expect("object should shard");
 
         let k = shards[0].header.k as usize;
-        let subset = [0usize, 2, 4, 6, 8, 9];
-        assert_eq!(subset.len(), k);
-        let selected: Vec<_> = subset.iter().map(|i| shards[*i].clone()).collect();
+        let selected: Vec<_> = shards.iter().step_by(2).take(k).cloned().collect();
+        assert_eq!(selected.len(), k);
         let recovered =
             reconstruct_object(&selected, object.len(), root).expect("reconstruction should work");
         assert_eq!(recovered, object);
@@ -447,7 +459,8 @@ mod tests {
         let root = derive_object_root(object);
         let shards = object_to_shards(object, Namespace(3), Epoch(4), [0x33; 32], root)
             .expect("object should shard");
-        let selected = shards[..5].to_vec(); // k=6 for small profile
+        let k = shards[0].header.k as usize;
+        let selected = shards[..k.saturating_sub(1)].to_vec();
 
         let err = reconstruct_object(&selected, object.len(), root)
             .expect_err("reconstruction must fail with too few shards");
@@ -472,7 +485,8 @@ mod tests {
         let root = derive_object_root(&object);
         let shards = object_to_shards(&object, Namespace(1), Epoch(2), [0x55; 32], root)
             .expect("object should shard");
-        let subset = shards[..6].to_vec();
+        let k = shards[0].header.k as usize;
+        let subset = shards[..k].to_vec();
         let recovered_padded =
             reconstruct_object_padded(&subset, root).expect("should reconstruct");
         assert_eq!(&recovered_padded[..object.len()], object.as_slice());
@@ -492,9 +506,11 @@ mod tests {
         )
         .expect("object should shard");
         let k = shards[0].header.k as usize;
-        let subset = [1usize, 2, 4, 5, 7, 9];
-        assert_eq!(subset.len(), k);
-        let selected: Vec<_> = subset.iter().map(|i| shards[*i].clone()).collect();
+        let mut selected: Vec<_> = shards.iter().skip(1).step_by(2).take(k).cloned().collect();
+        if selected.len() < k {
+            selected.extend(shards.iter().take(k - selected.len()).cloned());
+        }
+        assert_eq!(selected.len(), k);
         let recovered = reconstruct_object_with_mode(
             &selected,
             object.len(),

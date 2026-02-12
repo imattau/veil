@@ -1,11 +1,11 @@
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 
+use veil_android_node::discovery_tag;
 use veil_android_node::{
     build_self_contact, default_protocol_config, handle_discovery_payload, DiscoveryMessage,
     NodeState, ProtocolEngine,
 };
-use veil_android_node::discovery_tag;
 use veil_codec::object::decode_object_cbor_prefix;
 use veil_crypto::aead::{build_veil_aad, AeadCipher, XChaCha20Poly1305Cipher};
 
@@ -24,20 +24,20 @@ async fn drain_discovery(
     let mut buffered_roots: Vec<[u8; 32]> = Vec::new();
     while Instant::now() < deadline {
         match protocol.pump_inbound().await {
-            Ok(Some(event)) => {
-                match &event {
-                    veil_node::receive::ReceiveEvent::Delivered { payload, namespace, .. } => {
-                        if *namespace == protocol.discovery_namespace() {
-                            let _ = handle_discovery_payload(node, protocol, payload).await;
-                            handled += 1;
-                        }
+            Ok(Some(event)) => match &event {
+                veil_node::receive::ReceiveEvent::Delivered {
+                    payload, namespace, ..
+                } => {
+                    if *namespace == protocol.discovery_namespace() {
+                        let _ = handle_discovery_payload(node, protocol, payload).await;
+                        handled += 1;
                     }
-                    veil_node::receive::ReceiveEvent::Buffered { object_root, .. } => {
-                        buffered_roots.push(*object_root);
-                    }
-                    _ => {}
                 }
-            }
+                veil_node::receive::ReceiveEvent::Buffered { object_root, .. } => {
+                    buffered_roots.push(*object_root);
+                }
+                _ => {}
+            },
             Ok(None) => {}
             Err(err) => {
                 let _ = err;

@@ -458,7 +458,10 @@ async fn run_server_worker(
     let listener = match tokio::net::TcpListener::bind(&config.bind_addr).await {
         Ok(l) => l,
         Err(err) => {
-            eprintln!("websocket server bind failed on {}: {}", config.bind_addr, err);
+            eprintln!(
+                "websocket server bind failed on {}: {}",
+                config.bind_addr, err
+            );
             let _ = startup_tx.send(Err(err.to_string()));
             running.store(false, Ordering::Relaxed);
             return;
@@ -558,16 +561,18 @@ async fn run_server_worker(
 mod tests {
     use std::time::Duration;
 
-    use super::{WebSocketAdapter, WebSocketAdapterConfig, WebSocketServerAdapter, WebSocketServerAdapterConfig};
+    use super::{
+        WebSocketAdapter, WebSocketAdapterConfig, WebSocketServerAdapter,
+        WebSocketServerAdapterConfig,
+    };
     use veil_transport::adapter::TransportAdapter;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn server_adapter_accepts_multiple_clients() {
         let server_cfg = WebSocketServerAdapterConfig::new("127.0.0.1:0");
         let mut server = WebSocketServerAdapter::listen(server_cfg).expect("server listen");
-        
+
         // Wait for bind to complete and get port
         // ... (not easily accessible here without more changes, but we'll assume it works)
     }
 }
-

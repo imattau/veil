@@ -5,16 +5,17 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::RngCore;
-use tokio::sync::Mutex;
 use serde_json;
+use tokio::sync::Mutex;
 
 use veil_core::tags::derive_feed_tag;
 use veil_core::{Epoch, Namespace};
 use veil_crypto::aead::XChaCha20Poly1305Cipher;
-use veil_crypto::signing::Ed25519Verifier;
 use veil_crypto::signing::Ed25519Signer;
+use veil_crypto::signing::Ed25519Verifier;
+use veil_fec::profile::ErasureCodingMode;
 use veil_node::batch::FeedBatcher;
-use veil_node::config::NodeRuntimeConfig;
+use veil_node::config::{BloomExchangeConfig, NodeRuntimeConfig, ProbabilisticForwardingConfig};
 use veil_node::policy::LocalWotPolicy;
 use veil_node::receive::ReceiveEvent;
 use veil_node::runtime::{
@@ -24,10 +25,10 @@ use veil_node::service::{PublisherRuntime, PublisherTickInput};
 
 use crate::adapters::{FallbackAdapter, FastAdapter, LaneAdapter, LaneSnapshot, MultiLaneAdapter};
 use crate::api::{LaneDetail, LaneStats};
-use veil_node::persistence::load_state_or_default;
+use crate::discovery::discovery_tag;
 use veil_codec::shard::decode_shard_cbor;
 use veil_fec::sharder::reconstruct_object_padded_with_mode;
-use crate::discovery::discovery_tag;
+use veil_node::persistence::load_state_or_default;
 
 #[derive(Debug, Clone)]
 pub struct ProtocolConfig {
@@ -52,12 +53,7 @@ pub struct ProtocolConfig {
 pub struct ProtocolEngine {
     inner: Arc<
         Mutex<
-            PublisherRuntime<
-                FastAdapter,
-                FallbackAdapter,
-                XChaCha20Poly1305Cipher,
-                Ed25519Signer,
-            >,
+            PublisherRuntime<FastAdapter, FallbackAdapter, XChaCha20Poly1305Cipher, Ed25519Signer>,
         >,
     >,
     config: ProtocolConfig,
@@ -149,7 +145,10 @@ impl ProtocolEngine {
             .map_err(|e| e.to_string())
     }
 
-    pub async fn publish_discovery(&self, msg: crate::discovery::DiscoveryMessage) -> Result<(), String> {
+    pub async fn publish_discovery(
+        &self,
+        msg: crate::discovery::DiscoveryMessage,
+    ) -> Result<(), String> {
         let payload = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
         let namespace = self.config.discovery_namespace;
         let tag = discovery_tag(namespace);
@@ -211,7 +210,11 @@ impl ProtocolEngine {
 
     pub async fn get_cached_shard(&self, shard_id: [u8; 32]) -> Option<Vec<u8>> {
         let runtime = self.inner.lock().await;
-        runtime.state.cache.get(&shard_id).map(|cached| cached.bytes.clone())
+        runtime
+            .state
+            .cache
+            .get(&shard_id)
+            .map(|cached| cached.bytes.clone())
     }
 
     pub async fn reconstruct_object(&self, root: [u8; 32]) -> Option<Vec<u8>> {
@@ -227,7 +230,8 @@ impl ProtocolEngine {
         if shards.is_empty() {
             return None;
         }
-        reconstruct_object_padded_with_mode(&shards, root, runtime.config.erasure_coding_mode).ok()
+        let mode = erasure_mode_from_shards(&shards, runtime.config.erasure_coding_mode);
+        reconstruct_object_padded_with_mode(&shards, root, mode).ok()
     }
 
     pub async fn persist_cache_state(&self) {
@@ -283,7 +287,12 @@ impl ProtocolEngine {
             ..
         } = &mut *runtime;
         let dynamic = self.dynamic_peer_map.lock().await.clone();
-        let resolver = |peer: &String| dynamic.get(peer).copied().or_else(|| cfg.publisher_for_peer(peer));
+        let resolver = |peer: &String| {
+            dynamic
+                .get(peer)
+                .copied()
+                .or_else(|| cfg.publisher_for_peer(peer))
+        };
         let event = pump_multi_lane_tick_with_config_resolvers_split(
             state,
             fast_adapter,
@@ -308,7 +317,10 @@ impl ProtocolEngine {
     pub async fn lane_details(&self) -> Vec<LaneDetail> {
         let runtime = self.inner.lock().await;
         let mut details = Vec::new();
-        details.extend(build_lane_details("fast", runtime.fast_adapter.lane_snapshots()));
+        details.extend(build_lane_details(
+            "fast",
+            runtime.fast_adapter.lane_snapshots(),
+        ));
         details.extend(build_lane_details(
             "fallback",
             runtime.fallback_adapter.lane_snapshots(),
@@ -348,7 +360,17 @@ pub fn default_protocol_config(
 ) -> ProtocolConfig {
     let mut key = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut key);
-    let cfg = NodeRuntimeConfig::default();
+    let mut cfg = NodeRuntimeConfig::default();
+    cfg.probabilistic_forwarding = ProbabilisticForwardingConfig {
+        enabled: true,
+        min_probability: 0.20,
+        replica_divisor: 8,
+    };
+    cfg.bloom_exchange = BloomExchangeConfig {
+        enabled: true,
+        interval_steps: 192,
+        false_positive_rate: 0.05,
+    };
     ProtocolConfig {
         ws_url: Some(ws_url),
         quic_bind_addr: "0.0.0.0:0".to_string(),
@@ -366,6 +388,21 @@ pub fn default_protocol_config(
         runtime_config: cfg,
         cache_state_path: None,
     }
+}
+
+fn erasure_mode_from_shards(
+    shards: &[veil_codec::shard::ShardV1],
+    fallback: ErasureCodingMode,
+) -> ErasureCodingMode {
+    shards
+        .first()
+        .map(|shard| match shard.header.erasure_mode {
+            veil_codec::shard::ShardErasureMode::Systematic => ErasureCodingMode::Systematic,
+            veil_codec::shard::ShardErasureMode::HardenedNonSystematic => {
+                ErasureCodingMode::HardenedNonSystematic
+            }
+        })
+        .unwrap_or(fallback)
 }
 
 fn current_epoch() -> Epoch {
@@ -391,6 +428,53 @@ fn derive_server_name(peer: &str) -> Option<String> {
         None
     } else {
         Some(host.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{default_protocol_config, erasure_mode_from_shards};
+    use veil_core::types::NAMESPACE_PUBLIC_FEED;
+    use veil_core::{Epoch, Namespace};
+    use veil_crypto::signing::Ed25519Signer;
+    use veil_fec::profile::ErasureCodingMode;
+    use veil_fec::sharder::{derive_object_root, object_to_shards_with_mode};
+
+    #[test]
+    fn default_protocol_config_enables_network_efficiency_policies() {
+        let cfg = default_protocol_config(
+            "ws://127.0.0.1:1/ws".to_string(),
+            "peer-a".to_string(),
+            32,
+            [0x11; 32],
+            Ed25519Signer::from_secret([0x22; 32]),
+        );
+
+        assert!(cfg.runtime_config.probabilistic_forwarding.enabled);
+        assert!(cfg.runtime_config.bloom_exchange.enabled);
+        assert_eq!(
+            cfg.runtime_config
+                .erasure_mode_for_namespace(NAMESPACE_PUBLIC_FEED),
+            ErasureCodingMode::Systematic
+        );
+    }
+
+    #[test]
+    fn reconstruct_mode_prefers_wire_header_mode() {
+        let object = b"public-feed-systematic".to_vec();
+        let root = derive_object_root(&object);
+        let shards = object_to_shards_with_mode(
+            &object,
+            Namespace(32),
+            Epoch(1),
+            [0x44; 32],
+            root,
+            ErasureCodingMode::Systematic,
+        )
+        .expect("systematic shards");
+
+        let mode = erasure_mode_from_shards(&shards, ErasureCodingMode::HardenedNonSystematic);
+        assert_eq!(mode, ErasureCodingMode::Systematic);
     }
 }
 
@@ -436,21 +520,20 @@ fn build_lane_details(role: &str, snapshots: Vec<LaneSnapshot>) -> Vec<LaneDetai
 fn build_fast_adapter(config: &ProtocolConfig) -> Result<FastAdapter, String> {
     let mut lanes: Vec<LaneAdapter> = Vec::new();
 
-    let server_name = config
-        .quic_server_name
-        .clone()
-        .or_else(|| config.fast_peers.first().and_then(|peer| derive_server_name(peer)));
+    let server_name = config.quic_server_name.clone().or_else(|| {
+        config
+            .fast_peers
+            .first()
+            .and_then(|peer| derive_server_name(peer))
+    });
     if let Some(name) = server_name {
         let bind_addr = config
             .quic_bind_addr
             .parse()
             .map_err(|_| "invalid QUIC bind addr")?;
-        let quic = crate::adapters::build_quic_adapter(
-            bind_addr,
-            name,
-            config.quic_trusted_certs.clone(),
-        )
-        .map_err(|e| e.to_string())?;
+        let quic =
+            crate::adapters::build_quic_adapter(bind_addr, name, config.quic_trusted_certs.clone())
+                .map_err(|e| e.to_string())?;
         lanes.push(LaneAdapter::Quic(quic));
     }
 

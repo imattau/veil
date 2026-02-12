@@ -15,7 +15,9 @@ mod tests {
     use std::cell::Cell;
 
     use super::TransportLane;
-    use veil_codec::shard::{ShardHeaderV1, ShardV1, SHARD_HEADER_LEN, SHARD_V1_VERSION};
+    use veil_codec::shard::{
+        ShardErasureMode, ShardHeaderV1, ShardV1, SHARD_HEADER_LEN, SHARD_V1_VERSION,
+    };
     use veil_core::{Epoch, Namespace};
 
     #[derive(Default)]
@@ -44,6 +46,9 @@ mod tests {
                 epoch: Epoch(1),
                 tag: [1_u8; 32],
                 object_root: [2_u8; 32],
+                profile_id: 1,
+                erasure_mode: ShardErasureMode::Systematic,
+                bucket_size: (16 * 1024) as u32,
                 k: 1,
                 n: 1,
                 index: 0,

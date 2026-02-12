@@ -33,7 +33,9 @@ VEIL is a transport-agnostic, shard-native overlay for censorship‑resistant pu
 - **Loss tolerance:** erasure coding enables reconstruction without full delivery.
 - **Policy‑local:** trust and payment signals influence local resource allocation, not protocol validity.
 - **Hardened FEC default:** non‑systematic encoding by default to avoid “first‑k” ciphertext exposure.
+- **Systematic public feed mode:** namespace `1` may use systematic encoding for lower ingest overhead.
 - **Traffic shaping:** optional bucket jitter to blur size fingerprints.
+- **Efficiency controls:** optional Bloom-filter shard summaries + rarity-biased probabilistic forwarding.
 
 ## Core schemas (summary)
 
@@ -43,7 +45,7 @@ VEIL is a transport-agnostic, shard-native overlay for censorship‑resistant pu
 - Optional signature covers canonical header + ciphertext hash.
 
 **ShardV1 (network unit)**
-- Fixed bucket sizes: 16/32/64 KiB (configurable by profile).
+- Fixed bucket sizes: 2/4/8/16/32/64 KiB (configurable by profile).
 - Header includes `tag`, `object_root`, `k`, `n`, `index`, plus `epoch`/`namespace`.
 - Payload is opaque random‑looking bytes.
 

@@ -343,12 +343,18 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
             return std::ptr::null_mut();
         }
     };
-    eprintln!("FFI: Fetching cert for endpoint: {} (server_name: {})", endpoint_str, server_name_str);
+    eprintln!(
+        "FFI: Fetching cert for endpoint: {} (server_name: {})",
+        endpoint_str, server_name_str
+    );
 
     let addr = match strip_scheme(&endpoint_str).parse::<SocketAddr>() {
         Ok(addr) => addr,
         Err(e) => {
-            eprintln!("FFI: failed to parse SocketAddr from {}: {}", endpoint_str, e);
+            eprintln!(
+                "FFI: failed to parse SocketAddr from {}: {}",
+                endpoint_str, e
+            );
             return std::ptr::null_mut();
         }
     };
@@ -379,13 +385,16 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
         })?;
         eprintln!("FFI: Client config built");
 
-        let mut endpoint_quinn = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
-            .map_err(|e| {
+        let mut endpoint_quinn =
+            quinn::Endpoint::client("0.0.0.0:0".parse().unwrap()).map_err(|e| {
                 eprintln!("FFI: quinn::Endpoint::client failed: {}", e);
                 e.to_string()
             })?;
         endpoint_quinn.set_default_client_config(client_cfg);
-        eprintln!("FFI: Quinn endpoint created, attempting connect to {}", addr);
+        eprintln!(
+            "FFI: Quinn endpoint created, attempting connect to {}",
+            addr
+        );
 
         let connecting = endpoint_quinn
             .connect(addr, &server_name_str)
@@ -396,7 +405,10 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
         eprintln!("FFI: Connecting to QUIC peer...");
 
         let connection_result = tokio::time::timeout(Duration::from_secs(10), connecting).await;
-        eprintln!("FFI: Connection attempt finished (timeout: {:?})", connection_result.is_err());
+        eprintln!(
+            "FFI: Connection attempt finished (timeout: {:?})",
+            connection_result.is_err()
+        );
 
         let _connection = connection_result
             .map_err(|e| {
@@ -410,14 +422,17 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
         eprintln!("FFI: QUIC connection established");
 
         // Wait a bit for the verifier to record the cert, then idle.
-        tokio::time::sleep(Duration::from_millis(100)).await; 
+        tokio::time::sleep(Duration::from_millis(100)).await;
         endpoint_quinn.wait_idle().await;
         eprintln!("FFI: Quinn endpoint idle");
         Ok::<(), String>(())
     });
 
     if result.is_err() {
-        eprintln!("FFI: QUIC fetch_peer_cert operation failed: {:?}", result.err());
+        eprintln!(
+            "FFI: QUIC fetch_peer_cert operation failed: {:?}",
+            result.err()
+        );
         return std::ptr::null_mut();
     }
 
@@ -428,7 +443,10 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
         return std::ptr::null_mut();
     };
     let hex = hex_encode_bytes(&cert);
-    eprintln!("FFI: Certificate fetched successfully. Length: {}", hex.len());
+    eprintln!(
+        "FFI: Certificate fetched successfully. Length: {}",
+        hex.len()
+    );
     match CString::new(hex) {
         Ok(cstr) => cstr.into_raw(),
         Err(e) => {

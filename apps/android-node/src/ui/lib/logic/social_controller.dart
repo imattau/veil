@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import './node_service.dart';
 import './models/node_event.dart';
@@ -29,7 +31,21 @@ class SocialController extends ChangeNotifier {
     }
   }
 
-  List<NodeEvent> get feed => nodeService.feedEvents.where((e) => e.isPost || e.isRepost).toList();
+  List<NodeEvent> get feed {
+    final filtered = nodeService.feedEvents.where((e) {
+      // Must be a post or repost
+      if (!e.isPost && !e.isRepost) return false;
+      // If it's a post, it must NOT be a reply to another post
+      if (e.isPost && e.replyToRoot != null) {
+        debugPrint('[SocialController] Filtering out comment: ${e.seq}');
+        return false;
+      }
+      return true;
+    }).toList();
+    
+    debugPrint('[SocialController] Feed filtered: ${filtered.length} posts from ${nodeService.feedEvents.length} events');
+    return filtered;
+  }
 
   List<NodeEvent> getReactions(String objectRoot) => nodeService.getReactionsFor(objectRoot);
   

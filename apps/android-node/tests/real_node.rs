@@ -78,8 +78,8 @@ async fn real_node_quic_send() {
     if std::env::var("VEIL_REAL_NODE").ok().as_deref() != Some("1") {
         return;
     }
-    let host = std::env::var("VEIL_REAL_NODE_HOST")
-        .unwrap_or_else(|_| "veilnode.3nostr.com".to_string());
+    let host =
+        std::env::var("VEIL_REAL_NODE_HOST").unwrap_or_else(|_| "veilnode.3nostr.com".to_string());
     std::env::set_var("VEIL_QUIC_DEBUG", "1");
     std::env::set_var("VEIL_QUIC_CONNECT_TIMEOUT_MS", "8000");
     std::env::set_var("VEIL_QUIC_SEND_TIMEOUT_MS", "8000");
@@ -88,7 +88,10 @@ async fn real_node_quic_send() {
             std::env::set_var("VEIL_QUIC_ALPN", raw);
         }
     } else {
-        std::env::set_var("VEIL_QUIC_ALPN", "veil-quic/1,veil/1,veil-node,veil,h3,hq-29");
+        std::env::set_var(
+            "VEIL_QUIC_ALPN",
+            "veil-quic/1,veil/1,veil-node,veil,h3,hq-29",
+        );
     }
     let (quic_port, cert) = fetch_vps_config(&host).expect("config.js fetch");
     let quic_peer = resolve_quic_peer(&host, quic_port).expect("resolve quic peer");

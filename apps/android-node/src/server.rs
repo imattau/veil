@@ -11,31 +11,32 @@ use base64::Engine;
 use tracing::info;
 
 use crate::api::{
-    BlockPublishRequest, BlockPublishResponse, DirectMessagePublishRequest,
-    DirectMessagePublishResponse, FollowPublishRequest, FollowPublishResponse, GroupMessagePublishRequest,
-    GroupMessagePublishResponse, HealthResponse, IdentityResponse, IdentityRotateResponse,
-    MediaPublishRequest, MediaPublishResponse, MutePublishRequest, MutePublishResponse,
-    PostPublishRequest, PostPublishResponse, ProfilePublishRequest, ProfilePublishResponse,
-    PublishRequest, PublishResponse, ReactionPublishRequest, ReactionPublishResponse, StatusResponse,
-    SubscribeRequest, SubscribeResponse, UnsubscribeRequest, UnsubscribeResponse, ErrorResponse,
-    PolicySummaryResponse, PolicyConfigRequest, PolicyConfigResponse, PolicySetRequest,
-    PolicySetResponse, ContactImportRequest, ContactImportResponse, ContactListResponse,
-    ShardFetchResponse, ObjectFetchResponse, DiscoveryAnnounceRequest,
-    DiscoveryLookupRequest, DiscoveryLookupResponse, DiscoveryGossipRequest,
-    DiscoveryGossipResponse, FeedResponse, SubscriptionListResponse, IdentityExportResponse, IdentityImportRequest,
-    ListPublishRequest, ListPublishResponse, GroupMetadataPublishRequest, GroupMetadataPublishResponse,
-    ZapPublishRequest, ZapPublishResponse, AppPreferencesPublishRequest, AppPreferencesPublishResponse,
-    DeletionPublishRequest, DeletionPublishResponse, RepostPublishRequest, RepostPublishResponse,
-    PollPublishRequest, PollPublishResponse, PollVotePublishRequest, PollVotePublishResponse,
-    LiveStatusPublishRequest, LiveStatusPublishResponse,
-    ObjectPublishRequest, ObjectPublishResponse,
+    AppPreferencesPublishRequest, AppPreferencesPublishResponse, BlockPublishRequest,
+    BlockPublishResponse, ContactImportRequest, ContactImportResponse, ContactListResponse,
+    DeletionPublishRequest, DeletionPublishResponse, DirectMessagePublishRequest,
+    DirectMessagePublishResponse, DiscoveryAnnounceRequest, DiscoveryGossipRequest,
+    DiscoveryGossipResponse, DiscoveryLookupRequest, DiscoveryLookupResponse, ErrorResponse,
+    FeedResponse, FollowPublishRequest, FollowPublishResponse, GroupMessagePublishRequest,
+    GroupMessagePublishResponse, GroupMetadataPublishRequest, GroupMetadataPublishResponse,
+    HealthResponse, IdentityExportResponse, IdentityImportRequest, IdentityResponse,
+    IdentityRotateResponse, ListPublishRequest, ListPublishResponse, LiveStatusPublishRequest,
+    LiveStatusPublishResponse, MediaPublishRequest, MediaPublishResponse, MutePublishRequest,
+    MutePublishResponse, ObjectFetchResponse, ObjectPublishRequest, ObjectPublishResponse,
+    PolicyConfigRequest, PolicyConfigResponse, PolicySetRequest, PolicySetResponse,
+    PolicySummaryResponse, PollPublishRequest, PollPublishResponse, PollVotePublishRequest,
+    PollVotePublishResponse, PostPublishRequest, PostPublishResponse, ProfilePublishRequest,
+    ProfilePublishResponse, PublishRequest, PublishResponse, ReactionPublishRequest,
+    ReactionPublishResponse, RepostPublishRequest, RepostPublishResponse, ShardFetchResponse,
+    StatusResponse, SubscribeRequest, SubscribeResponse, SubscriptionListResponse,
+    UnsubscribeRequest, UnsubscribeResponse, ZapPublishRequest, ZapPublishResponse,
 };
 use crate::discovery::{
-    build_self_contact, handle_discovery_announce, handle_discovery_gossip, handle_discovery_lookup,
-    DiscoveryMessage,
+    build_self_contact, handle_discovery_announce, handle_discovery_gossip,
+    handle_discovery_lookup, DiscoveryMessage,
 };
 use crate::state::NodeState;
 use crate::ProtocolEngine;
+use veil_schema_feed::FeedBundle;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -289,12 +290,15 @@ async fn publish_profile(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value =
+        serde_json::to_value(&FeedBundle::Profile(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(ProfilePublishResponse {
         message_id,
         queued: true,
@@ -332,12 +336,14 @@ async fn publish_post(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&FeedBundle::Post(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(PostPublishResponse {
         message_id,
         queued: true,
@@ -375,12 +381,15 @@ async fn publish_reaction(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value =
+        serde_json::to_value(&FeedBundle::Reaction(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(ReactionPublishResponse {
         message_id,
         queued: true,
@@ -418,12 +427,15 @@ async fn publish_direct_message(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value =
+        serde_json::to_value(&FeedBundle::DirectMessage(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(DirectMessagePublishResponse {
         message_id,
         queued: true,
@@ -461,12 +473,15 @@ async fn publish_group_message(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value =
+        serde_json::to_value(&FeedBundle::GroupMessage(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(GroupMessagePublishResponse {
         message_id,
         queued: true,
@@ -507,12 +522,14 @@ async fn publish_media(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&FeedBundle::Media(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(MediaPublishResponse {
         message_id,
         queued: true,
@@ -535,7 +552,10 @@ async fn publish_follow(
     if bundle.follower_pubkey_hex.is_empty() {
         bundle.follower_pubkey_hex = pubkey_hex.clone();
     } else if bundle.follower_pubkey_hex != pubkey_hex {
-        return bad_request("follower_mismatch", "follower pubkey does not match identity");
+        return bad_request(
+            "follower_mismatch",
+            "follower pubkey does not match identity",
+        );
     }
     if !valid_channel(&bundle.channel_id) {
         return bad_request("invalid_channel", "channel_id is invalid");
@@ -550,13 +570,18 @@ async fn publish_follow(
     if payload.len() > MAX_BUNDLE_JSON_BYTES {
         return bad_request("bundle_too_large", "bundle exceeds max size");
     }
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value =
+        serde_json::to_value(&FeedBundle::Follow(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
-    state.node.trust_pubkey(hex_to_pubkey(&bundle.followee_pubkey_hex));
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .trust_pubkey(hex_to_pubkey(&bundle.followee_pubkey_hex));
     state
         .protocol
         .update_wot_policy(state.node.wot_policy())
@@ -607,7 +632,9 @@ async fn publish_mute(
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.mute_pubkey(hex_to_pubkey(&bundle.muted_pubkey_hex));
+    state
+        .node
+        .mute_pubkey(hex_to_pubkey(&bundle.muted_pubkey_hex));
     state
         .protocol
         .update_wot_policy(state.node.wot_policy())
@@ -658,7 +685,9 @@ async fn publish_block(
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.block_pubkey(hex_to_pubkey(&bundle.blocked_pubkey_hex));
+    state
+        .node
+        .block_pubkey(hex_to_pubkey(&bundle.blocked_pubkey_hex));
     state
         .protocol
         .update_wot_policy(state.node.wot_policy())
@@ -691,12 +720,14 @@ async fn publish_list(
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&FeedBundle::List(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(ListPublishResponse {
         message_id,
         queued: true,
@@ -725,12 +756,15 @@ async fn publish_group_metadata(
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value =
+        serde_json::to_value(&FeedBundle::GroupMetadata(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(GroupMetadataPublishResponse {
         message_id,
         queued: true,
@@ -759,12 +793,14 @@ async fn publish_zap(
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&FeedBundle::Zap(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(ZapPublishResponse {
         message_id,
         queued: true,
@@ -793,12 +829,15 @@ async fn publish_app_preferences(
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value =
+        serde_json::to_value(&FeedBundle::AppPreferences(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(AppPreferencesPublishResponse {
         message_id,
         queued: true,
@@ -827,12 +866,15 @@ async fn publish_deletion(
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value =
+        serde_json::to_value(&FeedBundle::Deletion(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(DeletionPublishResponse {
         message_id,
         queued: true,
@@ -861,12 +903,15 @@ async fn publish_repost(
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value =
+        serde_json::to_value(&FeedBundle::Repost(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(RepostPublishResponse {
         message_id,
         queued: true,
@@ -895,12 +940,14 @@ async fn publish_poll(
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value = serde_json::to_value(&FeedBundle::Poll(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(PollPublishResponse {
         message_id,
         queued: true,
@@ -929,12 +976,15 @@ async fn publish_poll_vote(
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value =
+        serde_json::to_value(&FeedBundle::PollVote(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(PollVotePublishResponse {
         message_id,
         queued: true,
@@ -963,12 +1013,15 @@ async fn publish_live_status(
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
-    let bundle_value = serde_json::to_value(&bundle).unwrap_or_default();
+    let bundle_value =
+        serde_json::to_value(&FeedBundle::LiveStatus(bundle.clone())).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: String::from_utf8(payload).unwrap_or_default(),
     });
-    state.node.inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
     Json(LiveStatusPublishResponse {
         message_id,
         queued: true,
@@ -1055,7 +1108,9 @@ async fn policy_untrust(
     if !valid_pubkey_hex(&request.pubkey_hex) {
         return bad_request("invalid_pubkey", "pubkey invalid");
     }
-    state.node.untrust_pubkey(hex_to_pubkey(&request.pubkey_hex));
+    state
+        .node
+        .untrust_pubkey(hex_to_pubkey(&request.pubkey_hex));
     state
         .protocol
         .update_wot_policy(state.node.wot_policy())
@@ -1131,7 +1186,9 @@ async fn policy_unblock(
     if !valid_pubkey_hex(&request.pubkey_hex) {
         return bad_request("invalid_pubkey", "pubkey invalid");
     }
-    state.node.unblock_pubkey(hex_to_pubkey(&request.pubkey_hex));
+    state
+        .node
+        .unblock_pubkey(hex_to_pubkey(&request.pubkey_hex));
     state
         .protocol
         .update_wot_policy(state.node.wot_policy())
@@ -1222,7 +1279,8 @@ async fn discovery_gossip(
             state.protocol.add_contact(contact).await;
         }
     }
-    let response: DiscoveryGossipResponse = handle_discovery_gossip(&state.node, request.clone(), 24);
+    let response: DiscoveryGossipResponse =
+        handle_discovery_gossip(&state.node, request.clone(), 24);
     let msg = DiscoveryMessage::gossip(request.contacts);
     let _ = state.protocol.publish_discovery(msg).await;
     Json(response).into_response()
@@ -1291,7 +1349,10 @@ async fn subscribe(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let changed = state.node.subscribe(&request.tag);
-    Json(SubscribeResponse { subscribed: changed }).into_response()
+    Json(SubscribeResponse {
+        subscribed: changed,
+    })
+    .into_response()
 }
 
 async fn unsubscribe(
@@ -1303,7 +1364,10 @@ async fn unsubscribe(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let changed = state.node.unsubscribe(&request.tag);
-    Json(UnsubscribeResponse { unsubscribed: changed }).into_response()
+    Json(UnsubscribeResponse {
+        unsubscribed: changed,
+    })
+    .into_response()
 }
 
 async fn events_ws(
@@ -1395,11 +1459,11 @@ fn hex_to_pubkey(value: &str) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::ContactBundle;
+    use crate::api::DiscoveryAnnounceResponse;
     use axum::body::{Body, Bytes};
     use http::{Request, StatusCode};
     use tower::ServiceExt;
-    use crate::api::ContactBundle;
-    use crate::api::DiscoveryAnnounceResponse;
     use veil_schema_feed::{
         BlockBundle, BundleMeta, DirectMessageBundle, FollowBundle, GroupMessageBundle,
         MediaBundle, MuteBundle, PostBundle, ProfileBundle, ReactionBundle,
@@ -1415,9 +1479,8 @@ mod tests {
             identity.public_key,
             identity.signer(),
         );
-        let protocol = std::sync::Arc::new(
-            ProtocolEngine::new(protocol_config).expect("protocol init"),
-        );
+        let protocol =
+            std::sync::Arc::new(ProtocolEngine::new(protocol_config).expect("protocol init"));
         AppState {
             node,
             protocol,
@@ -1430,7 +1493,12 @@ mod tests {
     async fn rejects_missing_token() {
         let app = build_router(test_state());
         let response = app
-            .oneshot(Request::builder().uri("/status").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -1440,7 +1508,12 @@ mod tests {
     async fn health_allows_unauthenticated_access() {
         let app = build_router(test_state());
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -1632,8 +1705,8 @@ mod tests {
                     .body(Body::from(body))
                     .unwrap(),
             )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -2343,7 +2416,7 @@ mod tests {
         let state = test_state();
         let mut rx = state.node.subscribe_events();
         let app = build_router(state);
-        
+
         let bundle = PostBundle {
             meta: BundleMeta {
                 version: 1,
@@ -2355,11 +2428,12 @@ mod tests {
             media_roots: vec![],
             reply_to_root: None,
         };
-        
+
         let body = serde_json::to_string(&PostPublishRequest {
             namespace: 32,
             bundle,
-        }).unwrap();
+        })
+        .unwrap();
 
         let response = app
             .oneshot(
@@ -2375,7 +2449,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        
+
         // The node emits "publish_queued" first, then we call inject_local_feed_bundle
         let first = rx.try_recv().expect("first event should be emitted");
         assert_eq!(first.event, "publish_queued");

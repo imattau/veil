@@ -7,8 +7,8 @@ use veil_sdk_bridge::{
     veil_quic_fetch_peer_cert, veil_quic_free_string, veil_quic_metrics, veil_quic_send,
     veil_quic_start, veil_quic_stop, veil_quic_test_ffi_call, QuicMetrics,
 };
-use veil_transport_quic::{QuicAdapter, QuicAdapterConfig, QuicIdentity};
 use veil_transport::adapter::TransportAdapter;
+use veil_transport_quic::{QuicAdapter, QuicAdapterConfig, QuicIdentity};
 
 fn free_udp_addr() -> std::net::SocketAddr {
     let sock = UdpSocket::bind("127.0.0.1:0").expect("bind should work");
@@ -141,7 +141,12 @@ fn ffi_can_send_payload_to_quic_server() {
 fn ffi_send_rejects_invalid_handle() {
     let payload = b"x";
     let result = unsafe {
-        veil_quic_send(0, cstring("127.0.0.1:9").as_ptr(), payload.as_ptr(), payload.len())
+        veil_quic_send(
+            0,
+            cstring("127.0.0.1:9").as_ptr(),
+            payload.as_ptr(),
+            payload.len(),
+        )
     };
     assert_eq!(result, -1);
 }

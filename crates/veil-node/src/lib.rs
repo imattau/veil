@@ -14,6 +14,7 @@
 
 pub mod ack;
 pub mod batch;
+pub mod bloom;
 pub mod cache;
 pub mod config;
 pub mod forwarding;

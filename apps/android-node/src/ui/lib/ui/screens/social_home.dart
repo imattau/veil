@@ -44,7 +44,6 @@ class _SocialHomeState extends State<SocialHome> {
     _service.dispose();
     super.dispose();
   }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -160,18 +159,28 @@ class _FeedView extends StatelessWidget {
       builder: (context, _) {
         final feed = controller.feed;
         final state = controller.nodeService.state;
+        debugPrint('[FeedView] Rendering ${feed.length} posts');
 
         if (state.busy && feed.isEmpty) {
           return const FeedShimmer();
         }
 
         if (!state.busy && feed.isEmpty) {
-          return EmptyState(
-            icon: Icons.bubble_chart_outlined,
-            title: 'Welcome to the Veil',
-            message: 'Your personal social node is active and syncing. Follow people or channels to see content!',
-            onAction: () => controller.nodeService.refresh(),
-            actionLabel: 'Check for Updates',
+          return RefreshIndicator(
+            onRefresh: controller.nodeService.refresh,
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * 0.7,
+                child: EmptyState(
+                  icon: Icons.bubble_chart_outlined,
+                  title: 'Welcome to the Veil',
+                  message: 'Your personal social node is active and syncing. Follow people or channels to see content!',
+                  onAction: () => controller.nodeService.refresh(),
+                  actionLabel: 'Check for Updates',
+                ),
+              ),
+            ),
           );
         }
         

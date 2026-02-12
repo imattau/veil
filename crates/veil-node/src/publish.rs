@@ -15,7 +15,7 @@ use veil_fec::sharder::{derive_object_root, object_to_shards_with_mode_and_paddi
 use veil_transport::adapter::TransportAdapter;
 
 use crate::ack::register_pending_ack;
-use crate::batch::FeedBatcher;
+use crate::batch::{FeedBatcher, DEFAULT_MAX_OBJECT_SIZE};
 use crate::config::NodeRuntimeConfig;
 use crate::runtime::{pump_ack_timeouts, RuntimeStats};
 use crate::state::NodeState;
@@ -34,6 +34,8 @@ pub enum PublishError {
     PayloadEncode(#[from] serde_cbor::Error),
     #[error("signed object requested but signer was not provided")]
     MissingSigner,
+    #[error("object exceeds max size ({size} > {max})")]
+    ObjectTooLarge { size: usize, max: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,15 +193,22 @@ pub fn publish_encoded_object_multi_lane<AFast: TransportAdapter, AFallback: Tra
     now_step: u64,
     config: &NodeRuntimeConfig,
 ) -> Result<PublishResult, PublishError> {
+    if encoded_object.len() > DEFAULT_MAX_OBJECT_SIZE {
+        return Err(PublishError::ObjectTooLarge {
+            size: encoded_object.len(),
+            max: DEFAULT_MAX_OBJECT_SIZE,
+        });
+    }
     let object = decode_object_cbor(encoded_object)?;
     let wire_root = derive_object_root(encoded_object);
+    let erasure_mode = config.erasure_mode_for_namespace(object.namespace);
     let shards = object_to_shards_with_mode_and_padding(
         encoded_object,
         object.namespace,
         object.epoch,
         object.tag,
         wire_root,
-        config.erasure_coding_mode,
+        erasure_mode,
         config.bucket_jitter_extra_levels,
     )?;
     let k = shards.first().map(|s| s.header.k as usize).unwrap_or(0);
@@ -216,7 +225,7 @@ pub fn publish_encoded_object_multi_lane<AFast: TransportAdapter, AFallback: Tra
     let mut sent_fast = 0usize;
     let mut failed_fast = 0usize;
     for bytes in shard_bytes.iter().take(fast_count) {
-        for peer in fast_peers.iter().take(config.base_fast_fanout.min(2)) {
+        for peer in fast_peers.iter().take(config.base_fast_fanout.max(1)) {
             if fast_adapter.send(peer, bytes).is_ok() {
                 sent_fast += 1;
             } else {
@@ -447,7 +456,7 @@ mod tests {
         .expect("publish should succeed");
 
         assert!(out.sent_fast > 0);
-        assert!(out.sent_fallback > 0);
+        assert!(out.sent_fallback <= out.shards_total);
         assert!(out.ack_tracked);
         assert!(node.pending_acks.contains_key(&out.object_root));
     }

@@ -14,11 +14,11 @@ use crate::api::{
 };
 use crate::discovery::{DiscoveryStateHandle, DiscoveryTable};
 use crate::state_store::{IdentityRecord, QueueItem, StateStore, StoreSnapshot};
-use veil_schema_feed::FeedBundle;
+use veil_crypto::signing::{Ed25519Signer, Signer};
 use veil_node::policy::{
     parse_endorsement_payload, EndorsementIngestResult, LocalWotPolicy, WotConfig, WotSummary,
 };
-use veil_crypto::signing::{Ed25519Signer, Signer};
+use veil_schema_feed::FeedBundle;
 
 #[derive(Debug, Clone)]
 pub struct NodeState {
@@ -83,10 +83,7 @@ impl NodeState {
     pub fn new_with_store(version: impl Into<String>, store_path: Option<PathBuf>) -> Self {
         let (events, _) = broadcast::channel(128);
         let store = store_path.map(StateStore::new);
-        let snapshot = store
-            .as_ref()
-            .map(StateStore::load)
-            .unwrap_or_default();
+        let snapshot = store.as_ref().map(StateStore::load).unwrap_or_default();
         let identity = snapshot
             .identity
             .as_ref()
@@ -102,7 +99,7 @@ impl NodeState {
         let subscriptions: HashSet<String> = snapshot.subscriptions.iter().cloned().collect();
         let event_buffer: VecDeque<EventEnvelope> = VecDeque::from(snapshot.feed_history.clone());
         let event_seq = event_buffer.iter().map(|e| e.seq).max().unwrap_or(0);
-        
+
         let discovery_table = Arc::new(Mutex::new(DiscoveryTable::default()));
         {
             let mut table = discovery_table.lock().expect("discovery lock");
@@ -431,7 +428,11 @@ impl NodeState {
         inner.discovery.lookup_pubkey(pubkey_hex, limit)
     }
 
-    pub fn discovery_lookup_contact(&self, contact: &ContactBundle, limit: usize) -> Vec<ContactBundle> {
+    pub fn discovery_lookup_contact(
+        &self,
+        contact: &ContactBundle,
+        limit: usize,
+    ) -> Vec<ContactBundle> {
         let inner = self.inner.lock().expect("state lock");
         inner.discovery.lookup_contact(contact, limit)
     }
@@ -518,13 +519,12 @@ impl NodeState {
         for bundle in feed_bundles {
             let mut value = serde_json::to_value(bundle).unwrap_or_default();
             if let Some(obj) = value.as_object_mut() {
-                obj.insert("object_root".to_string(), serde_json::json!(hex_encode(object_root)));
+                obj.insert(
+                    "object_root".to_string(),
+                    serde_json::json!(hex_encode(object_root)),
+                );
             }
-            emit_event_locked(
-                &mut inner,
-                "feed_bundle",
-                value,
-            );
+            emit_event_locked(&mut inner, "feed_bundle", value);
         }
     }
 
@@ -624,13 +624,12 @@ impl NodeState {
         let mut inner = self.inner.lock().expect("state lock");
         let mut value = bundle;
         if let Some(obj) = value.as_object_mut() {
-            obj.insert("object_root".to_string(), serde_json::json!(hex_encode(&object_root)));
+            obj.insert(
+                "object_root".to_string(),
+                serde_json::json!(hex_encode(&object_root)),
+            );
         }
-        emit_event_locked(
-            &mut inner,
-            "feed_bundle",
-            value,
-        );
+        emit_event_locked(&mut inner, "feed_bundle", value);
     }
 
     fn persist_policy_locked(&self, inner: &mut StateInner) {
@@ -752,8 +751,8 @@ fn generate_identity() -> NodeIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use veil_schema_feed::BundleMeta;
     use tempfile::tempdir;
+    use veil_schema_feed::BundleMeta;
 
     #[test]
     fn persists_queue_to_disk() {
@@ -794,7 +793,10 @@ mod tests {
         assert_eq!(status.lanes.details.len(), 2);
         assert!(status.lanes.quic.connected);
         assert!(!status.lanes.websocket.connected);
-        assert_eq!(status.lanes.websocket.last_error.as_deref(), Some("send_error"));
+        assert_eq!(
+            status.lanes.websocket.last_error.as_deref(),
+            Some("send_error")
+        );
     }
 
     #[test]
@@ -824,8 +826,8 @@ mod tests {
     #[test]
     fn endorsement_payload_updates_policy() {
         let state = NodeState::new("0.1-test");
-        let endorsement = veil_schema_feed::FeedBundle::Endorsement(
-            veil_schema_feed::EndorsementBundle {
+        let endorsement =
+            veil_schema_feed::FeedBundle::Endorsement(veil_schema_feed::EndorsementBundle {
                 meta: BundleMeta {
                     version: 1,
                     created_at: 1_700_000_060,
@@ -834,8 +836,7 @@ mod tests {
                 endorser_pubkey_hex: "aa".repeat(32),
                 publisher_pubkey_hex: "bb".repeat(32),
                 at_step: 10,
-            },
-        );
+            });
         let payload = serde_json::to_vec(&endorsement).expect("encode");
         assert!(state.ingest_endorsement_payload(&payload, 10));
         let summary = state.policy_summary();
@@ -894,15 +895,15 @@ mod tests {
     fn injects_local_feed_bundle() {
         let state = NodeState::new("0.1-test");
         let mut rx = state.subscribe_events();
-        
+
         let bundle = serde_json::json!({
             "kind": "post",
             "text": "local post"
         });
         let root = [0x99; 32];
-        
+
         state.inject_local_feed_bundle(bundle, root);
-        
+
         let event = rx.try_recv().expect("should receive event");
         assert_eq!(event.event, "feed_bundle");
         assert_eq!(event.data["text"], "local post");

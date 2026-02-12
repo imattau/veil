@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../logic/node_service.dart';
@@ -39,7 +40,6 @@ class _ProfileEditViewState extends State<ProfileEditView> {
       setState(() {
         _selectedImageBytes = bytes;
       });
-      // We don't upload immediately anymore, we wait for Save
     }
   }
 
@@ -91,67 +91,69 @@ class _ProfileEditViewState extends State<ProfileEditView> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(24),
-        children: [
-          Center(
-            child: Stack(
-              children: [
-                CircleAvatar(
-                  radius: 50,
-                  backgroundColor: VeilTheme.surface,
-                  backgroundImage: _selectedImageBytes != null 
-                    ? MemoryImage(_selectedImageBytes!) 
-                    : null,
-                  child: _selectedImageBytes == null && _avatarMediaRoot == null 
-                    ? const Icon(Icons.person, size: 50, color: VeilTheme.accent)
-                    : null,
-                ),
-                Positioned(
-                  right: 0,
-                  bottom: 0,
-                  child: CircleAvatar(
-                    radius: 18,
-                    backgroundColor: VeilTheme.accent,
-                    child: IconButton(
-                      icon: const Icon(Icons.camera_alt, size: 18, color: Colors.black),
-                      onPressed: _pickImage,
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            Center(
+              child: Stack(
+                children: [
+                  CircleAvatar(
+                    radius: 50,
+                    backgroundColor: VeilTheme.surface,
+                    backgroundImage: _selectedImageBytes != null 
+                      ? MemoryImage(_selectedImageBytes!) 
+                      : null,
+                    child: _selectedImageBytes == null && _avatarMediaRoot == null 
+                      ? const Icon(Icons.person, size: 50, color: VeilTheme.accent)
+                      : null,
+                  ),
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: CircleAvatar(
+                      radius: 18,
+                      backgroundColor: VeilTheme.accent,
+                      child: IconButton(
+                        icon: const Icon(Icons.camera_alt, size: 18, color: Colors.black),
+                        onPressed: _pickImage,
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 32),
-          TextField(
-            controller: _nameController,
-            decoration: const InputDecoration(
-              labelText: 'Display Name',
-              labelStyle: TextStyle(color: VeilTheme.textSecondary),
-              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+            const SizedBox(height: 32),
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(
+                labelText: 'Display Name',
+                labelStyle: TextStyle(color: VeilTheme.textSecondary),
+                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+              ),
             ),
-          ),
-          const SizedBox(height: 24),
-          TextField(
-            controller: _bioController,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Bio',
-              labelStyle: TextStyle(color: VeilTheme.textSecondary),
-              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+            const SizedBox(height: 24),
+            TextField(
+              controller: _bioController,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Bio',
+                labelStyle: TextStyle(color: VeilTheme.textSecondary),
+                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+              ),
             ),
-          ),
-          const SizedBox(height: 24),
-          TextField(
-            controller: _lnController,
-            decoration: const InputDecoration(
-              labelText: 'Lightning Address (Optional)',
-              hintText: 'user@domain.com',
-              labelStyle: TextStyle(color: VeilTheme.textSecondary),
-              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+            const SizedBox(height: 24),
+            TextField(
+              controller: _lnController,
+              decoration: const InputDecoration(
+                labelText: 'Lightning Address (Optional)',
+                hintText: 'user@domain.com',
+                labelStyle: TextStyle(color: VeilTheme.textSecondary),
+                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white10)),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -5,8 +5,8 @@ use veil_codec::object::{
     OBJECT_FLAG_SIGNED, OBJECT_V1_VERSION,
 };
 use veil_codec::shard::{
-    decode_shard_cbor, encode_shard_cbor, ShardHeaderV1, ShardV1, SHARD_HEADER_LEN,
-    SHARD_V1_VERSION,
+    decode_shard_cbor, encode_shard_cbor, ShardErasureMode, ShardHeaderV1, ShardV1,
+    SHARD_HEADER_LEN, SHARD_V1_VERSION,
 };
 use veil_core::{Epoch, Namespace};
 
@@ -50,6 +50,9 @@ fn sample_shard() -> ShardV1 {
             epoch: Epoch(9),
             tag: [0x11_u8; 32],
             object_root: [0x22_u8; 32],
+            profile_id: 2,
+            erasure_mode: ShardErasureMode::HardenedNonSystematic,
+            bucket_size: (16 * 1024) as u32,
             k: 6,
             n: 10,
             index: 0,

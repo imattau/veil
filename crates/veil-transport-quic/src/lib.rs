@@ -471,7 +471,9 @@ fn build_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientConfig, Qu
     Ok(ClientConfig::new(Arc::new(quic_tls)))
 }
 
-fn build_pinned_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientConfig, QuicAdapterError> {
+fn build_pinned_client_config(
+    trusted_certs_der: &[Vec<u8>],
+) -> Result<ClientConfig, QuicAdapterError> {
     #[derive(Debug)]
     struct PinnedVerifier {
         pinned: Vec<Vec<u8>>,
@@ -486,7 +488,11 @@ fn build_pinned_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientCon
             _ocsp: &[u8],
             _now: rustls::pki_types::UnixTime,
         ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-            if self.pinned.iter().any(|cert| cert.as_slice() == end_entity.as_ref()) {
+            if self
+                .pinned
+                .iter()
+                .any(|cert| cert.as_slice() == end_entity.as_ref())
+            {
                 Ok(rustls::client::danger::ServerCertVerified::assertion())
             } else {
                 Err(rustls::Error::InvalidCertificate(

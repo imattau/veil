@@ -5,11 +5,26 @@ use veil_core::{ObjectRoot, Tag};
 use crate::error::CodecError;
 
 /// Shard schema version for `ShardV1`.
-pub const SHARD_V1_VERSION: u16 = 1;
+pub const SHARD_V1_VERSION: u16 = 2;
 /// Fixed serialized shard-header length in bytes.
-pub const SHARD_HEADER_LEN: usize = 2 + 2 + 4 + 32 + 32 + 2 + 2 + 2;
+pub const SHARD_HEADER_LEN: usize = 2 + 2 + 4 + 32 + 32 + 2 + 1 + 4 + 2 + 2 + 2;
 /// Allowed total shard bucket sizes.
-pub const SHARD_BUCKET_SIZES: [usize; 3] = [16 * 1024, 32 * 1024, 64 * 1024];
+pub const SHARD_BUCKET_SIZES: [usize; 6] = [
+    2 * 1024,
+    4 * 1024,
+    8 * 1024,
+    16 * 1024,
+    32 * 1024,
+    64 * 1024,
+];
+
+/// Erasure coding mode carried on shard headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum ShardErasureMode {
+    Systematic = 0,
+    HardenedNonSystematic = 1,
+}
 
 /// Shard metadata header.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +39,12 @@ pub struct ShardHeaderV1 {
     pub tag: Tag,
     /// Root grouping sibling shards for one object.
     pub object_root: ObjectRoot,
+    /// FEC profile identifier.
+    pub profile_id: u16,
+    /// Erasure coding mode used for this shard set.
+    pub erasure_mode: ShardErasureMode,
+    /// Declared total shard bucket size in bytes.
+    pub bucket_size: u32,
     /// Reconstruction threshold.
     pub k: u16,
     /// Total shards in set.
@@ -54,6 +75,9 @@ impl ShardHeaderV1 {
         if self.index >= self.n {
             return Err(CodecError::InvalidShard("index out of range"));
         }
+        if !SHARD_BUCKET_SIZES.contains(&(self.bucket_size as usize)) {
+            return Err(CodecError::InvalidShard("unsupported bucket size"));
+        }
         Ok(())
     }
 }
@@ -67,6 +91,11 @@ impl ShardV1 {
         }
 
         let total_len = SHARD_HEADER_LEN + self.payload.len();
+        if total_len != self.header.bucket_size as usize {
+            return Err(CodecError::InvalidShard(
+                "payload/header length does not match declared bucket size",
+            ));
+        }
         if !SHARD_BUCKET_SIZES.contains(&total_len) {
             return Err(CodecError::InvalidShard(
                 "shard does not match allowed bucket size",
@@ -91,7 +120,7 @@ pub fn decode_shard_cbor(bytes: &[u8]) -> Result<ShardV1, CodecError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShardHeaderV1, ShardV1, SHARD_HEADER_LEN, SHARD_V1_VERSION};
+    use super::{ShardErasureMode, ShardHeaderV1, ShardV1, SHARD_HEADER_LEN, SHARD_V1_VERSION};
     use veil_core::{Epoch, Namespace};
 
     fn sample_shard() -> ShardV1 {
@@ -102,6 +131,9 @@ mod tests {
                 epoch: Epoch(1),
                 tag: [0x11_u8; 32],
                 object_root: [0x22_u8; 32],
+                profile_id: 1,
+                erasure_mode: ShardErasureMode::HardenedNonSystematic,
+                bucket_size: (16 * 1024) as u32,
                 k: 6,
                 n: 10,
                 index: 0,
@@ -134,10 +166,12 @@ mod tests {
 
         let mut s32 = sample_shard();
         s32.payload = vec![0x33_u8; 32 * 1024 - SHARD_HEADER_LEN];
+        s32.header.bucket_size = (32 * 1024) as u32;
         assert!(s32.validate().is_ok());
 
         let mut s64 = sample_shard();
         s64.payload = vec![0x33_u8; 64 * 1024 - SHARD_HEADER_LEN];
+        s64.header.bucket_size = (64 * 1024) as u32;
         assert!(s64.validate().is_ok());
     }
 }

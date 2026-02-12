@@ -67,7 +67,7 @@ class NodeForegroundService : Service() {
                 }
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
@@ -78,11 +78,13 @@ class NodeForegroundService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Log.i(TAG, "App swiped away, stopping node service")
+        Log.i(TAG, "App swiped away, stopping node service and exiting process")
         stopNodeProcess()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         running = false
+        // Definitive exit to ensure debug connections are closed
+        android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     private fun startNodeProcess() {

@@ -101,17 +101,20 @@ Encoding SHOULD use CBOR with deterministic/canonical options.
 ## 5. ShardV1 Schema
 
 ShardV1 MUST contain:
-- `version: u16 = 1`
+- `version: u16 = 2`
 - `namespace: u16`
 - `epoch: u32`
 - `tag: bytes32`
 - `object_root: bytes32`
+- `profile_id: u16`
+- `erasure_mode: u8` (`0=systematic`, `1=hardened_non_systematic`)
+- `bucket_size: u32`
 - `k: u16`
 - `n: u16`
 - `index: u16` (`0..n-1`)
 - `payload: bytes[bucket - header_len]`
 
-Allowed bucket sizes are `16 KiB`, `32 KiB`, `64 KiB`.
+Allowed bucket sizes are `2 KiB`, `4 KiB`, `8 KiB`, `16 KiB`, `32 KiB`, `64 KiB`.
 Implementations MAY add optional upward bucket jitter (choosing a larger
 fitting bucket) to reduce size-correlation leakage.
 
@@ -120,8 +123,9 @@ fitting bucket) to reduce size-correlation leakage.
 ## 6. Profiles and Limits
 
 Default profiles:
-- `PROFILE_SMALL`: `k=6`, `n=10`, buckets `[16 KiB, 32 KiB]`
-- `PROFILE_LARGE`: `k=10`, `n=16`, buckets `[32 KiB, 64 KiB]`
+- `PROFILE_MICRO`: `id=1`, `k=2`, `n=3`, buckets `[2 KiB, 4 KiB, 8 KiB]`
+- `PROFILE_SMALL`: `id=2`, `k=6`, `n=10`, buckets `[16 KiB, 32 KiB]`
+- `PROFILE_LARGE`: `id=3`, `k=10`, `n=16`, buckets `[32 KiB, 64 KiB]`
 
 Defaults:
 - `TARGET_BATCH_SIZE = 96 KiB`
@@ -154,6 +158,8 @@ Defaults:
   `k` shards are no longer direct plaintext-ciphertext chunks.
 - Implementations MAY offer a systematic compatibility mode for constrained or
   legacy environments.
+- Namespace policy MAY require systematic mode (for example public feed
+  namespace `1`) to optimize common-case receive cost.
 - Any set of `k` unique shard indices MUST be sufficient for decode.
 
 ## 9. Delivery and Forwarding
@@ -167,6 +173,8 @@ Defaults:
 - Nodes MUST drop duplicate `shard_id`.
 - Nodes MUST forward only subscribed tags.
 - Nodes MAY briefly cache unsubscribed-tag shards without forwarding.
+- Nodes MAY apply replica-estimate probabilistic forwarding to reduce floods of
+  high-replica shards, while keeping a non-zero minimum forwarding probability.
 
 ### 9.3 Namespace signature policy (optional hardening)
 - Implementations MAY define namespaces that require signed objects.
@@ -192,6 +200,12 @@ Under pressure:
 - Expired entries MUST be evicted first.
 - Remaining evictions SHOULD prefer removing most common shards first (rarity-biased retention).
 
+### 11.1 Bloom-filter peer exchange (optional)
+- Peers MAY exchange compact Bloom summaries of recently seen shard ids.
+- A Bloom exchange payload MUST include `{version, epoch, filter}`.
+- Receivers SHOULD use false-positive-tolerant set difference to request/send
+  only shards likely missing on the remote peer.
+
 ## 12. Security and Privacy Notes
 
 - Transport encryption (e.g., QUIC/TLS/WebRTC DTLS) is REQUIRED in deployment.
@@ -201,5 +215,5 @@ Under pressure:
 
 ## 13. Compatibility
 
-- This document defines `version=1` objects and shards.
+- This document defines `ObjectV1(version=1)` and `ShardV1(version=2)`.
 - Future versions MUST be additive where possible and negotiated by explicit version fields.

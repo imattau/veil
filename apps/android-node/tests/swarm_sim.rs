@@ -1,13 +1,18 @@
 use std::collections::HashMap;
 
-use veil_core::{Epoch, Namespace};
-use veil_core::hash::blake3_32;
-use veil_core::tags::derive_feed_tag;
+use std::collections::HashSet;
+use std::net::TcpListener;
+use std::thread;
+use std::time::Duration;
+use veil_android_node::NodeState as AppNodeState;
 use veil_codec::object::{
     decode_object_cbor, encode_object_cbor, object_signature_message_digest, ObjectV1, Signature,
     OBJECT_FLAG_SIGNED, OBJECT_V1_VERSION,
 };
 use veil_codec::shard::decode_shard_cbor;
+use veil_core::hash::blake3_32;
+use veil_core::tags::derive_feed_tag;
+use veil_core::{Epoch, Namespace};
 use veil_crypto::aead::{build_veil_aad, AeadCipher, XChaCha20Poly1305Cipher};
 use veil_crypto::signing::{Ed25519Signer, Ed25519Verifier, Signer, Verifier};
 use veil_fec::sharder::{derive_object_root, reconstruct_object_with_mode};
@@ -16,18 +21,14 @@ use veil_node::config::NodeRuntimeConfig;
 use veil_node::publish::{
     publish_service_tick_multi_lane, PublishQueueTickParams, PublishServiceTickParams,
 };
-use veil_node::runtime::{pump_multi_lane_tick_with_config, ConfigMultiLanePumpParams, RuntimeStats};
-use veil_android_node::NodeState as AppNodeState;
+use veil_node::runtime::{
+    pump_multi_lane_tick_with_config, ConfigMultiLanePumpParams, RuntimeStats,
+};
 use veil_node::state::NodeState as VeilNodeState;
 use veil_transport::adapter::{route_in_memory_outbound, InMemoryAdapter, TransportAdapter};
 use veil_transport_websocket::{
-    WebSocketAdapter, WebSocketAdapterConfig, WebSocketServerAdapter,
-    WebSocketServerAdapterConfig,
+    WebSocketAdapter, WebSocketAdapterConfig, WebSocketServerAdapter, WebSocketServerAdapterConfig,
 };
-use std::collections::HashSet;
-use std::net::TcpListener;
-use std::thread;
-use std::time::Duration;
 
 struct NodeSim {
     name: String,
@@ -128,9 +129,9 @@ impl NodeSim {
         )
         .ok()?
         .and_then(|event| match event {
-            veil_node::receive::ReceiveEvent::Delivered { payload, tag: got, .. } if got == tag => {
-                Some(payload)
-            }
+            veil_node::receive::ReceiveEvent::Delivered {
+                payload, tag: got, ..
+            } if got == tag => Some(payload),
             _ => None,
         })
     }
@@ -163,16 +164,8 @@ fn swarm_sim_multilane_in_memory() {
     for step in 1..=20 {
         publisher.publish(payload.clone(), tag, step);
         for i in 0..nodes.len() {
-            route_in_memory_outbound(
-                &mut publisher.fast,
-                &mut nodes[i].fast,
-                "publisher",
-            );
-            route_in_memory_outbound(
-                &mut publisher.fallback,
-                &mut nodes[i].fallback,
-                "publisher",
-            );
+            route_in_memory_outbound(&mut publisher.fast, &mut nodes[i].fast, "publisher");
+            route_in_memory_outbound(&mut publisher.fallback, &mut nodes[i].fallback, "publisher");
         }
         for i in 0..nodes.len() {
             for j in 0..nodes.len() {
@@ -201,11 +194,7 @@ fn swarm_sim_multilane_in_memory() {
                     let (left, right) = nodes.split_at_mut(i);
                     (&mut right[0], &mut left[j])
                 };
-                route_in_memory_outbound(
-                    &mut from.fallback,
-                    &mut to.fallback,
-                    from.name.clone(),
-                );
+                route_in_memory_outbound(&mut from.fallback, &mut to.fallback, from.name.clone());
             }
         }
 
@@ -485,10 +474,7 @@ fn swarm_sim_required_signed_namespace_rejects_unsigned() {
     let payload = b"unsigned payload".to_vec();
 
     let mut publisher = NodeSim::new("publisher", encrypt_key);
-    publisher
-        .cfg
-        .required_signed_namespaces
-        .insert(namespace.0);
+    publisher.cfg.required_signed_namespaces.insert(namespace.0);
 
     publisher.publish_with_flags(payload.clone(), namespace, tag, 1, 0);
 
@@ -512,14 +498,8 @@ fn swarm_sim_required_signed_namespace_rejects_unsigned() {
     }
     assert!(!shards.is_empty(), "expected decoded shards");
 
-    let expected_encoded = build_unsigned_encoded_object(
-        &payload,
-        namespace,
-        Epoch(1),
-        tag,
-        &encrypt_key,
-        1,
-    );
+    let expected_encoded =
+        build_unsigned_encoded_object(&payload, namespace, Epoch(1), tag, &encrypt_key, 1);
     let expected_root = derive_object_root(&expected_encoded);
     let reconstructed = reconstruct_object_with_mode(
         &shards,
@@ -570,16 +550,8 @@ fn swarm_sim_multilane_emits_feed_bundle_event() {
     for step in 1..=20 {
         publisher.publish(payload.clone(), tag, step);
         for i in 0..nodes.len() {
-            route_in_memory_outbound(
-                &mut publisher.fast,
-                &mut nodes[i].fast,
-                "publisher",
-            );
-            route_in_memory_outbound(
-                &mut publisher.fallback,
-                &mut nodes[i].fallback,
-                "publisher",
-            );
+            route_in_memory_outbound(&mut publisher.fast, &mut nodes[i].fast, "publisher");
+            route_in_memory_outbound(&mut publisher.fallback, &mut nodes[i].fallback, "publisher");
         }
         for i in 0..nodes.len() {
             for j in 0..nodes.len() {
@@ -594,11 +566,7 @@ fn swarm_sim_multilane_emits_feed_bundle_event() {
                     (&mut right[0], &mut left[j])
                 };
                 route_in_memory_outbound(&mut from.fast, &mut to.fast, from.name.clone());
-                route_in_memory_outbound(
-                    &mut from.fallback,
-                    &mut to.fallback,
-                    from.name.clone(),
-                );
+                route_in_memory_outbound(&mut from.fallback, &mut to.fallback, from.name.clone());
             }
         }
 
@@ -632,8 +600,7 @@ fn build_signed_encoded_object(
     now_step: u64,
     signer: &Ed25519Signer,
 ) -> Vec<u8> {
-    let batch_payload =
-        serde_cbor::to_vec(&vec![payload_item.to_vec()]).expect("encode batch");
+    let batch_payload = serde_cbor::to_vec(&vec![payload_item.to_vec()]).expect("encode batch");
     let nonce = derive_object_nonce(tag, namespace, epoch, now_step, &batch_payload);
     let aad = build_veil_aad(tag, namespace, epoch);
     let envelope = XChaCha20Poly1305Cipher
@@ -667,8 +634,7 @@ fn build_unsigned_encoded_object(
     encrypt_key: &[u8; 32],
     now_step: u64,
 ) -> Vec<u8> {
-    let batch_payload =
-        serde_cbor::to_vec(&vec![payload_item.to_vec()]).expect("encode batch");
+    let batch_payload = serde_cbor::to_vec(&vec![payload_item.to_vec()]).expect("encode batch");
     let nonce = derive_object_nonce(tag, namespace, epoch, now_step, &batch_payload);
     let aad = build_veil_aad(tag, namespace, epoch);
     let envelope = XChaCha20Poly1305Cipher

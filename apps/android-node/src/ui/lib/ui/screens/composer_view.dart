@@ -159,8 +159,8 @@ class _ComposerViewState extends State<ComposerView> {
 
   Widget _buildBottomActionToolbar() {
     return Container(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 12,
+      padding: const EdgeInsets.only(
+        bottom: 12,
         left: 16,
         right: 16,
         top: 12,

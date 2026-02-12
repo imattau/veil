@@ -5,6 +5,7 @@ use veil_crypto::signing::{Signer, Verifier};
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
 use crate::batch::FeedBatcher;
+use crate::bloom::{encode_bloom_exchange_packet, BloomFilter};
 use crate::config::{AdaptiveLaneScoringConfig, NodeRuntimeConfig};
 use crate::policy::EndorsementIngestResult;
 use crate::publish::{
@@ -212,6 +213,7 @@ where
     pub decrypt_key: [u8; 32],
     pub stats: RuntimeStats,
     adaptive_lane_state: AdaptiveLaneScoringState,
+    last_bloom_exchange_step: Option<u64>,
     cipher: C,
     verifier: V,
 }
@@ -242,6 +244,7 @@ where
             decrypt_key,
             stats: RuntimeStats::default(),
             adaptive_lane_state,
+            last_bloom_exchange_step: None,
             cipher,
             verifier,
         }
@@ -348,6 +351,51 @@ where
         self.adaptive_lane_state.last_fallback_snapshot = fallback;
     }
 
+    fn maybe_broadcast_bloom_filters(
+        &mut self,
+        now_step: u64,
+        fast_peers: &[AFast::Peer],
+        fallback_peers: &[AFallback::Peer],
+    ) {
+        let cfg = self.config.bloom_exchange;
+        if !cfg.enabled || cfg.interval_steps == 0 {
+            return;
+        }
+        if self
+            .last_bloom_exchange_step
+            .is_some_and(|prev| now_step.saturating_sub(prev) < cfg.interval_steps)
+        {
+            return;
+        }
+
+        let mut salt = [0_u8; 16];
+        salt[..8].copy_from_slice(&now_step.to_be_bytes());
+        let mut bf =
+            BloomFilter::recommended(self.state.cache.len(), cfg.false_positive_rate, salt);
+        for sid in self.state.cache.keys() {
+            bf.insert(sid);
+        }
+        let Ok(packet) = encode_bloom_exchange_packet(now_step as u32, bf) else {
+            return;
+        };
+
+        for peer in fast_peers {
+            if self.fast_adapter.send(peer, &packet).is_ok() {
+                self.stats.forwarded_messages += 1;
+            } else {
+                self.stats.send_failures += 1;
+            }
+        }
+        for peer in fallback_peers {
+            if self.fallback_adapter.send(peer, &packet).is_ok() {
+                self.stats.forwarded_messages += 1;
+            } else {
+                self.stats.send_failures += 1;
+            }
+        }
+        self.last_bloom_exchange_step = Some(now_step);
+    }
+
     pub fn tick(
         &mut self,
         now_step: u64,
@@ -382,6 +430,7 @@ where
         if result.is_ok() {
             let ack_delta = self.stats.ack_messages.saturating_sub(prev_ack);
             self.update_adaptive_lane_scoring(ack_delta);
+            self.maybe_broadcast_bloom_filters(now_step, fast_peers, fallback_peers);
         }
         result
     }
@@ -677,6 +726,8 @@ where
 mod tests {
     use std::time::Duration;
 
+    use crate::bloom::decode_bloom_exchange_packet;
+    use crate::config::BloomExchangeConfig;
     use veil_codec::object::OBJECT_FLAG_SIGNED;
     use veil_codec::shard::encode_shard_cbor;
     use veil_core::{Epoch, Namespace};
@@ -737,6 +788,95 @@ mod tests {
 
         let out = rt.tick(1, &peers, &peers).expect("tick should succeed");
         assert!(out.is_none());
+    }
+
+    #[test]
+    fn node_runtime_tick_broadcasts_bloom_packets_when_enabled() {
+        let mut rt = NodeRuntime::new(
+            crate::state::NodeState::default(),
+            InMemoryAdapter::default(),
+            InMemoryAdapter::default(),
+            crate::config::NodeRuntimeConfig::builder()
+                .bloom_exchange(BloomExchangeConfig {
+                    enabled: true,
+                    interval_steps: 1,
+                    false_positive_rate: 0.05,
+                })
+                .build(),
+            [0xAA; 32],
+            XChaCha20Poly1305Cipher,
+            Ed25519Verifier,
+        );
+        let peers = vec!["peer-a".to_string(), "peer-b".to_string()];
+
+        let _ = rt.tick(1, &peers, &peers).expect("tick should succeed");
+        let fast = rt.fast_adapter.take_outbound();
+        let fallback = rt.fallback_adapter.take_outbound();
+        assert!(!fast.is_empty());
+        assert!(!fallback.is_empty());
+        assert!(decode_bloom_exchange_packet(&fast[0].1).is_some());
+        assert!(decode_bloom_exchange_packet(&fallback[0].1).is_some());
+    }
+
+    #[test]
+    fn bloom_exchange_interval_estimates_control_plane_traffic_overhead() {
+        let peers = vec!["peer-a".to_string(), "peer-b".to_string()];
+        let mut rt_off = NodeRuntime::new(
+            crate::state::NodeState::default(),
+            InMemoryAdapter::default(),
+            InMemoryAdapter::default(),
+            crate::config::NodeRuntimeConfig::default(),
+            [0xAA; 32],
+            XChaCha20Poly1305Cipher,
+            Ed25519Verifier,
+        );
+        let mut rt_on = NodeRuntime::new(
+            crate::state::NodeState::default(),
+            InMemoryAdapter::default(),
+            InMemoryAdapter::default(),
+            crate::config::NodeRuntimeConfig::builder()
+                .bloom_exchange(BloomExchangeConfig {
+                    enabled: true,
+                    interval_steps: 2,
+                    false_positive_rate: 0.05,
+                })
+                .build(),
+            [0xAA; 32],
+            XChaCha20Poly1305Cipher,
+            Ed25519Verifier,
+        );
+
+        for step in 1..=6 {
+            let _ = rt_off
+                .tick(step, &peers, &peers)
+                .expect("tick off should succeed");
+            let _ = rt_on
+                .tick(step, &peers, &peers)
+                .expect("tick on should succeed");
+        }
+
+        let off_fast = rt_off.fast_adapter.take_outbound();
+        let off_fallback = rt_off.fallback_adapter.take_outbound();
+        let on_fast = rt_on.fast_adapter.take_outbound();
+        let on_fallback = rt_on.fallback_adapter.take_outbound();
+
+        assert!(off_fast.is_empty());
+        assert!(off_fallback.is_empty());
+
+        let bloom_packets = on_fast
+            .iter()
+            .chain(on_fallback.iter())
+            .filter(|(_, bytes)| decode_bloom_exchange_packet(bytes).is_some())
+            .count();
+
+        eprintln!("bloom exchange traffic estimate: bloom_packets={bloom_packets}");
+        // Steps 1,3,5 each broadcast to 2 fast + 2 fallback peers.
+        assert_eq!(bloom_packets, 12);
+        // A simple traffic estimate signal: enabling bloom added 12 control sends.
+        assert_eq!(
+            rt_on.stats.forwarded_messages - rt_off.stats.forwarded_messages,
+            12
+        );
     }
 
     #[test]
@@ -925,5 +1065,239 @@ mod tests {
             .expect("adaptive scoring should be enabled");
         assert!(adaptive.effective_fallback_fanout >= 2);
         assert!(adaptive.effective_fast_fanout <= 2);
+    }
+
+    #[test]
+    fn normal_social_usage_estimates_total_network_traffic() {
+        let tag = [0x55; 32];
+        let peers = vec![
+            "peer-a".to_string(),
+            "peer-b".to_string(),
+            "peer-c".to_string(),
+            "peer-d".to_string(),
+        ];
+
+        let mut publisher = PublisherRuntime::new(
+            crate::state::NodeState::default(),
+            crate::batch::FeedBatcher::default(),
+            InMemoryAdapter::default(),
+            InMemoryAdapter::default(),
+            crate::config::NodeRuntimeConfig::default(),
+            [0xAA; 32],
+            Some(Ed25519Signer::from_secret([0x11; 32])),
+            XChaCha20Poly1305Cipher,
+        );
+        let mut subscriber = NodeRuntime::new(
+            crate::state::NodeState::default(),
+            InMemoryAdapter::default(),
+            InMemoryAdapter::default(),
+            crate::config::NodeRuntimeConfig::builder()
+                .bloom_exchange(BloomExchangeConfig {
+                    enabled: true,
+                    interval_steps: 10,
+                    false_positive_rate: 0.05,
+                })
+                .build(),
+            [0xAA; 32],
+            XChaCha20Poly1305Cipher,
+            Ed25519Verifier,
+        );
+        subscriber.state.subscriptions.insert(tag);
+
+        // "Normal" session mix: 80 lightweight reactions + 20 post-sized payloads.
+        for i in 0..100u8 {
+            let item = if i % 5 == 0 {
+                vec![i; 1_200]
+            } else {
+                vec![i; 120]
+            };
+            publisher.enqueue(item);
+        }
+
+        let mut total_send_ops = 0usize;
+        let mut total_bytes = 0usize;
+        let mut step = 1u64;
+
+        while !publisher.batcher.is_empty() && step < 256 {
+            let _ = publisher
+                .tick(PublisherTickInput {
+                    namespace: veil_core::types::NAMESPACE_PUBLIC_FEED,
+                    epoch: veil_core::Epoch(1),
+                    tag,
+                    now_step: step,
+                    flags: OBJECT_FLAG_SIGNED,
+                    interactive_flush: false,
+                    fast_peers: &peers,
+                    fallback_peers: &peers,
+                })
+                .expect("publisher tick should succeed");
+
+            let pub_fast = publisher.fast_adapter.take_outbound();
+            let pub_fallback = publisher.fallback_adapter.take_outbound();
+            total_send_ops += pub_fast.len() + pub_fallback.len();
+            total_bytes += pub_fast.iter().map(|(_, b)| b.len()).sum::<usize>();
+            total_bytes += pub_fallback.iter().map(|(_, b)| b.len()).sum::<usize>();
+
+            for (_, bytes) in pub_fast {
+                subscriber.fast_adapter.enqueue_inbound("publisher", bytes);
+            }
+            for (_, bytes) in pub_fallback {
+                subscriber
+                    .fallback_adapter
+                    .enqueue_inbound("publisher", bytes);
+            }
+            step = step.saturating_add(1);
+        }
+
+        assert!(publisher.batcher.is_empty());
+
+        for i in 0..512u64 {
+            let _ = subscriber
+                .tick(step + i, &peers, &peers)
+                .expect("subscriber tick should succeed");
+            let sub_fast = subscriber.fast_adapter.take_outbound();
+            let sub_fallback = subscriber.fallback_adapter.take_outbound();
+            total_send_ops += sub_fast.len() + sub_fallback.len();
+            total_bytes += sub_fast.iter().map(|(_, b)| b.len()).sum::<usize>();
+            total_bytes += sub_fallback.iter().map(|(_, b)| b.len()).sum::<usize>();
+        }
+
+        eprintln!(
+            "normal social usage traffic estimate: sends={}, bytes={}",
+            total_send_ops, total_bytes
+        );
+
+        assert!(total_send_ops > 0);
+        assert!(total_bytes > 200 * 1024);
+        assert!(total_bytes < 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn normal_social_usage_with_100_post_reads_estimates_total_network_traffic() {
+        let tag = [0x56; 32];
+        let peers = vec![
+            "peer-a".to_string(),
+            "peer-b".to_string(),
+            "peer-c".to_string(),
+            "peer-d".to_string(),
+        ];
+
+        let mut publisher = PublisherRuntime::new(
+            crate::state::NodeState::default(),
+            crate::batch::FeedBatcher::default(),
+            InMemoryAdapter::default(),
+            InMemoryAdapter::default(),
+            crate::config::NodeRuntimeConfig::default(),
+            [0xAA; 32],
+            Some(Ed25519Signer::from_secret([0x12; 32])),
+            XChaCha20Poly1305Cipher,
+        );
+        let mut subscriber = NodeRuntime::new(
+            crate::state::NodeState::default(),
+            InMemoryAdapter::default(),
+            InMemoryAdapter::default(),
+            crate::config::NodeRuntimeConfig::builder()
+                .bloom_exchange(BloomExchangeConfig {
+                    enabled: true,
+                    interval_steps: 10,
+                    false_positive_rate: 0.05,
+                })
+                .build(),
+            [0xAA; 32],
+            XChaCha20Poly1305Cipher,
+            Ed25519Verifier,
+        );
+        subscriber.state.subscriptions.insert(tag);
+
+        // Baseline social usage mix.
+        for i in 0..100u8 {
+            let item = if i % 5 == 0 {
+                vec![i; 1_200]
+            } else {
+                vec![i; 120]
+            };
+            publisher.enqueue(item);
+        }
+
+        let mut total_send_ops = 0usize;
+        let mut total_bytes = 0usize;
+        let mut step = 1u64;
+
+        while !publisher.batcher.is_empty() && step < 256 {
+            let _ = publisher
+                .tick(PublisherTickInput {
+                    namespace: veil_core::types::NAMESPACE_PUBLIC_FEED,
+                    epoch: veil_core::Epoch(1),
+                    tag,
+                    now_step: step,
+                    flags: OBJECT_FLAG_SIGNED,
+                    interactive_flush: false,
+                    fast_peers: &peers,
+                    fallback_peers: &peers,
+                })
+                .expect("publisher tick should succeed");
+
+            let pub_fast = publisher.fast_adapter.take_outbound();
+            let pub_fallback = publisher.fallback_adapter.take_outbound();
+            total_send_ops += pub_fast.len() + pub_fallback.len();
+            total_bytes += pub_fast.iter().map(|(_, b)| b.len()).sum::<usize>();
+            total_bytes += pub_fallback.iter().map(|(_, b)| b.len()).sum::<usize>();
+
+            for (_, bytes) in pub_fast {
+                subscriber.fast_adapter.enqueue_inbound("publisher", bytes);
+            }
+            for (_, bytes) in pub_fallback {
+                subscriber
+                    .fallback_adapter
+                    .enqueue_inbound("publisher", bytes);
+            }
+            step = step.saturating_add(1);
+        }
+        assert!(publisher.batcher.is_empty());
+
+        for i in 0..512u64 {
+            let _ = subscriber
+                .tick(step + i, &peers, &peers)
+                .expect("subscriber tick should succeed");
+            let sub_fast = subscriber.fast_adapter.take_outbound();
+            let sub_fallback = subscriber.fallback_adapter.take_outbound();
+            total_send_ops += sub_fast.len() + sub_fallback.len();
+            total_bytes += sub_fast.iter().map(|(_, b)| b.len()).sum::<usize>();
+            total_bytes += sub_fallback.iter().map(|(_, b)| b.len()).sum::<usize>();
+        }
+
+        // Add "100 post reads" estimate:
+        // - request frame per read (root + metadata) ~ 96B
+        // - response: first k shard payloads for a typical post object
+        let read_request_bytes = 96usize;
+        let sample_post_object = vec![0xAB; 1_500];
+        let sample_root = derive_object_root(&sample_post_object);
+        let sample_shards = object_to_shards(
+            &sample_post_object,
+            veil_core::types::NAMESPACE_PUBLIC_FEED,
+            Epoch(1),
+            tag,
+            sample_root,
+        )
+        .expect("sample post sharding should succeed");
+        let k = sample_shards[0].header.k as usize;
+        let response_bytes_per_read: usize = sample_shards
+            .iter()
+            .take(k)
+            .map(|s| encode_shard_cbor(s).expect("encode shard").len())
+            .sum();
+
+        let reads = 100usize;
+        total_send_ops += reads * (1 + k);
+        total_bytes += reads * (read_request_bytes + response_bytes_per_read);
+
+        eprintln!(
+            "normal social+reads traffic estimate: sends={}, bytes={}, per_read_response_bytes={}",
+            total_send_ops, total_bytes, response_bytes_per_read
+        );
+
+        assert!(total_send_ops > 600);
+        assert!(total_bytes > 500 * 1024);
+        assert!(total_bytes < 16 * 1024 * 1024);
     }
 }

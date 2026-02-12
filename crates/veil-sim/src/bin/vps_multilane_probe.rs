@@ -4,12 +4,14 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rand::rngs::OsRng;
-use rand::RngCore;
 use base64::engine::general_purpose::STANDARD as Base64Standard;
 use base64::Engine as _;
+use rand::rngs::OsRng;
+use rand::RngCore;
 use rustls::crypto::{aws_lc_rs, ring};
-use veil_codec::shard::{encode_shard_cbor, ShardHeaderV1, ShardV1, SHARD_HEADER_LEN};
+use veil_codec::shard::{
+    encode_shard_cbor, ShardErasureMode, ShardHeaderV1, ShardV1, SHARD_HEADER_LEN,
+};
 use veil_core::{Epoch, Namespace, Tag};
 use veil_transport::adapter::TransportAdapter;
 use veil_transport_quic::{QuicAdapter, QuicAdapterConfig, QuicIdentity};
@@ -37,7 +39,11 @@ fn main() {
     let quic_cert_path = get_arg_value(&args, "--quic-cert-path");
     let mut quic_cert_url = get_arg_value(&args, "--quic-cert-url");
     let tag_hex = get_arg_value(&args, "--tag")
-        .or_else(|| env::var("VEIL_VPS_CORE_TAGS").ok().and_then(|v| v.split(',').next().map(|s| s.to_string())))
+        .or_else(|| {
+            env::var("VEIL_VPS_CORE_TAGS")
+                .ok()
+                .and_then(|v| v.split(',').next().map(|s| s.to_string()))
+        })
         .unwrap_or_else(|| DEFAULT_CORE_TAGS[0].to_string());
     let namespace = get_arg_value(&args, "--namespace")
         .and_then(|v| v.parse::<u16>().ok())
@@ -138,8 +144,13 @@ fn main() {
             Ok(adapter) => quic_sender = Some(adapter),
             Err(err) => eprintln!("QUIC sender error: {err}"),
         }
-        match build_quic_adapter(peer, quic_cert_hex, quic_cert_b64, quic_cert_path, quic_cert_url)
-        {
+        match build_quic_adapter(
+            peer,
+            quic_cert_hex,
+            quic_cert_b64,
+            quic_cert_path,
+            quic_cert_url,
+        ) {
             Ok(adapter) => quic_receiver = Some(adapter),
             Err(err) => eprintln!("QUIC receiver error: {err}"),
         }
@@ -295,9 +306,7 @@ fn build_quic_adapter(
     } else if let Some(url) = cert_url {
         fetch_cert_from_url(&url)?
     } else {
-        return Err(
-            "QUIC cert required (--quic-cert-hex/b64/path or --quic-cert-url)".to_string(),
-        );
+        return Err("QUIC cert required (--quic-cert-hex/b64/path or --quic-cert-url)".to_string());
     };
 
     let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
@@ -322,7 +331,10 @@ fn build_quic_adapter(
     Ok(adapter)
 }
 
-fn wait_for_ws_ready(sender: Option<&mut WebSocketAdapter>, receiver: Option<&mut WebSocketAdapter>) {
+fn wait_for_ws_ready(
+    sender: Option<&mut WebSocketAdapter>,
+    receiver: Option<&mut WebSocketAdapter>,
+) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         let sender_ready = sender.as_ref().map(|a| a.can_send()).unwrap_or(true);
@@ -334,16 +346,25 @@ fn wait_for_ws_ready(sender: Option<&mut WebSocketAdapter>, receiver: Option<&mu
     }
 }
 
-fn build_shard(tag: Tag, namespace: Namespace, epoch: Epoch, object_root: [u8; 32], index: u16) -> Vec<u8> {
+fn build_shard(
+    tag: Tag,
+    namespace: Namespace,
+    epoch: Epoch,
+    object_root: [u8; 32],
+    index: u16,
+) -> Vec<u8> {
     let payload_len = 16 * 1024 - SHARD_HEADER_LEN;
     let payload = vec![0x42_u8; payload_len];
     let shard = ShardV1 {
         header: ShardHeaderV1 {
-            version: 1,
+            version: 2,
             namespace,
             epoch,
             tag,
             object_root,
+            profile_id: 1,
+            erasure_mode: ShardErasureMode::Systematic,
+            bucket_size: (16 * 1024) as u32,
             k: 2,
             n: 3,
             index,
@@ -354,7 +375,9 @@ fn build_shard(tag: Tag, namespace: Namespace, epoch: Epoch, object_root: [u8; 3
 }
 
 fn current_epoch() -> Epoch {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     Epoch((now.as_secs() / 86_400) as u32)
 }
 
@@ -366,8 +389,8 @@ fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(cleaned.len() / 2);
     let mut i = 0;
     while i < cleaned.len() {
-        let byte = u8::from_str_radix(&cleaned[i..i + 2], 16)
-            .map_err(|_| "invalid hex".to_string())?;
+        let byte =
+            u8::from_str_radix(&cleaned[i..i + 2], 16).map_err(|_| "invalid hex".to_string())?;
         out.push(byte);
         i += 2;
     }
@@ -382,7 +405,9 @@ fn fetch_cert_from_url(url: &str) -> Result<Vec<u8>, String> {
         .timeout_connect(Duration::from_secs(8))
         .timeout_read(Duration::from_secs(15))
         .build();
-    let response = agent.get(url).call()
+    let response = agent
+        .get(url)
+        .call()
         .map_err(|err| format!("failed to fetch cert: {err}"))?;
     if response.status() >= 400 {
         return Err(format!("cert fetch failed: HTTP {}", response.status()));
@@ -437,8 +462,8 @@ fn fetch_vps_config(host: &str) -> Result<VpsConfig, String> {
         .into_reader()
         .read_to_string(&mut body)
         .map_err(|err| format!("failed to read config: {err}"))?;
-    let quic_port = extract_js_value(&body, "VEIL_VPS_QUIC_PORT")
-        .and_then(|value| value.parse::<u16>().ok());
+    let quic_port =
+        extract_js_value(&body, "VEIL_VPS_QUIC_PORT").and_then(|value| value.parse::<u16>().ok());
     let quic_cert_b64 = extract_js_value(&body, "VEIL_VPS_QUIC_CERT_B64");
     Ok(VpsConfig {
         quic_port,

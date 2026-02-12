@@ -13,8 +13,8 @@ use crate::api::{
     DiscoveryGossipResponse, DiscoveryLookupRequest, DiscoveryLookupResponse,
 };
 use crate::protocol::ProtocolEngine;
-use veil_core::Namespace;
 use crate::state::NodeState;
+use veil_core::Namespace;
 
 const DISCOVERY_MAX_CONTACTS: usize = 64;
 const DISCOVERY_TAG_SEED: &[u8] = b"veil-discovery";
@@ -103,7 +103,11 @@ pub struct DiscoveryWorker {
 }
 
 impl DiscoveryWorker {
-    pub fn new(state: Arc<NodeState>, protocol: Arc<ProtocolEngine>, config: DiscoveryConfig) -> Self {
+    pub fn new(
+        state: Arc<NodeState>,
+        protocol: Arc<ProtocolEngine>,
+        config: DiscoveryConfig,
+    ) -> Self {
         Self {
             state,
             protocol,
@@ -180,7 +184,11 @@ pub struct LanDiscoveryWorker {
 }
 
 impl LanDiscoveryWorker {
-    pub fn new(state: Arc<NodeState>, protocol: Arc<ProtocolEngine>, config: LanDiscoveryConfig) -> Self {
+    pub fn new(
+        state: Arc<NodeState>,
+        protocol: Arc<ProtocolEngine>,
+        config: LanDiscoveryConfig,
+    ) -> Self {
         Self {
             state,
             protocol,
@@ -207,7 +215,10 @@ impl LanDiscoveryWorker {
                 if last_announce.elapsed() >= config.announce_interval {
                     let announce = LanAnnounce::from_contact(&self_contact);
                     if let Ok(bytes) = serde_json::to_vec(&announce) {
-                        let _ = socket.send_to(&bytes, SocketAddr::from(([255, 255, 255, 255], config.port)));
+                        let _ = socket.send_to(
+                            &bytes,
+                            SocketAddr::from(([255, 255, 255, 255], config.port)),
+                        );
                     }
                     last_announce = Instant::now();
                 }
@@ -510,17 +521,15 @@ fn key_for_pubkey(pubkey_hex: &str) -> Option<[u8; 32]> {
     if pubkey_hex.len() != 64 {
         return None;
     }
-    hex::decode(pubkey_hex)
-        .ok()
-        .and_then(|bytes| {
-            if bytes.len() == 32 {
-                let mut out = [0u8; 32];
-                out.copy_from_slice(&bytes);
-                Some(out)
-            } else {
-                None
-            }
-        })
+    hex::decode(pubkey_hex).ok().and_then(|bytes| {
+        if bytes.len() == 32 {
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&bytes);
+            Some(out)
+        } else {
+            None
+        }
+    })
 }
 
 fn xor_distance(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
@@ -591,9 +600,18 @@ mod tests {
     #[test]
     fn discovery_lookup_orders_by_distance() {
         let mut table = DiscoveryTable::default();
-        table.upsert(make_contact("alpha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
-        table.upsert(make_contact("beta", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
-        table.upsert(make_contact("gamma", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"));
+        table.upsert(make_contact(
+            "alpha",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ));
+        table.upsert(make_contact(
+            "beta",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ));
+        table.upsert(make_contact(
+            "gamma",
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        ));
         let key = key_for_peer("alpha");
         let results = table.lookup(&key, 2);
         assert_eq!(results.len(), 2);

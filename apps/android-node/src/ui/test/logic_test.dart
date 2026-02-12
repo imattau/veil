@@ -112,6 +112,66 @@ void main() {
       expect(comments.any((e) => e.postText == 'reply 2'), true);
     });
 
+    test('SocialController filters only posts and reposts for main feed', () {
+      final service = NodeService();
+      final controller = SocialController(service);
+
+      // 1. A standard post (Should be in feed)
+      service.testInjectEvent({
+        'seq': 10,
+        'event': 'feed_bundle',
+        'data': {'kind': 'post', 'text': 'post 1'}
+      });
+
+      // 2. A profile update (Should NOT be in feed)
+      service.testInjectEvent({
+        'seq': 11,
+        'event': 'feed_bundle',
+        'data': {'kind': 'profile', 'display_name': 'Alice'}
+      });
+
+      // 3. A repost (Should be in feed)
+      service.testInjectEvent({
+        'seq': 12,
+        'event': 'feed_bundle',
+        'data': {'kind': 'repost', 'target_root': 'some_root'}
+      });
+
+      // 4. A reaction (Should NOT be in feed)
+      service.testInjectEvent({
+        'seq': 13,
+        'event': 'feed_bundle',
+        'data': {'kind': 'reaction', 'action_code': 'like'}
+      });
+
+      expect(controller.feed.length, 2);
+      expect(controller.feed.any((e) => e.isPost), true);
+      expect(controller.feed.any((e) => e.isRepost), true);
+      expect(controller.feed.any((e) => e.isReaction), false);
+    });
+
+    test('SocialController excludes comments from main feed', () {
+      final service = NodeService();
+      final controller = SocialController(service);
+
+      // Top level post
+      service.testInjectEvent({
+        'seq': 20,
+        'event': 'feed_bundle',
+        'data': {'kind': 'post', 'text': 'main'}
+      });
+
+      // Comment (has reply_to_root)
+      service.testInjectEvent({
+        'seq': 21,
+        'event': 'feed_bundle',
+        'data': {'kind': 'post', 'text': 'comment', 'reply_to_root': 'some_root'}
+      });
+
+      expect(controller.feed.length, 1);
+      expect(controller.feed.first.postText, 'main');
+    });
+
     test('SocialController includes self-posts from loopback', () {
       final service = NodeService();
       service.testSetIdentity('my_pubkey');

@@ -12,6 +12,6 @@ import 'package:veil_social/main.dart';
 void main() {
   testWidgets('Node home renders', (WidgetTester tester) async {
     await tester.pumpWidget(const VeilApp());
-    expect(find.text('VEIL'), findsWidgets);
+    expect(find.text('Social'), findsWidgets);
   });
 }

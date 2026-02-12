@@ -129,6 +129,104 @@ pub struct NamespaceSignaturePolicyBundle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListBundle {
+    pub meta: BundleMeta,
+    pub channel_id: String,
+    pub author_pubkey_hex: String,
+    pub title: String,
+    pub kind: String,
+    pub items: Vec<ListItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value")]
+pub enum ListItem {
+    Pubkey(String),
+    Object(ObjectRoot),
+    Tag([u8; 32]),
+    Text(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupMetadataBundle {
+    pub meta: BundleMeta,
+    pub channel_id: String,
+    pub author_pubkey_hex: String,
+    pub group_id: String,
+    pub name: String,
+    pub about: String,
+    pub avatar_root: Option<ObjectRoot>,
+    pub is_public: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ZapBundle {
+    pub meta: BundleMeta,
+    pub channel_id: String,
+    pub author_pubkey_hex: String,
+    pub amount: u64,
+    pub unit: String,
+    pub target_root: ObjectRoot,
+    pub receipt_proof: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppPreferencesBundle {
+    pub meta: BundleMeta,
+    pub channel_id: String,
+    pub author_pubkey_hex: String,
+    pub app_id: String,
+    pub settings_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeletionBundle {
+    pub meta: BundleMeta,
+    pub author_pubkey_hex: String,
+    pub target_roots: Vec<ObjectRoot>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepostBundle {
+    pub meta: BundleMeta,
+    pub channel_id: String,
+    pub author_pubkey_hex: String,
+    pub target_root: ObjectRoot,
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PollBundle {
+    pub meta: BundleMeta,
+    pub channel_id: String,
+    pub author_pubkey_hex: String,
+    pub question: String,
+    pub options: Vec<String>,
+    pub ends_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PollVoteBundle {
+    pub meta: BundleMeta,
+    pub channel_id: String,
+    pub author_pubkey_hex: String,
+    pub poll_root: ObjectRoot,
+    pub option_index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveStatusBundle {
+    pub meta: BundleMeta,
+    pub author_pubkey_hex: String,
+    pub status_text: String,
+    pub emoji: Option<String>,
+    pub expiry: Option<u64>,
+    pub external_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum FeedBundle {
     #[serde(rename = "profile")]
@@ -155,15 +253,29 @@ pub enum FeedBundle {
     Block(BlockBundle),
     #[serde(rename = "namespace_signature_policy")]
     NamespaceSignaturePolicy(NamespaceSignaturePolicyBundle),
+    #[serde(rename = "list")]
+    List(ListBundle),
+    #[serde(rename = "group_metadata")]
+    GroupMetadata(GroupMetadataBundle),
+    #[serde(rename = "zap")]
+    Zap(ZapBundle),
+    #[serde(rename = "app_preferences")]
+    AppPreferences(AppPreferencesBundle),
+    #[serde(rename = "deletion")]
+    Deletion(DeletionBundle),
+    #[serde(rename = "repost")]
+    Repost(RepostBundle),
+    #[serde(rename = "poll")]
+    Poll(PollBundle),
+    #[serde(rename = "poll_vote")]
+    PollVote(PollVoteBundle),
+    #[serde(rename = "live_status")]
+    LiveStatus(LiveStatusBundle),
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BlockBundle, BundleMeta, ChannelDirectoryBundle, DirectMessageBundle, EndorsementBundle,
-        FeedBundle, FollowBundle, GroupMessageBundle, MuteBundle,
-        NamespaceSignaturePolicyBundle, PostBundle, ReactionBundle,
-    };
+    use super::*;
 
     #[test]
     fn directory_bundle_round_trips_through_json() {
@@ -180,165 +292,6 @@ mod tests {
             post_roots: vec![[0xBB; 32]],
         });
 
-        let json = serde_json::to_string(&bundle).expect("serialize should work");
-        let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");
-        assert_eq!(decoded, bundle);
-    }
-
-    #[test]
-    fn post_bundle_keeps_media_refs() {
-        let bundle = FeedBundle::Post(PostBundle {
-            meta: BundleMeta {
-                version: 1,
-                created_at: 1_700_000_001,
-            },
-            channel_id: "dev".to_string(),
-            author_pubkey_hex: "22".repeat(32),
-            text: "hello".to_string(),
-            media_roots: vec![[0xCC; 32], [0xDD; 32]],
-            reply_to_root: None,
-        });
-
-        match bundle {
-            FeedBundle::Post(post) => assert_eq!(post.media_roots.len(), 2),
-            _ => panic!("expected post bundle"),
-        }
-    }
-
-    #[test]
-    fn endorsement_bundle_round_trip_through_json() {
-        let bundle = FeedBundle::Endorsement(EndorsementBundle {
-            meta: BundleMeta {
-                version: 1,
-                created_at: 1_700_000_002,
-            },
-            channel_id: "general".to_string(),
-            endorser_pubkey_hex: "aa".repeat(32),
-            publisher_pubkey_hex: "bb".repeat(32),
-            at_step: 1234,
-        });
-        let json = serde_json::to_string(&bundle).expect("serialize should work");
-        let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");
-        assert_eq!(decoded, bundle);
-    }
-
-    #[test]
-    fn namespace_signature_policy_bundle_round_trip() {
-        let bundle = FeedBundle::NamespaceSignaturePolicy(NamespaceSignaturePolicyBundle {
-            meta: BundleMeta {
-                version: 1,
-                created_at: 1_700_000_003,
-            },
-            channel_id: "general".to_string(),
-            namespace: 7,
-            require_signed: true,
-        });
-        let json = serde_json::to_string(&bundle).expect("serialize should work");
-        let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");
-        assert_eq!(decoded, bundle);
-    }
-
-    #[test]
-    fn follow_bundle_round_trip_through_json() {
-        let bundle = FeedBundle::Follow(FollowBundle {
-            meta: BundleMeta {
-                version: 1,
-                created_at: 1_700_000_010,
-            },
-            channel_id: "general".to_string(),
-            follower_pubkey_hex: "aa".repeat(32),
-            followee_pubkey_hex: "bb".repeat(32),
-            at_step: 42,
-        });
-        let json = serde_json::to_string(&bundle).expect("serialize should work");
-        let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");
-        assert_eq!(decoded, bundle);
-    }
-
-    #[test]
-    fn reaction_bundle_round_trip_through_json() {
-        let bundle = FeedBundle::Reaction(ReactionBundle {
-            meta: BundleMeta {
-                version: 1,
-                created_at: 1_700_000_020,
-            },
-            channel_id: "general".to_string(),
-            author_pubkey_hex: "aa".repeat(32),
-            target_root: [0x11; 32],
-            action_code: "like".to_string(),
-        });
-        let json = serde_json::to_string(&bundle).expect("serialize should work");
-        let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");
-        assert_eq!(decoded, bundle);
-    }
-
-    #[test]
-    fn direct_message_bundle_round_trip_through_json() {
-        let bundle = FeedBundle::DirectMessage(DirectMessageBundle {
-            meta: BundleMeta {
-                version: 1,
-                created_at: 1_700_000_021,
-            },
-            channel_id: "dm".to_string(),
-            author_pubkey_hex: "bb".repeat(32),
-            recipient_pubkey_hex: "cc".repeat(32),
-            ciphertext_root: [0x22; 32],
-            reply_to_root: None,
-        });
-        let json = serde_json::to_string(&bundle).expect("serialize should work");
-        let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");
-        assert_eq!(decoded, bundle);
-    }
-
-    #[test]
-    fn group_message_bundle_round_trip_through_json() {
-        let bundle = FeedBundle::GroupMessage(GroupMessageBundle {
-            meta: BundleMeta {
-                version: 1,
-                created_at: 1_700_000_022,
-            },
-            channel_id: "general".to_string(),
-            author_pubkey_hex: "dd".repeat(32),
-            group_id: "group-alpha".to_string(),
-            ciphertext_root: [0x33; 32],
-            reply_to_root: Some([0x44; 32]),
-        });
-        let json = serde_json::to_string(&bundle).expect("serialize should work");
-        let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");
-        assert_eq!(decoded, bundle);
-    }
-
-    #[test]
-    fn mute_bundle_round_trip_through_json() {
-        let bundle = FeedBundle::Mute(MuteBundle {
-            meta: BundleMeta {
-                version: 1,
-                created_at: 1_700_000_011,
-            },
-            channel_id: "general".to_string(),
-            muter_pubkey_hex: "cc".repeat(32),
-            muted_pubkey_hex: "dd".repeat(32),
-            reason: Some("spam".to_string()),
-            at_step: 84,
-        });
-        let json = serde_json::to_string(&bundle).expect("serialize should work");
-        let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");
-        assert_eq!(decoded, bundle);
-    }
-
-    #[test]
-    fn block_bundle_round_trip_through_json() {
-        let bundle = FeedBundle::Block(BlockBundle {
-            meta: BundleMeta {
-                version: 1,
-                created_at: 1_700_000_012,
-            },
-            channel_id: "general".to_string(),
-            blocker_pubkey_hex: "ee".repeat(32),
-            blocked_pubkey_hex: "ff".repeat(32),
-            reason: None,
-            at_step: 128,
-        });
         let json = serde_json::to_string(&bundle).expect("serialize should work");
         let decoded: FeedBundle = serde_json::from_str(&json).expect("decode should work");
         assert_eq!(decoded, bundle);

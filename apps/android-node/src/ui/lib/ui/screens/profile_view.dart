@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../logic/node_service.dart';
+import '../../logic/social_controller.dart';
 import '../theme/veil_theme.dart';
 import './profile_edit_view.dart';
 
@@ -94,110 +95,113 @@ class _ProfileViewState extends State<ProfileView> {
             ? '${pubkey.substring(0, 8)}...${pubkey.substring(pubkey.length - 8)}'
             : pubkey;
 
-        return ListView(
-          padding: const EdgeInsets.all(24),
-          children: [
-            Center(
-              child: CircleAvatar(
-                radius: 50,
-                backgroundColor: VeilTheme.surface,
-                backgroundImage: avatarRoot != null && widget.controller.imageCache.containsKey(avatarRoot)
-                  ? MemoryImage(widget.controller.imageCache[avatarRoot]!)
-                  : null,
-                child: (avatarRoot == null || !widget.controller.imageCache.containsKey(avatarRoot))
-                  ? const Icon(Icons.person, size: 50, color: VeilTheme.accent)
-                  : null,
+        return SafeArea(
+          bottom: false,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(24, 16, 24, 100),
+            children: [
+              Center(
+                child: CircleAvatar(
+                  radius: 50,
+                  backgroundColor: VeilTheme.surface,
+                  backgroundImage: avatarRoot != null && widget.controller.imageCache.containsKey(avatarRoot)
+                    ? MemoryImage(widget.controller.imageCache[avatarRoot]!)
+                    : null,
+                  child: (avatarRoot == null || !widget.controller.imageCache.containsKey(avatarRoot))
+                    ? const Icon(Icons.person, size: 50, color: VeilTheme.accent)
+                    : null,
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Center(
-              child: Text(
-                displayName,
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              const SizedBox(height: 16),
+              Center(
+                child: Text(
+                  displayName,
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
               ),
-            ),
-            Center(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    shortPubkey,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      color: VeilTheme.textSecondary,
+              Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      shortPubkey,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        color: VeilTheme.textSecondary,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  GestureDetector(
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: pubkey));
+                        HapticFeedback.mediumImpact();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Public Key copied to clipboard')),
+                        );
+                      },
+                      child: const Icon(Icons.copy, size: 14, color: VeilTheme.accent),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  bio,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 14, color: VeilTheme.textSecondary),
+                ),
+              ),
+              const SizedBox(height: 32),
+              _ProfileSection(
+                title: 'Account',
+                children: [
+                  _ProfileTile(
+                    icon: Icons.badge_outlined,
+                    title: 'Edit Profile',
+                    subtitle: 'Set your name and bio',
                     onTap: () {
-                      Clipboard.setData(ClipboardData(text: pubkey));
-                      HapticFeedback.mediumImpact();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Public Key copied to clipboard')),
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (context) => ProfileEditView(service: widget.service)),
                       );
                     },
-                    child: const Icon(Icons.copy, size: 14, color: VeilTheme.accent),
+                  ),
+                  _ProfileTile(
+                    icon: Icons.bolt_outlined,
+                    title: 'Lightning Address',
+                    subtitle: 'Configure your zap address',
+                    onTap: () {},
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 8),
-            Center(
-              child: Text(
-                bio,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 14, color: VeilTheme.textSecondary),
+              const SizedBox(height: 24),
+              _ProfileSection(
+                title: 'Security',
+                children: [
+                  _ProfileTile(
+                    icon: Icons.key_outlined,
+                    title: 'Backup Identity',
+                    subtitle: 'Export your secret keys',
+                    onTap: _exportIdentity,
+                  ),
+                  _ProfileTile(
+                    icon: Icons.settings_outlined,
+                    title: 'Import Identity',
+                    subtitle: 'Restore from secret key',
+                    onTap: _importIdentity,
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 32),
-            _ProfileSection(
-              title: 'Account',
-              children: [
-                _ProfileTile(
-                  icon: Icons.badge_outlined,
-                  title: 'Edit Profile',
-                  subtitle: 'Set your name and bio',
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => ProfileEditView(service: widget.service)),
-                    );
-                  },
-                ),
-                _ProfileTile(
-                  icon: Icons.bolt_outlined,
-                  title: 'Lightning Address',
-                  subtitle: 'Configure your zap address',
-                  onTap: () {},
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            _ProfileSection(
-              title: 'Security',
-              children: [
-                _ProfileTile(
-                  icon: Icons.key_outlined,
-                  title: 'Backup Identity',
-                  subtitle: 'Export your secret keys',
-                  onTap: _exportIdentity,
-                ),
-                _ProfileTile(
-                  icon: Icons.settings_outlined,
-                  title: 'Import Identity',
-                  subtitle: 'Restore from secret key',
-                  onTap: _importIdentity,
-                ),
-              ],
-            ),
-            const SizedBox(height: 40),
-            TextButton(
-              onPressed: widget.service.stop,
-              style: TextButton.styleFrom(foregroundColor: Colors.red),
-              child: const Text('Stop Veil Node'),
-            ),
-          ],
+              const SizedBox(height: 40),
+              TextButton(
+                onPressed: widget.service.stop,
+                style: TextButton.styleFrom(foregroundColor: Colors.red),
+                child: const Text('Stop Veil Node'),
+              ),
+            ],
+          ),
         );
       },
     );

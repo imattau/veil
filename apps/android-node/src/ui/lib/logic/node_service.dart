@@ -175,6 +175,7 @@ class NodeService extends ChangeNotifier {
           lastUpdated: DateTime.now(),
         ),
       );
+      await fetchFeed();
     } catch (err) {
       _setState(_state.copyWith(lastError: 'Refresh failed: $err'));
     }
@@ -184,6 +185,7 @@ class NodeService extends ChangeNotifier {
     final result = await _getJson('/feed');
     if (result != null && result['events'] is List) {
       final list = result['events'] as List;
+      debugPrint('[NodeService] Fetched ${list.length} events from history');
       for (var item in list) {
         if (item is Map<String, dynamic>) {
           final event = NodeEvent.fromJson(item);
@@ -366,7 +368,17 @@ class NodeService extends ChangeNotifier {
           .timeout(const Duration(seconds: 4));
 
       if (response.statusCode >= 200 && response.statusCode < 300) {
+        // Optimistically update the local cache for immediate UI feedback
+        final selfPubkey = _state.identityHex;
+        if (selfPubkey != null) {
+          _profiles[selfPubkey] = NodeEvent(
+            seq: 999999, // High seq to override historical ones
+            event: 'feed_bundle',
+            data: bundle,
+          );
+        }
         await refresh();
+        await fetchFeed();
       } else {
         _setState(_state.copyWith(
           lastError: 'Profile update failed: ${response.statusCode}',
@@ -555,13 +567,17 @@ class NodeService extends ChangeNotifier {
       final payload = jsonDecode(message);
       if (payload is Map<String, dynamic>) {
         final event = NodeEvent.fromJson(payload);
+        debugPrint('[NodeService] Received event: ${event.event} (seq: ${event.seq})');
         
+        // Add to main event log (newest first)
         _events.insert(0, event);
         if (_events.length > 100) {
           _events.removeLast();
         }
 
         if (event.isFeedBundle) {
+          debugPrint('[NodeService] Processing feed bundle: ${event.bundleKind}');
+          debugPrint('[NodeService] Raw bundle data: ${event.data}');
           _addFeedEvent(event);
         }
 
@@ -575,15 +591,20 @@ class NodeService extends ChangeNotifier {
         
         notifyListeners();
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[NodeService] Error parsing event: $e');
     }
   }
 
   void _addFeedEvent(NodeEvent event) {
-    if (_feedEvents.any((e) => e.seq == event.seq)) return;
+    if (_feedEvents.any((e) => e.seq == event.seq)) {
+      debugPrint('[NodeService] Skipping duplicate event seq: ${event.seq}');
+      return;
+    }
 
     _feedEvents.add(event);
     _feedEvents.sort((a, b) => b.seq.compareTo(a.seq));
+    debugPrint('[NodeService] Feed updated. New size: ${_feedEvents.length}');
 
     if (_feedEvents.length > 500) {
       _feedEvents.removeLast();
@@ -595,9 +616,13 @@ class NodeService extends ChangeNotifier {
         final existing = _profiles[pubkey];
         if (existing == null || event.seq > existing.seq) {
           _profiles[pubkey] = event;
+          debugPrint('[NodeService] Cached profile for $pubkey');
         }
       }
     }
+    
+    // Explicitly notify so SocialController sees the new item
+    notifyListeners();
   }
 
   List<NodeEvent> getReactionsFor(String objectRoot) {

@@ -41,11 +41,7 @@ fn main() {
     ))
     .expect("adapter should start");
 
-    println!(
-        "READY {} {}",
-        bind_addr,
-        hex_encode(&identity.cert_der)
-    );
+    println!("READY {} {}", bind_addr, hex_encode(&identity.cert_der));
     let _ = io::stdout().flush();
 
     let echo = std::env::var_os("VEIL_QUIC_ECHO").is_some();

@@ -5,6 +5,7 @@ use crate::ack::AckRetryPolicy;
 use crate::policy::{
     fanout_for_tier as fanout_for_tier_impl, LocalWotPolicy, TrustTier, WotConfig, WotPolicy,
 };
+use veil_core::types::NAMESPACE_PUBLIC_FEED;
 use veil_fec::profile::ErasureCodingMode;
 
 #[derive(Debug, Clone, Copy)]
@@ -21,6 +22,44 @@ pub struct AdaptiveLaneScoringConfig {
     pub hysteresis_margin: f64,
     /// Minimum fallback fanout while adaptive mode is enabled.
     pub min_fallback_fanout: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProbabilisticForwardingConfig {
+    pub enabled: bool,
+    /// Lower-bound forwarding probability when a shard appears very common.
+    pub min_probability: f64,
+    /// Scaling divisor for replica estimate to probability curve.
+    pub replica_divisor: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BloomExchangeConfig {
+    pub enabled: bool,
+    /// Periodic broadcast interval for local shard Bloom summaries.
+    pub interval_steps: u64,
+    /// Target false positive rate for outgoing filters.
+    pub false_positive_rate: f64,
+}
+
+impl Default for BloomExchangeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_steps: 128,
+            false_positive_rate: 0.05,
+        }
+    }
+}
+
+impl Default for ProbabilisticForwardingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_probability: 0.10,
+            replica_divisor: 8,
+        }
+    }
 }
 
 impl Default for AdaptiveLaneScoringConfig {
@@ -60,10 +99,16 @@ pub struct NodeRuntimeConfig {
     pub max_cache_shards: usize,
     /// Erasure coding mode used when producing/reconstructing shards.
     pub erasure_coding_mode: ErasureCodingMode,
+    /// Namespaces that should use systematic encoding on publish.
+    pub systematic_namespaces: HashSet<u16>,
     /// Optional upward bucket jitter levels (0 disables jitter).
     pub bucket_jitter_extra_levels: usize,
     /// Adaptive lane-scoring policy for fanout rebalancing.
     pub adaptive_lane_scoring: AdaptiveLaneScoringConfig,
+    /// Replica-estimate based probabilistic forwarding.
+    pub probabilistic_forwarding: ProbabilisticForwardingConfig,
+    /// Periodic Bloom filter exchange controls.
+    pub bloom_exchange: BloomExchangeConfig,
     /// Namespaces that require signed objects at ingest.
     pub required_signed_namespaces: HashSet<u16>,
     /// Local WoT policy used for trust classification and quotas.
@@ -84,8 +129,11 @@ impl Default for NodeRuntimeConfig {
             ack_max_retries: 6,
             max_cache_shards: 100_000,
             erasure_coding_mode: ErasureCodingMode::HardenedNonSystematic,
+            systematic_namespaces: HashSet::from([NAMESPACE_PUBLIC_FEED.0]),
             bucket_jitter_extra_levels: 0,
             adaptive_lane_scoring: AdaptiveLaneScoringConfig::default(),
+            probabilistic_forwarding: ProbabilisticForwardingConfig::default(),
+            bloom_exchange: BloomExchangeConfig::default(),
             required_signed_namespaces: HashSet::new(),
             wot_policy: LocalWotPolicy::default(),
             peer_publishers: HashMap::new(),
@@ -163,6 +211,11 @@ impl NodeRuntimeConfig {
         self.required_signed_namespaces.insert(namespace.0);
     }
 
+    /// Enables systematic erasure mode for a namespace.
+    pub fn enable_systematic_namespace(&mut self, namespace: veil_core::Namespace) {
+        self.systematic_namespaces.insert(namespace.0);
+    }
+
     /// Looks up the configured publisher pubkey for a transport peer id.
     pub fn publisher_for_peer(&self, peer: &str) -> Option<[u8; 32]> {
         self.peer_publishers.get(peer).copied()
@@ -185,6 +238,15 @@ impl NodeRuntimeConfig {
         publisher
             .map(|pubkey| self.wot_policy.classify_publisher(pubkey, now_step))
             .unwrap_or(TrustTier::Unknown)
+    }
+
+    /// Resolves erasure coding mode for a namespace.
+    pub fn erasure_mode_for_namespace(&self, namespace: veil_core::Namespace) -> ErasureCodingMode {
+        if self.systematic_namespaces.contains(&namespace.0) {
+            ErasureCodingMode::Systematic
+        } else {
+            self.erasure_coding_mode
+        }
     }
 
     /// Computes effective fanout for a peer using current WoT policy quotas.
@@ -251,6 +313,11 @@ impl NodeRuntimeConfigBuilder {
         self
     }
 
+    pub fn with_systematic_namespace(mut self, namespace: veil_core::Namespace) -> Self {
+        self.cfg.systematic_namespaces.insert(namespace.0);
+        self
+    }
+
     pub fn ack_retry(
         mut self,
         initial_timeout_steps: u64,
@@ -280,6 +347,16 @@ impl NodeRuntimeConfigBuilder {
         self
     }
 
+    pub fn probabilistic_forwarding(mut self, value: ProbabilisticForwardingConfig) -> Self {
+        self.cfg.probabilistic_forwarding = value;
+        self
+    }
+
+    pub fn bloom_exchange(mut self, value: BloomExchangeConfig) -> Self {
+        self.cfg.bloom_exchange = value;
+        self
+    }
+
     pub fn with_required_signed_namespace(mut self, namespace: veil_core::Namespace) -> Self {
         self.cfg.required_signed_namespaces.insert(namespace.0);
         self
@@ -292,7 +369,10 @@ impl NodeRuntimeConfigBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::{AdaptiveLaneScoringConfig, NodeRuntimeConfig};
+    use super::{
+        AdaptiveLaneScoringConfig, BloomExchangeConfig, NodeRuntimeConfig,
+        ProbabilisticForwardingConfig,
+    };
     use crate::policy::TrustTier;
     use veil_fec::profile::ErasureCodingMode;
 
@@ -349,6 +429,16 @@ mod tests {
                 enabled: true,
                 ..AdaptiveLaneScoringConfig::default()
             })
+            .probabilistic_forwarding(ProbabilisticForwardingConfig {
+                enabled: true,
+                min_probability: 0.2,
+                replica_divisor: 16,
+            })
+            .bloom_exchange(BloomExchangeConfig {
+                enabled: true,
+                interval_steps: 32,
+                false_positive_rate: 0.02,
+            })
             .with_required_signed_namespace(veil_core::Namespace(7))
             .with_peer_publisher("peer-a", [0x99; 32])
             .build();
@@ -363,6 +453,8 @@ mod tests {
         );
         assert_eq!(cfg.bucket_jitter_extra_levels, 1);
         assert!(cfg.adaptive_lane_scoring.enabled);
+        assert!(cfg.probabilistic_forwarding.enabled);
+        assert!(cfg.bloom_exchange.enabled);
         assert!(cfg.required_signed_namespaces.contains(&7));
         assert_eq!(cfg.classify_peer_tier("peer-a", 0), TrustTier::Unknown);
         let p = cfg.ack_retry_policy();
@@ -383,5 +475,14 @@ mod tests {
         assert!(bootstrap.base_fast_fanout <= edge.base_fast_fanout);
         assert!(bootstrap.max_cache_shards < edge.max_cache_shards);
         assert!(bootstrap.wot_policy.config.unknown_forward_quota <= 0.10);
+    }
+
+    #[test]
+    fn public_feed_namespace_defaults_to_systematic_mode() {
+        let cfg = NodeRuntimeConfig::default();
+        assert_eq!(
+            cfg.erasure_mode_for_namespace(veil_core::types::NAMESPACE_PUBLIC_FEED),
+            ErasureCodingMode::Systematic
+        );
     }
 }
