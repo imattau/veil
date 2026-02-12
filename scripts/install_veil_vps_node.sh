@@ -24,6 +24,15 @@ NGINX_SITE_LINK=${NGINX_SITE_LINK:-/etc/nginx/sites-enabled/veil-vps-node.conf}
 CADDY_CONF_DIR=${CADDY_CONF_DIR:-/etc/caddy/conf.d}
 CADDY_SITE_PATH=${CADDY_SITE_PATH:-${CADDY_CONF_DIR}/veil-vps-node.caddy}
 CADDYFILE=${CADDYFILE:-/etc/caddy/Caddyfile}
+REUSE_EXISTING_SETTINGS=${REUSE_EXISTING_SETTINGS:-auto} # auto|1|0
+
+env_file_value() {
+  local key="$1"
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return 1
+  fi
+  grep "^${key}=" "$ENV_FILE" | tail -n 1 | cut -d= -f2-
+}
 
 random_string() {
   if command -v openssl >/dev/null 2>&1; then
@@ -45,7 +54,29 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-if [[ -z "$PROXY_DOMAIN" && "$REVERSE_PROXY" != "none" ]]; then
+INSTALL_MODE="fresh"
+if [[ -f "$ENV_FILE" || -x "$PREFIX/veil-vps-node" || -f "$SERVICE_FILE" ]]; then
+  INSTALL_MODE="update"
+fi
+
+if [[ -z "$PROXY_DOMAIN" ]]; then
+  existing_proxy_domain="$(env_file_value PROXY_DOMAIN || true)"
+  if [[ -n "$existing_proxy_domain" ]]; then
+    PROXY_DOMAIN="$existing_proxy_domain"
+  fi
+fi
+if [[ "$REUSE_EXISTING_SETTINGS" == "auto" && "$INSTALL_MODE" == "update" ]]; then
+  echo "Detected existing VEIL VPS node installation."
+  echo "Installer can reuse existing settings from: $ENV_FILE"
+  read -r -p "Reuse existing settings and perform update-only install? [Y/n] " reuse_confirm
+  if [[ -z "$reuse_confirm" || "$reuse_confirm" =~ ^[Yy]$ ]]; then
+    REUSE_EXISTING_SETTINGS="1"
+  else
+    REUSE_EXISTING_SETTINGS="0"
+  fi
+fi
+
+if [[ -z "$PROXY_DOMAIN" && "$REVERSE_PROXY" != "none" && "$REUSE_EXISTING_SETTINGS" != "1" ]]; then
   read -r -p "Enter domain for TLS/HTTP (leave blank to skip proxy setup): " input_domain
   if [[ -n "$input_domain" ]]; then
     PROXY_DOMAIN="$input_domain"
@@ -310,6 +341,17 @@ set_env_var "VEIL_VPS_HEALTH_BIND" "127.0.0.1"
 set_env_var "VEIL_VPS_HEALTH_PORT" "${PROXY_HEALTH_PORT}"
 set_env_var "PROXY_HEALTH_USER" "${PROXY_HEALTH_USER}"
 set_env_var "PROXY_HEALTH_PASS" "${PROXY_HEALTH_PASS}"
+set_env_var "PROXY_DOMAIN" "${PROXY_DOMAIN}"
+set_env_var "VEIL_VPS_OPEN_RELAY" "0"
+set_env_var "VEIL_VPS_BLOCKED_PEERS" ""
+set_env_var "VEIL_VPS_NOSTR_BRIDGE_ENABLE" "0"
+set_env_var "VEIL_VPS_NOSTR_RELAYS" "wss://relay.damus.io,wss://nos.lol,wss://relay.snort.social"
+set_env_var "VEIL_VPS_NOSTR_CHANNEL_ID" "nostr-bridge"
+set_env_var "VEIL_VPS_NOSTR_NAMESPACE" "32"
+set_env_var "VEIL_VPS_NOSTR_SINCE_SECS" "3600"
+set_env_var "VEIL_VPS_NOSTR_BRIDGE_STATE_PATH" "${PREFIX}/data/nostr-bridge-state.json"
+set_env_var "VEIL_VPS_NOSTR_MAX_SEEN_IDS" "20000"
+set_env_var "VEIL_VPS_NOSTR_PERSIST_EVERY_UPDATES" "32"
 
 if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   install -m 0644 docs/runbooks/veil-vps-node.service "$SERVICE_FILE" || true
@@ -339,9 +381,15 @@ if [[ -d apps/veil-vps-node/web ]]; then
       quic_cert_b64=$(base64 -w0 "${quic_cert_path}" 2>/dev/null || base64 "${quic_cert_path}" | tr -d '\n')
     fi
   fi
+  health_user_js=${PROXY_HEALTH_USER//\\/\\\\}
+  health_user_js=${health_user_js//\"/\\\"}
+  health_pass_js=${PROXY_HEALTH_PASS//\\/\\\\}
+  health_pass_js=${health_pass_js//\"/\\\"}
   {
     echo "window.VEIL_VPS_QUIC_PORT = ${quic_port:-5000};"
     echo "window.VEIL_VPS_QUIC_CERT_B64 = \"${quic_cert_b64}\";"
+    echo "window.VEIL_VPS_HEALTH_USER = \"${health_user_js}\";"
+    echo "window.VEIL_VPS_HEALTH_PASS = \"${health_pass_js}\";"
   } > "${WEB_ROOT}/config.js"
   chown -R "$RUN_USER:$RUN_GROUP" "$WEB_ROOT" || true
 fi
@@ -575,6 +623,10 @@ else
 fi
 
 configure_tor() {
+  if [[ "$REUSE_EXISTING_SETTINGS" == "1" ]]; then
+    echo "Tor prompt skipped (update mode reusing existing settings)."
+    return
+  fi
   read -r -p "Enable Tor SOCKS5 fallback? [y/N] " confirm
   if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
     echo "Tor setup skipped."

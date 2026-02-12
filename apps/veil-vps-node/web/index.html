@@ -95,6 +95,37 @@
         word-break: break-all;
       }
 
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .stat {
+        background: rgba(2, 6, 23, 0.6);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px;
+      }
+
+      .stat .label {
+        color: var(--muted);
+        font-size: 0.75rem;
+      }
+
+      .stat .value {
+        font-size: 1.15rem;
+        margin-top: 6px;
+        font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+      }
+
+      .status-line {
+        margin-top: 10px;
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+
       .button {
         display: inline-flex;
         align-items: center;
@@ -170,6 +201,44 @@
         </p>
         <button class="button secondary" id="copyWs">Copy WebSocket URL</button>
       </section>
+      <section class="card">
+        <h2>Node Stats</h2>
+        <div class="stats-grid">
+          <div class="stat">
+            <div class="label">Health</div>
+            <div class="value" id="healthValue">checking…</div>
+          </div>
+          <div class="stat">
+            <div class="label">Peers</div>
+            <div class="value" id="peersValue">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">Ticks</div>
+            <div class="value" id="ticksValue">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">Delivered</div>
+            <div class="value" id="deliveredValue">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">Fast Inbound</div>
+            <div class="value" id="fastInValue">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">Fallback Inbound</div>
+            <div class="value" id="fallbackInValue">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">Fast Send Err</div>
+            <div class="value" id="fastErrValue">-</div>
+          </div>
+          <div class="stat">
+            <div class="label">Fallback Send Err</div>
+            <div class="value" id="fallbackErrValue">-</div>
+          </div>
+        </div>
+        <div class="status-line" id="statsStatus">Polling /health, /metrics, /peers…</div>
+      </section>
     </main>
     <footer>Powered by VEIL — shard‑native, privacy‑preserving delivery.</footer>
     <script src="config.js"></script>
@@ -180,6 +249,8 @@
       const quicPort = window.VEIL_VPS_QUIC_PORT || 5000;
       const quicCertB64 = window.VEIL_VPS_QUIC_CERT_B64 || "";
       const quicAlpn = window.VEIL_VPS_QUIC_ALPN || "";
+      const healthUser = window.VEIL_VPS_HEALTH_USER || "";
+      const healthPass = window.VEIL_VPS_HEALTH_PASS || "";
       const quic = `quic://${host.split(":")[0]}:${quicPort}`;
       const params = new URLSearchParams({ ws, quic });
       if (quicCertB64) {
@@ -227,6 +298,99 @@
         await navigator.clipboard.writeText(ws);
         alert("WebSocket URL copied.");
       });
+
+      const healthEl = document.getElementById("healthValue");
+      const peersEl = document.getElementById("peersValue");
+      const ticksEl = document.getElementById("ticksValue");
+      const deliveredEl = document.getElementById("deliveredValue");
+      const fastInEl = document.getElementById("fastInValue");
+      const fallbackInEl = document.getElementById("fallbackInValue");
+      const fastErrEl = document.getElementById("fastErrValue");
+      const fallbackErrEl = document.getElementById("fallbackErrValue");
+      const statsStatusEl = document.getElementById("statsStatus");
+
+      function parseMetricsText(text) {
+        const out = {};
+        for (const rawLine of text.split("\n")) {
+          const line = rawLine.trim();
+          if (!line || line.startsWith("#")) {
+            continue;
+          }
+          const parts = line.split(/\s+/);
+          if (parts.length >= 2) {
+            out[parts[0]] = parts[1];
+          }
+        }
+        return out;
+      }
+
+      async function fetchText(path) {
+        const headers = {};
+        if (healthUser && healthPass) {
+          headers.Authorization = `Basic ${btoa(`${healthUser}:${healthPass}`)}`;
+        }
+        const res = await fetch(path, { cache: "no-store", headers });
+        return {
+          ok: res.ok,
+          status: res.status,
+          text: await res.text(),
+        };
+      }
+
+      async function pollStats() {
+        try {
+          const [health, metrics, peers] = await Promise.all([
+            fetchText("/health"),
+            fetchText("/metrics"),
+            fetchText("/peers?limit=1000"),
+          ]);
+
+          if (health.ok && health.text.trim().toLowerCase().includes("ok")) {
+            healthEl.textContent = "ok";
+          } else if (health.status === 401 || health.status === 403) {
+            healthEl.textContent = "auth";
+          } else {
+            healthEl.textContent = "degraded";
+          }
+
+          if (metrics.ok) {
+            const m = parseMetricsText(metrics.text);
+            ticksEl.textContent = m.veil_ticks_total || "-";
+            deliveredEl.textContent = m.veil_delivered_total || "-";
+            fastInEl.textContent = m.veil_fast_inbound || "-";
+            fallbackInEl.textContent = m.veil_fallback_inbound || "-";
+            fastErrEl.textContent = m.veil_fast_outbound_err || "-";
+            fallbackErrEl.textContent = m.veil_fallback_outbound_err || "-";
+          } else if (metrics.status === 401 || metrics.status === 403) {
+            ticksEl.textContent = "auth";
+            deliveredEl.textContent = "auth";
+            fastInEl.textContent = "auth";
+            fallbackInEl.textContent = "auth";
+            fastErrEl.textContent = "auth";
+            fallbackErrEl.textContent = "auth";
+          }
+
+          if (peers.ok) {
+            const count = peers.text
+              .split("\n")
+              .map((v) => v.trim())
+              .filter((v) => v.length > 0).length;
+            peersEl.textContent = String(count);
+          } else if (peers.status === 401 || peers.status === 403) {
+            peersEl.textContent = "auth";
+          } else {
+            peersEl.textContent = "-";
+          }
+
+          const ts = new Date().toLocaleTimeString();
+          statsStatusEl.textContent = `Last updated ${ts}`;
+        } catch (err) {
+          statsStatusEl.textContent = "Stats unavailable (network/auth error).";
+        }
+      }
+
+      pollStats();
+      setInterval(pollStats, 5000);
     </script>
   </body>
 </html>

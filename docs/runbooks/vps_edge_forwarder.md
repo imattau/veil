@@ -42,6 +42,7 @@ export VEIL_VPS_MAX_DYNAMIC_PEERS=512
 
 # Optional fallback lanes
 export VEIL_VPS_WS_URL=ws://relay.example:8080
+export VEIL_VPS_WS_LISTEN=0.0.0.0:8080
 export VEIL_VPS_WS_PEER=relay-ws
 export VEIL_VPS_TOR_SOCKS_ADDR=127.0.0.1:9050
 export VEIL_VPS_TOR_PEERS=peer.onion:5000
@@ -56,6 +57,16 @@ export VEIL_VPS_MAX_CACHE_SHARDS=200000
 export VEIL_VPS_BUCKET_JITTER=0
 export VEIL_VPS_REQUIRED_SIGNED_NAMESPACES=1,2
 export VEIL_VPS_ADAPTIVE_LANE_SCORING=1
+export VEIL_VPS_OPEN_RELAY=0
+export VEIL_VPS_BLOCKED_PEERS=
+export VEIL_VPS_NOSTR_BRIDGE_ENABLE=0
+export VEIL_VPS_NOSTR_RELAYS=wss://relay.damus.io,wss://nos.lol,wss://relay.snort.social
+export VEIL_VPS_NOSTR_CHANNEL_ID=nostr-bridge
+export VEIL_VPS_NOSTR_NAMESPACE=32
+export VEIL_VPS_NOSTR_SINCE_SECS=3600
+export VEIL_VPS_NOSTR_BRIDGE_STATE_PATH=/opt/veil-vps-node/data/nostr-bridge-state.json
+export VEIL_VPS_NOSTR_MAX_SEEN_IDS=20000
+export VEIL_VPS_NOSTR_PERSIST_EVERY_UPDATES=32
 export VEIL_VPS_SNAPSHOT_SECS=60
 export VEIL_VPS_TICK_MS=50
 export VEIL_VPS_HEALTH_PORT=9090
@@ -66,6 +77,9 @@ Notes:
   `VEIL_VPS_QUIC_TRUSTED_CERTS=/path/peer1.der,/path/peer2.der`.
 - Tor lane is outbound-only. Use for fallback resilience.
 - BLE lane uses btleplug when compiled with `--features ble-btleplug`.
+- `VEIL_VPS_OPEN_RELAY=1` makes the node accept all tags and remove non-blocked WoT forwarding throttles.
+- `VEIL_VPS_BLOCKED_PEERS` still hard-blocks listed peers by peer id.
+- `VEIL_VPS_NOSTR_BRIDGE_ENABLE=1` starts a relay bridge that maps Nostr `kind:1` events to VEIL post bundles.
 
 ## 3) Run
 
@@ -86,7 +100,7 @@ Health check, metrics, peers:
 - Local HTTP health endpoint: `http://127.0.0.1:9090/health` (bind configurable via `VEIL_VPS_HEALTH_BIND`)
 - Metrics endpoint: `http://127.0.0.1:9090/metrics` (basic auth when behind installer-managed proxy)
 - Peers endpoint: `http://127.0.0.1:9090/peers`
-  - Optional query params: `limit` (max 1000), `prefix` (e.g., `ws:`, `tor:`, `ble:`)
+  - Optional query params: `limit` (max 1000), `prefix` (e.g., `ws:`, `wssrv:`, `tor:`, `ble:`)
 
 ## 5) Recovery
 

@@ -101,6 +101,8 @@ pub struct NodeRuntimeConfig {
     pub erasure_coding_mode: ErasureCodingMode,
     /// Namespaces that should use systematic encoding on publish.
     pub systematic_namespaces: HashSet<u16>,
+    /// Accept all inbound tags without requiring local subscription entries.
+    pub accept_all_tags: bool,
     /// Optional upward bucket jitter levels (0 disables jitter).
     pub bucket_jitter_extra_levels: usize,
     /// Adaptive lane-scoring policy for fanout rebalancing.
@@ -130,6 +132,7 @@ impl Default for NodeRuntimeConfig {
             max_cache_shards: 100_000,
             erasure_coding_mode: ErasureCodingMode::HardenedNonSystematic,
             systematic_namespaces: HashSet::from([NAMESPACE_PUBLIC_FEED.0]),
+            accept_all_tags: false,
             bucket_jitter_extra_levels: 0,
             adaptive_lane_scoring: AdaptiveLaneScoringConfig::default(),
             probabilistic_forwarding: ProbabilisticForwardingConfig::default(),
@@ -313,6 +316,11 @@ impl NodeRuntimeConfigBuilder {
         self
     }
 
+    pub fn accept_all_tags(mut self, value: bool) -> Self {
+        self.cfg.accept_all_tags = value;
+        self
+    }
+
     pub fn with_systematic_namespace(mut self, namespace: veil_core::Namespace) -> Self {
         self.cfg.systematic_namespaces.insert(namespace.0);
         self
@@ -425,6 +433,7 @@ mod tests {
             .max_cache_shards(77)
             .erasure_coding_mode(ErasureCodingMode::HardenedNonSystematic)
             .bucket_jitter_extra_levels(1)
+            .accept_all_tags(true)
             .adaptive_lane_scoring(AdaptiveLaneScoringConfig {
                 enabled: true,
                 ..AdaptiveLaneScoringConfig::default()
@@ -451,6 +460,7 @@ mod tests {
             cfg.erasure_coding_mode,
             ErasureCodingMode::HardenedNonSystematic
         );
+        assert!(cfg.accept_all_tags);
         assert_eq!(cfg.bucket_jitter_extra_levels, 1);
         assert!(cfg.adaptive_lane_scoring.enabled);
         assert!(cfg.probabilistic_forwarding.enabled);

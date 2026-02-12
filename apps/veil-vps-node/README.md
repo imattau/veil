@@ -17,6 +17,23 @@ Enable BLE lane (btleplug backend):
 cargo run -p veil-vps-node --features ble-btleplug
 ```
 
+## Settings CLI
+
+Manage runtime settings in `data/settings.db`:
+
+```bash
+veil-vps-node settings list
+veil-vps-node settings get VEIL_VPS_OPEN_RELAY
+veil-vps-node settings set VEIL_VPS_OPEN_RELAY 1
+veil-vps-node settings delete VEIL_VPS_OPEN_RELAY
+```
+
+Use a custom DB path:
+
+```bash
+veil-vps-node settings --db /opt/veil-vps-node/data/settings.db list
+```
+
 ## Docker Compose
 
 ```bash
@@ -59,6 +76,7 @@ Optional:
 - `VEIL_VPS_PEER_DB_PATH` (path to persist discovered peers)
 - `VEIL_VPS_MAX_DYNAMIC_PEERS` (cap for discovered peers added to fanout)
 - `VEIL_VPS_WS_URL` (e.g. `ws://host:port`)
+- `VEIL_VPS_WS_LISTEN` (e.g. `0.0.0.0:8080`, enables inbound WebSocket lane)
 - `VEIL_VPS_WS_PEER` (peer id label used by WebSocket adapter)
 - `VEIL_VPS_TOR_SOCKS_ADDR` (e.g. `127.0.0.1:9050`)
 - `VEIL_VPS_TOR_PEERS` (comma-separated `host:port` destination peers)
@@ -74,12 +92,28 @@ Optional:
 - `VEIL_VPS_BUCKET_JITTER` (default `0`)
 - `VEIL_VPS_REQUIRED_SIGNED_NAMESPACES` (comma-separated namespace ids)
 - `VEIL_VPS_ADAPTIVE_LANE_SCORING` (`1`/`0`, default `1`)
+- `VEIL_VPS_OPEN_RELAY` (`1`/`0`, default `0`; accept all tags and forward all non-blocked peers)
+- `VEIL_VPS_BLOCKED_PEERS` (comma-separated peer ids to hard-block, e.g. `1.2.3.4:5000,ws:relay-a`)
+- `VEIL_VPS_NOSTR_BRIDGE_ENABLE` (`1`/`0`, default `0`)
+- `VEIL_VPS_NOSTR_RELAYS` (comma-separated relay URLs, e.g. `wss://relay.damus.io,wss://nos.lol`)
+- `VEIL_VPS_NOSTR_CHANNEL_ID` (default `nostr-bridge`)
+- `VEIL_VPS_NOSTR_NAMESPACE` (default `32`)
+- `VEIL_VPS_NOSTR_SINCE_SECS` (default `3600`)
+- `VEIL_VPS_NOSTR_BRIDGE_STATE_PATH` (default `data/nostr-bridge-state.json`)
+- `VEIL_VPS_NOSTR_MAX_SEEN_IDS` (default `20000`)
+- `VEIL_VPS_NOSTR_PERSIST_EVERY_UPDATES` (default `32`)
 
 ## Notes
+- Settings are loaded from SQLite only (`data/settings.db`).
+- On first run, if the DB is empty and `/opt/veil-vps-node/veil-vps-node.env` exists,
+  values are imported once for migration.
 - QUIC requires trusted peer certificates. Provide peer certs via
   `VEIL_VPS_QUIC_TRUSTED_CERTS` if you expect to connect to other nodes.
+- `VEIL_VPS_NODE_KEY_PATH` stores a Nostr-compatible secp256k1 secret key
+  (32 bytes), also used as the node decrypt key.
 - WebSocket is best-effort outbound; Tor SOCKS5 is outbound-only in this profile.
 - BLE fallback uses btleplug when the `ble-btleplug` feature is enabled.
-- `/peers` supports optional query params: `limit` (max 1000), `prefix` (e.g., `ws:`, `tor:`, `ble:`).
+- `/peers` supports optional query params: `limit` (max 1000), `prefix` (e.g., `ws:`, `wssrv:`, `tor:`, `ble:`).
 - When installed via the installer, `/health` and `/metrics` are protected with basic auth
   using `PROXY_HEALTH_USER` and `PROXY_HEALTH_PASS` from the env file.
+  The landing page auto-attaches these credentials for internal stats polling.

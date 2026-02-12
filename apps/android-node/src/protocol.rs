@@ -11,8 +11,8 @@ use tokio::sync::Mutex;
 use veil_core::tags::derive_feed_tag;
 use veil_core::{Epoch, Namespace};
 use veil_crypto::aead::{build_veil_aad, AeadCipher, XChaCha20Poly1305Cipher};
-use veil_crypto::signing::Ed25519Signer;
-use veil_crypto::signing::Ed25519Verifier;
+use veil_crypto::signing::NostrSigner;
+use veil_crypto::signing::NostrVerifier;
 use veil_fec::profile::ErasureCodingMode;
 use veil_node::batch::FeedBatcher;
 use veil_node::config::{BloomExchangeConfig, NodeRuntimeConfig, ProbabilisticForwardingConfig};
@@ -43,7 +43,7 @@ pub struct ProtocolConfig {
     pub discovery_namespace: Namespace,
     pub encrypt_key: [u8; 32],
     pub identity_pubkey: [u8; 32],
-    pub signer: Ed25519Signer,
+    pub signer: NostrSigner,
     pub fast_peers: Vec<String>,
     pub fallback_peers: Vec<String>,
     pub runtime_config: NodeRuntimeConfig,
@@ -53,14 +53,12 @@ pub struct ProtocolConfig {
 #[derive(Clone)]
 pub struct ProtocolEngine {
     inner: Arc<
-        Mutex<
-            PublisherRuntime<FastAdapter, FallbackAdapter, XChaCha20Poly1305Cipher, Ed25519Signer>,
-        >,
+        Mutex<PublisherRuntime<FastAdapter, FallbackAdapter, XChaCha20Poly1305Cipher, NostrSigner>>,
     >,
     config: ProtocolConfig,
     steps: Arc<AtomicU64>,
     runtime_stats: Arc<Mutex<RuntimeStats>>,
-    verifier: Ed25519Verifier,
+    verifier: NostrVerifier,
     identity_pubkey: Arc<Mutex<[u8; 32]>>,
     dynamic_fast_peers: Arc<Mutex<Vec<String>>>,
     dynamic_fallback_peers: Arc<Mutex<Vec<String>>>,
@@ -95,7 +93,7 @@ impl ProtocolEngine {
             config,
             steps: Arc::new(AtomicU64::new(0)),
             runtime_stats: Arc::new(Mutex::new(RuntimeStats::default())),
-            verifier: Ed25519Verifier::default(),
+            verifier: NostrVerifier,
             identity_pubkey: Arc::new(Mutex::new(identity_pubkey)),
             dynamic_fast_peers: Arc::new(Mutex::new(Vec::new())),
             dynamic_fallback_peers: Arc::new(Mutex::new(Vec::new())),
@@ -224,7 +222,7 @@ impl ProtocolEngine {
         runtime.state.subscriptions.contains(&tag)
     }
 
-    pub async fn update_identity(&self, pubkey: [u8; 32], signer: Ed25519Signer) {
+    pub async fn update_identity(&self, pubkey: [u8; 32], signer: NostrSigner) {
         let mut runtime = self.inner.lock().await;
         runtime.signer = Some(signer);
         let mut guard = self.identity_pubkey.lock().await;
@@ -457,7 +455,7 @@ pub fn default_protocol_config(
     peer_id: String,
     namespace: u16,
     identity_pubkey: [u8; 32],
-    signer: Ed25519Signer,
+    signer: NostrSigner,
 ) -> ProtocolConfig {
     let mut key = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut key);
@@ -537,7 +535,7 @@ mod tests {
     use super::{default_protocol_config, erasure_mode_from_shards};
     use veil_core::types::NAMESPACE_PUBLIC_FEED;
     use veil_core::{Epoch, Namespace};
-    use veil_crypto::signing::Ed25519Signer;
+    use veil_crypto::signing::NostrSigner;
     use veil_fec::profile::ErasureCodingMode;
     use veil_fec::sharder::{derive_object_root, object_to_shards_with_mode};
 
@@ -548,7 +546,7 @@ mod tests {
             "peer-a".to_string(),
             32,
             [0x11; 32],
-            Ed25519Signer::from_secret([0x22; 32]),
+            NostrSigner::from_secret([0x22; 32]).expect("valid nostr test key"),
         );
 
         assert!(cfg.runtime_config.probabilistic_forwarding.enabled);

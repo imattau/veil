@@ -134,6 +134,7 @@ pub struct RuntimePolicyHooks<'a, P> {
     pub bucket_jitter_extra_levels: usize,
     pub required_signed_namespaces: Option<&'a HashSet<u16>>,
     pub probabilistic_forwarding: ProbabilisticForwardingConfig,
+    pub accept_all_tags: bool,
 }
 
 impl<'a, P> Default for RuntimePolicyHooks<'a, P> {
@@ -147,6 +148,7 @@ impl<'a, P> Default for RuntimePolicyHooks<'a, P> {
             bucket_jitter_extra_levels: 0,
             required_signed_namespaces: None,
             probabilistic_forwarding: ProbabilisticForwardingConfig::default(),
+            accept_all_tags: false,
         }
     }
 }
@@ -382,6 +384,7 @@ pub fn pump_once<A: TransportAdapter>(
             bucket_jitter_extra_levels: policy_hooks.bucket_jitter_extra_levels,
             required_signed_namespaces: policy_hooks.required_signed_namespaces,
             probabilistic_forwarding: policy_hooks.probabilistic_forwarding,
+            accept_all_tags: policy_hooks.accept_all_tags,
         });
     let event = process_inbound(
         node,
@@ -483,6 +486,7 @@ pub fn pump_once_with_config_resolver<A: TransportAdapter>(
                 bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
                 required_signed_namespaces: Some(&config.required_signed_namespaces),
                 probabilistic_forwarding: config.probabilistic_forwarding,
+                accept_all_tags: config.accept_all_tags,
             },
             decrypt_key,
             stats,
@@ -550,6 +554,7 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 bucket_jitter_extra_levels: fast_policy_hooks.bucket_jitter_extra_levels,
                 required_signed_namespaces: fast_policy_hooks.required_signed_namespaces,
                 probabilistic_forwarding: fast_policy_hooks.probabilistic_forwarding,
+                accept_all_tags: fast_policy_hooks.accept_all_tags,
             }),
             _ => None,
         };
@@ -620,6 +625,7 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
                 bucket_jitter_extra_levels: fallback_policy_hooks.bucket_jitter_extra_levels,
                 required_signed_namespaces: fallback_policy_hooks.required_signed_namespaces,
                 probabilistic_forwarding: fallback_policy_hooks.probabilistic_forwarding,
+                accept_all_tags: fallback_policy_hooks.accept_all_tags,
             }),
             _ => None,
         };
@@ -759,6 +765,7 @@ where
                 bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
                 required_signed_namespaces: Some(&config.required_signed_namespaces),
                 probabilistic_forwarding: config.probabilistic_forwarding,
+                accept_all_tags: config.accept_all_tags,
             },
             fallback_policy_hooks: RuntimePolicyHooks {
                 fanout_for_peer: Some(&fallback_fanout_fn),
@@ -769,6 +776,7 @@ where
                 bucket_jitter_extra_levels: config.bucket_jitter_extra_levels,
                 required_signed_namespaces: Some(&config.required_signed_namespaces),
                 probabilistic_forwarding: config.probabilistic_forwarding,
+                accept_all_tags: config.accept_all_tags,
             },
             decrypt_key,
             stats,
@@ -1489,6 +1497,47 @@ mod tests {
         .expect("wrapper pump should succeed");
 
         assert!(adapter.take_outbound().is_empty());
+    }
+
+    #[test]
+    fn config_wrapper_accept_all_tags_bypasses_subscription_gate() {
+        let mut node = NodeState::default();
+        let tag = [0x52_u8; 32];
+        let key = [0xE6_u8; 32];
+        let payload = b"open relay ingest";
+        let encoded_object = make_encoded_object(payload, tag, &key);
+        let root = blake3_32(&encoded_object);
+        let shards = object_to_shards(&encoded_object, Namespace(11), Epoch(46), tag, root)
+            .expect("sharding should succeed");
+        let bytes = encode_shard_cbor(&shards[0]).expect("shard should encode");
+
+        let mut adapter = InMemoryAdapter::default();
+        adapter.enqueue_inbound("peer-any", bytes);
+        let peers = vec!["peer-any".to_string()];
+        let mut stats = RuntimeStats::default();
+        let mut cfg = NodeRuntimeConfig::default();
+        cfg.accept_all_tags = true;
+
+        let event = pump_once_with_config(
+            &mut node,
+            &mut adapter,
+            ConfigPumpParams {
+                peers: &peers,
+                now_step: 0,
+                decrypt_key: &key,
+                config: &cfg,
+                stats: &mut stats,
+            },
+            &XChaCha20Poly1305Cipher,
+            &Ed25519Verifier,
+        )
+        .expect("wrapper pump should succeed");
+
+        assert!(event.is_some());
+        assert!(!matches!(
+            event,
+            Some(crate::receive::ReceiveEvent::IgnoredNotSubscribed)
+        ));
     }
 
     #[test]

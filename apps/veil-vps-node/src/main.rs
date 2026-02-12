@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::env;
 use std::fs;
 use std::hash::Hash;
 use std::io::{Read, Write};
@@ -10,17 +9,27 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod nostr_bridge;
+mod settings_db;
+
+use nostr_bridge::{start_nostr_bridge, NostrBridgeConfig};
 use rand::RngCore;
 use rusqlite::{params, Connection};
+use settings_db::SettingsStore;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::flag;
+use veil_core::hash::blake3_32;
+use veil_core::tags::derive_channel_feed_tag;
+use veil_core::{Epoch, Namespace};
 use veil_crypto::aead::XChaCha20Poly1305Cipher;
-use veil_crypto::signing::Ed25519Verifier;
+use veil_crypto::signing::{NostrSigner, NostrVerifier, Signer};
+use veil_node::batch::FeedBatcher;
 use veil_node::config::{
     AdaptiveLaneScoringConfig, BloomExchangeConfig, NodeRuntimeConfig,
     ProbabilisticForwardingConfig,
 };
 use veil_node::persistence::{load_state_or_default, save_state_to_path};
+use veil_node::publish::{publish_queue_tick_multi_lane, PublishQueueTickParams};
 use veil_node::service::{NodeRuntime, NodeRuntimeCallbacks};
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 #[cfg(feature = "ble-btleplug")]
@@ -342,50 +351,66 @@ where
     }
 }
 
-fn env_var(key: &str, default: &str) -> String {
-    env::var(key).unwrap_or_else(|_| default.to_string())
+fn setting_string(store: Option<&SettingsStore>, key: &str, default: &str) -> String {
+    if let Some(store) = store {
+        if let Some(value) = store.get(key) {
+            return value;
+        }
+        let _ = store.set_if_absent(key, default);
+    }
+    default.to_string()
 }
 
-fn env_u64(key: &str, default: u64) -> u64 {
-    env::var(key)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
+fn setting_opt_string(store: Option<&SettingsStore>, key: &str) -> Option<String> {
+    store.and_then(|s| s.get(key)).and_then(|v| {
+        let trimmed = v.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
+fn setting_u64(store: Option<&SettingsStore>, key: &str, default: u64) -> u64 {
+    setting_string(store, key, &default.to_string())
+        .parse::<u64>()
         .unwrap_or(default)
 }
 
-fn env_f64(key: &str, default: f64) -> f64 {
-    env::var(key)
-        .ok()
-        .and_then(|value| value.parse::<f64>().ok())
+fn setting_f64(store: Option<&SettingsStore>, key: &str, default: f64) -> f64 {
+    setting_string(store, key, &default.to_string())
+        .parse::<f64>()
         .unwrap_or(default)
 }
 
-fn env_usize(key: &str, default: usize) -> usize {
-    env::var(key)
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
+fn setting_usize(store: Option<&SettingsStore>, key: &str, default: usize) -> usize {
+    setting_string(store, key, &default.to_string())
+        .parse::<usize>()
         .unwrap_or(default)
 }
 
-fn env_bool(key: &str, default: bool) -> bool {
-    env::var(key)
-        .ok()
-        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(default)
+fn setting_bool(store: Option<&SettingsStore>, key: &str, default: bool) -> bool {
+    let value = setting_string(store, key, if default { "1" } else { "0" });
+    matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES")
 }
 
-fn env_list(key: &str) -> Vec<String> {
-    env::var(key)
-        .ok()
-        .map(|value| {
-            value
-                .split(',')
-                .map(|entry| entry.trim())
-                .filter(|entry| !entry.is_empty())
-                .map(|entry| entry.to_string())
-                .collect::<Vec<_>>()
-        })
+fn setting_list(store: Option<&SettingsStore>, key: &str, default: &[&str]) -> Vec<String> {
+    let fallback = default.join(",");
+    setting_string(store, key, &fallback)
+        .split(',')
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| entry.to_string())
+        .collect()
+}
+
+fn current_epoch() -> Epoch {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
+        .as_secs();
+    Epoch((now / 86_400) as u32)
 }
 
 fn open_peer_db(path: &Path) -> Option<Connection> {
@@ -517,6 +542,13 @@ fn parse_core_tags(values: &[String]) -> Vec<[u8; 32]> {
         .collect()
 }
 
+fn pseudo_pubkey_for_peer(peer: &str) -> [u8; 32] {
+    let mut preimage = Vec::with_capacity(8 + peer.len());
+    preimage.extend_from_slice(b"vps-peer");
+    preimage.extend_from_slice(peer.as_bytes());
+    blake3_32(&preimage)
+}
+
 fn parse_fallback_peers(
     ws_peer: Option<String>,
     tor_peers: Vec<String>,
@@ -542,6 +574,8 @@ fn parse_fallback_peer_strings(values: &[String]) -> Vec<FallbackPeer> {
         .filter_map(|value| {
             if let Some(rest) = value.strip_prefix("ws:") {
                 Some(FallbackPeer::WebSocket(rest.to_string()))
+            } else if let Some(rest) = value.strip_prefix("wssrv:") {
+                Some(FallbackPeer::WebSocketServer(rest.to_string()))
             } else if let Some(rest) = value.strip_prefix("tor:") {
                 Some(FallbackPeer::Tor(rest.to_string()))
             } else if let Some(_rest) = value.strip_prefix("ble:") {
@@ -592,12 +626,20 @@ fn load_or_create_node_key(path: &Path) -> Result<[u8; 32], String> {
         if bytes.len() == 32 {
             let mut out = [0_u8; 32];
             out.copy_from_slice(&bytes);
-            return Ok(out);
+            if NostrSigner::from_secret(out).is_ok() {
+                return Ok(out);
+            }
+            return Err("existing node key is not a valid Nostr secp256k1 secret".to_string());
         }
     }
 
-    let mut key = [0_u8; 32];
-    rand::thread_rng().fill_bytes(&mut key);
+    let key = loop {
+        let mut candidate = [0_u8; 32];
+        rand::thread_rng().fill_bytes(&mut candidate);
+        if NostrSigner::from_secret(candidate).is_ok() {
+            break candidate;
+        }
+    };
     ensure_parent(path).map_err(|e| format!("create node key dir: {e}"))?;
     fs::write(path, key).map_err(|e| format!("write node key: {e}"))?;
     #[cfg(unix)]
@@ -702,61 +744,239 @@ fn start_health_server(
     });
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{encode_fallback_peers, parse_fallback_peer_strings, FallbackPeer};
+
+    #[test]
+    fn parse_fallback_peer_strings_supports_websocket_server_prefix() {
+        let parsed = parse_fallback_peer_strings(&[
+            "wssrv:127.0.0.1:8080".to_string(),
+            "ws:relay-a".to_string(),
+            "tor:peer.onion:5000".to_string(),
+        ]);
+        assert!(parsed.contains(&FallbackPeer::WebSocketServer("127.0.0.1:8080".to_string())));
+        assert!(parsed.contains(&FallbackPeer::WebSocket("relay-a".to_string())));
+        assert!(parsed.contains(&FallbackPeer::Tor("peer.onion:5000".to_string())));
+    }
+
+    #[test]
+    fn encode_and_parse_roundtrip_keeps_websocket_server_peers() {
+        let peers = vec![
+            FallbackPeer::WebSocket("relay-a".to_string()),
+            FallbackPeer::WebSocketServer("192.168.1.10:8080".to_string()),
+            FallbackPeer::Tor("peer.onion:5000".to_string()),
+        ];
+        let encoded = encode_fallback_peers(&peers);
+        let decoded = parse_fallback_peer_strings(&encoded);
+        assert_eq!(decoded, peers);
+    }
+}
+
 fn main() {
-    if let Ok(raw_alpn) = std::env::var("VEIL_VPS_QUIC_ALPN") {
-        if !raw_alpn.trim().is_empty() {
-            std::env::set_var("VEIL_QUIC_ALPN", raw_alpn.clone());
-            eprintln!("quic: using VEIL_VPS_QUIC_ALPN override: {raw_alpn}");
+    let mut args = std::env::args().collect::<Vec<_>>();
+    if args.len() >= 2 && args[1] == "settings" {
+        let mut db_path = PathBuf::from("data/settings.db");
+        if args.len() >= 4 && args[2] == "--db" {
+            db_path = PathBuf::from(args[3].clone());
+            args.drain(2..4);
+        }
+        let store = match SettingsStore::open(&db_path) {
+            Ok(store) => store,
+            Err(err) => {
+                eprintln!("settings db open failed: {err}");
+                std::process::exit(1);
+            }
+        };
+        if args.len() < 3 {
+            eprintln!(
+                "usage: veil-vps-node settings [--db <path>] <list|get|set|delete> [key] [value]"
+            );
+            std::process::exit(2);
+        }
+        match args[2].as_str() {
+            "list" => match store.list() {
+                Ok(items) => {
+                    for (k, v) in items {
+                        println!("{k}={v}");
+                    }
+                    return;
+                }
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(1);
+                }
+            },
+            "get" => {
+                if args.len() < 4 {
+                    eprintln!("usage: veil-vps-node settings get <key>");
+                    std::process::exit(2);
+                }
+                let key = &args[3];
+                if let Some(v) = store.get(key) {
+                    println!("{v}");
+                    return;
+                }
+                std::process::exit(3);
+            }
+            "set" => {
+                if args.len() < 5 {
+                    eprintln!("usage: veil-vps-node settings set <key> <value>");
+                    std::process::exit(2);
+                }
+                let key = &args[3];
+                let value = &args[4];
+                if let Err(err) = store.set(key, value) {
+                    eprintln!("{err}");
+                    std::process::exit(1);
+                }
+                println!("ok");
+                return;
+            }
+            "delete" => {
+                if args.len() < 4 {
+                    eprintln!("usage: veil-vps-node settings delete <key>");
+                    std::process::exit(2);
+                }
+                let key = &args[3];
+                match store.delete(key) {
+                    Ok(true) => {
+                        println!("deleted");
+                        return;
+                    }
+                    Ok(false) => std::process::exit(3),
+                    Err(err) => {
+                        eprintln!("{err}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            _ => {
+                eprintln!(
+                    "usage: veil-vps-node settings [--db <path>] <list|get|set|delete> [key] [value]"
+                );
+                std::process::exit(2);
+            }
         }
     }
 
-    let state_path = PathBuf::from(env_var(
+    let settings_db_path = PathBuf::from("data/settings.db");
+    let settings_store = match SettingsStore::open(&settings_db_path) {
+        Ok(store) => Some(store),
+        Err(err) => {
+            eprintln!("settings db disabled: {err}");
+            None
+        }
+    };
+    if let Some(store) = settings_store.as_ref() {
+        let import_path = PathBuf::from("/opt/veil-vps-node/veil-vps-node.env");
+        if store.is_empty() && import_path.exists() {
+            if let Ok(imported) = store.import_env_file(&import_path) {
+                eprintln!(
+                    "settings db initialized from {} ({} entries)",
+                    import_path.display(),
+                    imported
+                );
+            }
+        }
+    }
+    let settings = settings_store.as_ref();
+    let raw_alpn = setting_string(
+        settings,
+        "VEIL_VPS_QUIC_ALPN",
+        "veil-quic/1,veil/1,veil-node,veil,h3,hq-29",
+    );
+    if !raw_alpn.trim().is_empty() {
+        std::env::set_var("VEIL_QUIC_ALPN", raw_alpn.clone());
+        eprintln!("quic: using VEIL_VPS_QUIC_ALPN from settings db: {raw_alpn}");
+    }
+
+    let state_path = PathBuf::from(setting_string(
+        settings,
         "VEIL_VPS_STATE_PATH",
         "data/veil-vps-node-state.cbor",
     ));
-    let node_key_path = PathBuf::from(env_var("VEIL_VPS_NODE_KEY_PATH", "data/node_identity.key"));
-    let quic_cert_path = PathBuf::from(env_var("VEIL_VPS_QUIC_CERT_PATH", "data/quic_cert.der"));
-    let quic_key_path = PathBuf::from(env_var("VEIL_VPS_QUIC_KEY_PATH", "data/quic_key.der"));
-    let snapshot_secs = env_u64("VEIL_VPS_SNAPSHOT_SECS", 60);
-    let tick_ms = env_u64("VEIL_VPS_TICK_MS", 50);
-    let health_bind = env_var("VEIL_VPS_HEALTH_BIND", "127.0.0.1");
-    let health_port = env_u64("VEIL_VPS_HEALTH_PORT", 9090) as u16;
-    let fast_peers = env_list("VEIL_VPS_FAST_PEERS");
-    let core_tags = env_list("VEIL_VPS_CORE_TAGS");
-    let tor_peers = env_list("VEIL_VPS_TOR_PEERS");
+    let node_key_path = PathBuf::from(setting_string(
+        settings,
+        "VEIL_VPS_NODE_KEY_PATH",
+        "data/node_identity.key",
+    ));
+    let quic_cert_path = PathBuf::from(setting_string(
+        settings,
+        "VEIL_VPS_QUIC_CERT_PATH",
+        "data/quic_cert.der",
+    ));
+    let quic_key_path = PathBuf::from(setting_string(
+        settings,
+        "VEIL_VPS_QUIC_KEY_PATH",
+        "data/quic_key.der",
+    ));
+    let snapshot_secs = setting_u64(settings, "VEIL_VPS_SNAPSHOT_SECS", 60);
+    let tick_ms = setting_u64(settings, "VEIL_VPS_TICK_MS", 50);
+    let health_bind = setting_string(settings, "VEIL_VPS_HEALTH_BIND", "127.0.0.1");
+    let health_port = setting_u64(settings, "VEIL_VPS_HEALTH_PORT", 9090) as u16;
+    let fast_peers = setting_list(settings, "VEIL_VPS_FAST_PEERS", &[]);
+    let core_tags = setting_list(settings, "VEIL_VPS_CORE_TAGS", &[]);
+    let tor_peers = setting_list(settings, "VEIL_VPS_TOR_PEERS", &[]);
     #[cfg(feature = "ble")]
-    let ble_enabled = env_bool("VEIL_VPS_BLE_ENABLE", false);
+    let ble_enabled = setting_bool(settings, "VEIL_VPS_BLE_ENABLE", false);
     #[cfg(feature = "ble")]
     let ble_peers = if ble_enabled {
-        env_list("VEIL_VPS_BLE_PEERS")
+        setting_list(settings, "VEIL_VPS_BLE_PEERS", &[])
     } else {
         Vec::new()
     };
     #[cfg(feature = "ble")]
-    let ble_allowlist = env_list("VEIL_VPS_BLE_ALLOWLIST");
+    let ble_allowlist = setting_list(settings, "VEIL_VPS_BLE_ALLOWLIST", &[]);
     #[cfg(feature = "ble")]
-    let ble_mtu = env_usize("VEIL_VPS_BLE_MTU", 180);
-    let peer_db_path = PathBuf::from(env_var("VEIL_VPS_PEER_DB_PATH", "data/peers.db"));
-    let max_dynamic_peers = env_usize("VEIL_VPS_MAX_DYNAMIC_PEERS", 512);
+    let ble_mtu = setting_usize(settings, "VEIL_VPS_BLE_MTU", 180);
+    let peer_db_path = PathBuf::from(setting_string(
+        settings,
+        "VEIL_VPS_PEER_DB_PATH",
+        "data/peers.db",
+    ));
+    let max_dynamic_peers = setting_usize(settings, "VEIL_VPS_MAX_DYNAMIC_PEERS", 512);
 
-    let quic_bind = env_var("VEIL_VPS_QUIC_BIND", "0.0.0.0:5000");
-    let ws_url = env::var("VEIL_VPS_WS_URL").ok();
-    let ws_listen = env::var("VEIL_VPS_WS_LISTEN").ok();
-    let ws_peer = env::var("VEIL_VPS_WS_PEER").ok();
+    let quic_bind = setting_string(settings, "VEIL_VPS_QUIC_BIND", "0.0.0.0:5000");
+    let ws_url = setting_opt_string(settings, "VEIL_VPS_WS_URL");
+    let ws_listen = setting_opt_string(settings, "VEIL_VPS_WS_LISTEN");
+    let ws_peer = setting_opt_string(settings, "VEIL_VPS_WS_PEER");
     let ws_peer_id = ws_peer.clone().unwrap_or_else(|| "ws-peer".to_string());
-    let tor_socks_addr = env::var("VEIL_VPS_TOR_SOCKS_ADDR").ok();
+    let tor_socks_addr = setting_opt_string(settings, "VEIL_VPS_TOR_SOCKS_ADDR");
 
-    let adaptive_scoring = env_bool("VEIL_VPS_ADAPTIVE_LANE_SCORING", true);
-    let probabilistic_forwarding = env_bool("VEIL_VPS_PROBABILISTIC_FORWARDING", true);
-    let forwarding_min_probability = env_f64("VEIL_VPS_FORWARD_MIN_PROBABILITY", 0.10);
-    let forwarding_replica_divisor = env_u64("VEIL_VPS_FORWARD_REPLICA_DIVISOR", 8);
-    let bloom_exchange = env_bool("VEIL_VPS_BLOOM_EXCHANGE", true);
-    let bloom_interval_steps = env_u64("VEIL_VPS_BLOOM_INTERVAL_STEPS", 128);
-    let bloom_false_positive_rate = env_f64("VEIL_VPS_BLOOM_FALSE_POSITIVE_RATE", 0.05);
-    let max_cache_shards = env_usize("VEIL_VPS_MAX_CACHE_SHARDS", 200_000);
-    let bucket_jitter = env_usize("VEIL_VPS_BUCKET_JITTER", 0);
-    let required_signed =
-        parse_required_signed_namespaces(&env_list("VEIL_VPS_REQUIRED_SIGNED_NAMESPACES"));
+    let adaptive_scoring = setting_bool(settings, "VEIL_VPS_ADAPTIVE_LANE_SCORING", true);
+    let probabilistic_forwarding =
+        setting_bool(settings, "VEIL_VPS_PROBABILISTIC_FORWARDING", true);
+    let forwarding_min_probability =
+        setting_f64(settings, "VEIL_VPS_FORWARD_MIN_PROBABILITY", 0.10);
+    let forwarding_replica_divisor = setting_u64(settings, "VEIL_VPS_FORWARD_REPLICA_DIVISOR", 8);
+    let bloom_exchange = setting_bool(settings, "VEIL_VPS_BLOOM_EXCHANGE", true);
+    let bloom_interval_steps = setting_u64(settings, "VEIL_VPS_BLOOM_INTERVAL_STEPS", 128);
+    let bloom_false_positive_rate =
+        setting_f64(settings, "VEIL_VPS_BLOOM_FALSE_POSITIVE_RATE", 0.05);
+    let max_cache_shards = setting_usize(settings, "VEIL_VPS_MAX_CACHE_SHARDS", 200_000);
+    let bucket_jitter = setting_usize(settings, "VEIL_VPS_BUCKET_JITTER", 0);
+    let open_relay = setting_bool(settings, "VEIL_VPS_OPEN_RELAY", false);
+    let blocked_peers = setting_list(settings, "VEIL_VPS_BLOCKED_PEERS", &[]);
+    let nostr_bridge_enabled = setting_bool(settings, "VEIL_VPS_NOSTR_BRIDGE_ENABLE", false);
+    let nostr_bridge_relays = setting_list(settings, "VEIL_VPS_NOSTR_RELAYS", &[]);
+    let nostr_bridge_channel =
+        setting_string(settings, "VEIL_VPS_NOSTR_CHANNEL_ID", "nostr-bridge");
+    let nostr_bridge_namespace = setting_u64(settings, "VEIL_VPS_NOSTR_NAMESPACE", 32) as u16;
+    let nostr_bridge_since_secs = setting_u64(settings, "VEIL_VPS_NOSTR_SINCE_SECS", 3600);
+    let nostr_bridge_state_path = PathBuf::from(setting_string(
+        settings,
+        "VEIL_VPS_NOSTR_BRIDGE_STATE_PATH",
+        "data/nostr-bridge-state.json",
+    ));
+    let nostr_bridge_max_seen = setting_usize(settings, "VEIL_VPS_NOSTR_MAX_SEEN_IDS", 20_000);
+    let nostr_bridge_persist_every =
+        setting_usize(settings, "VEIL_VPS_NOSTR_PERSIST_EVERY_UPDATES", 32);
+    let required_signed = parse_required_signed_namespaces(&setting_list(
+        settings,
+        "VEIL_VPS_REQUIRED_SIGNED_NAMESPACES",
+        &[],
+    ));
 
     let node_key = match load_or_create_node_key(&node_key_path) {
         Ok(key) => key,
@@ -765,6 +985,13 @@ fn main() {
             return;
         }
     };
+    let node_signer = NostrSigner::from_secret(node_key).expect("node key validated");
+    let node_pubkey = node_signer.public_key();
+    let node_pubkey_hex = node_pubkey
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    eprintln!("node identity (nostr x-only pubkey): {node_pubkey_hex}");
 
     let identity = match load_or_create_identity(&quic_cert_path, &quic_key_path) {
         Ok(identity) => identity,
@@ -774,7 +1001,7 @@ fn main() {
         }
     };
 
-    let trusted_cert_paths = env_list("VEIL_VPS_QUIC_TRUSTED_CERTS");
+    let trusted_cert_paths = setting_list(settings, "VEIL_VPS_QUIC_TRUSTED_CERTS", &[]);
     let mut trusted = load_trusted_certs(&trusted_cert_paths);
     if trusted.is_empty() {
         trusted.push(identity.cert_der.clone());
@@ -809,6 +1036,23 @@ fn main() {
         interval_steps: bloom_interval_steps.max(1),
         false_positive_rate: bloom_false_positive_rate.clamp(0.001, 0.5),
     };
+    if open_relay {
+        cfg.accept_all_tags = true;
+        cfg.probabilistic_forwarding.enabled = false;
+        let mut wot_cfg = cfg.wot_policy.config;
+        wot_cfg.trusted_forward_quota = 1.0;
+        wot_cfg.known_forward_quota = 1.0;
+        wot_cfg.unknown_forward_quota = 1.0;
+        wot_cfg.muted_forward_quota = 1.0;
+        wot_cfg.blocked_forward_quota = 0.0;
+        cfg.wot_policy.update_config(wot_cfg);
+        eprintln!("open relay mode enabled: accepting all tags and full non-blocked forwarding");
+    }
+    for peer in blocked_peers {
+        let pseudo = pseudo_pubkey_for_peer(&peer);
+        cfg.bind_peer_publisher(peer.clone(), pseudo);
+        cfg.wot_policy.block(pseudo);
+    }
 
     let quic_bind_addr = match quic_bind.parse() {
         Ok(addr) => addr,
@@ -949,8 +1193,37 @@ fn main() {
         cfg,
         node_key,
         XChaCha20Poly1305Cipher,
-        Ed25519Verifier,
+        NostrVerifier,
     );
+    let mut bridge_batcher = FeedBatcher::default();
+    let nostr_bridge_rx = if nostr_bridge_enabled {
+        if nostr_bridge_relays.is_empty() {
+            eprintln!(
+                "nostr bridge enabled but VEIL_VPS_NOSTR_RELAYS is empty; bridge not started"
+            );
+            None
+        } else {
+            eprintln!(
+                "nostr bridge enabled with {} relays, channel={}, namespace={}",
+                nostr_bridge_relays.len(),
+                nostr_bridge_channel,
+                nostr_bridge_namespace
+            );
+            Some(start_nostr_bridge(NostrBridgeConfig {
+                relays: nostr_bridge_relays.clone(),
+                channel_id: nostr_bridge_channel.clone(),
+                namespace: nostr_bridge_namespace,
+                since_secs: nostr_bridge_since_secs,
+                state_path: Some(nostr_bridge_state_path.clone()),
+                max_seen_ids: nostr_bridge_max_seen,
+                persist_every_updates: nostr_bridge_persist_every,
+            }))
+        }
+    } else {
+        None
+    };
+    let bridge_namespace = Namespace(nostr_bridge_namespace);
+    let bridge_tag = derive_channel_feed_tag(&node_pubkey, bridge_namespace, &nostr_bridge_channel);
 
     let tick_interval = Duration::from_millis(tick_ms);
     let snapshot_interval = Duration::from_secs(snapshot_secs);
@@ -988,6 +1261,45 @@ fn main() {
             &discovered_fallback_snapshot,
             max_dynamic_peers,
         );
+
+        if let Some(rx) = &nostr_bridge_rx {
+            for _ in 0..64 {
+                match rx.try_recv() {
+                    Ok(item) => {
+                        eprintln!(
+                            "nostr bridge: relay={} event={} bytes={}",
+                            item.source_relay,
+                            item.source_event_id,
+                            item.payload.len()
+                        );
+                        bridge_batcher.enqueue(item.payload);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                }
+            }
+            let _ = publish_queue_tick_multi_lane(
+                &mut runtime.state,
+                &mut runtime.fast_adapter,
+                &mut runtime.fallback_adapter,
+                &mut bridge_batcher,
+                PublishQueueTickParams {
+                    namespace: bridge_namespace,
+                    epoch: current_epoch(),
+                    tag: bridge_tag,
+                    encrypt_key: &runtime.decrypt_key,
+                    now_step,
+                    flags: veil_codec::object::OBJECT_FLAG_SIGNED,
+                    interactive_flush: false,
+                    fast_peers: &fast_peer_list,
+                    fallback_peers: &fallback_peer_list,
+                },
+                &runtime.config,
+                &XChaCha20Poly1305Cipher,
+                Some(&node_signer),
+            );
+        }
+
         let _ = runtime.tick_with_callbacks(
             now_step,
             &fast_peer_list,

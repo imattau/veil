@@ -5,11 +5,19 @@ edition = "2021"
 license = "GPL-2.0-or-later"
 
 [dependencies]
+futures-util = "0.3"
 rand = { workspace = true }
+rustls = "0.23"
 rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { workspace = true }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio-tungstenite = "0.24"
 veil-core = { path = "../../crates/veil-core" }
+veil-codec = { path = "../../crates/veil-codec" }
 veil-crypto = { path = "../../crates/veil-crypto" }
 veil-node = { path = "../../crates/veil-node" }
+veil-schema-feed = { path = "../../crates/veil-schema-feed" }
 veil-transport = { path = "../../crates/veil-transport" }
 veil-transport-quic = { path = "../../crates/veil-transport-quic" }
 veil-transport-websocket = { path = "../../crates/veil-transport-websocket" }
@@ -21,3 +29,6 @@ signal-hook = "0.3"
 default = []
 ble = ["veil-transport-ble"]
 ble-btleplug = ["ble", "veil-transport-ble/btleplug"]
+
+[dev-dependencies]
+tempfile = "3"

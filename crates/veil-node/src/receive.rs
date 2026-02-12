@@ -75,6 +75,8 @@ pub struct ReceiveCachePolicy<'a> {
     pub required_signed_namespaces: Option<&'a HashSet<u16>>,
     /// Replica-estimate probabilistic forwarding controls.
     pub probabilistic_forwarding: ProbabilisticForwardingConfig,
+    /// If true, bypass local tag subscription checks.
+    pub accept_all_tags: bool,
 }
 
 /// Decodes a queue-batched app payload into its original item list.
@@ -125,7 +127,8 @@ pub fn receive_shard_with_policy(
     if node.seen_shards.contains_key(&sid) {
         return Ok(ReceiveEvent::IgnoredDuplicate);
     }
-    if !node.subscriptions.contains(&shard.header.tag) {
+    let accept_all_tags = cache_policy.map(|p| p.accept_all_tags).unwrap_or(false);
+    if !accept_all_tags && !node.subscriptions.contains(&shard.header.tag) {
         node.seen_shards.insert(sid, now_step + ttl_steps);
         return Ok(ReceiveEvent::IgnoredNotSubscribed);
     }
@@ -437,6 +440,7 @@ mod tests {
             bucket_jitter_extra_levels: 0,
             required_signed_namespaces: None,
             probabilistic_forwarding: crate::config::ProbabilisticForwardingConfig::default(),
+            accept_all_tags: false,
         };
 
         let first_obj =
@@ -469,6 +473,7 @@ mod tests {
                 bucket_jitter_extra_levels: cache_policy.bucket_jitter_extra_levels,
                 required_signed_namespaces: cache_policy.required_signed_namespaces,
                 probabilistic_forwarding: cache_policy.probabilistic_forwarding,
+                accept_all_tags: cache_policy.accept_all_tags,
             }),
         )
         .expect("receive should work");
@@ -521,6 +526,7 @@ mod tests {
             bucket_jitter_extra_levels: 0,
             required_signed_namespaces: Some(&required),
             probabilistic_forwarding: crate::config::ProbabilisticForwardingConfig::default(),
+            accept_all_tags: false,
         };
 
         let mut got_required_sig_err = false;
@@ -543,5 +549,45 @@ mod tests {
         assert!(got_required_sig_err, "unsigned object should be rejected");
         assert!(!node.cache.contains_key(&sid));
         assert!(!node.inbox.contains_key(&wire_root));
+    }
+
+    #[test]
+    fn receive_with_policy_can_bypass_subscription_gate() {
+        let mut node = NodeState::default();
+        let tag = [0x52_u8; 32];
+        let namespace = Namespace(7);
+        let epoch = Epoch(7);
+        let decrypt_key = [0xAA_u8; 32];
+        let encoded_object =
+            make_signed_encrypted_object(b"open-relay", tag, namespace, epoch, &decrypt_key);
+        let root = derive_object_root(&encoded_object);
+        let shard = object_to_shards(&encoded_object, namespace, epoch, tag, root)
+            .expect("object should shard")
+            .remove(0);
+        let wot_policy = LocalWotPolicy::default();
+        let policy = ReceiveCachePolicy {
+            tier: TrustTier::Unknown,
+            max_cache_shards: 100,
+            wot_policy: &wot_policy,
+            erasure_coding_mode: ErasureCodingMode::HardenedNonSystematic,
+            bucket_jitter_extra_levels: 0,
+            required_signed_namespaces: None,
+            probabilistic_forwarding: crate::config::ProbabilisticForwardingConfig::default(),
+            accept_all_tags: true,
+        };
+
+        let event = receive_shard_with_policy(
+            &mut node,
+            &shard,
+            1,
+            100,
+            &decrypt_key,
+            &XChaCha20Poly1305Cipher,
+            &Ed25519Verifier,
+            Some(policy),
+        )
+        .expect("receive should succeed");
+
+        assert_ne!(event, ReceiveEvent::IgnoredNotSubscribed);
     }
 }
