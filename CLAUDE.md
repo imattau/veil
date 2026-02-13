@@ -78,6 +78,10 @@ veil-schema-feed   App-level feed bundle schemas (posts, profiles, reactions, DM
 - **`packages/veil-sdk-js`** -- TypeScript SDK (browser/Node/React Native). Tag derivation, lane adapters, storage adapters (IDB, Memory, AsyncStorage), client runtime.
 - **`packages/veil-sdk-dart`** -- Dart/Flutter SDK via Flutter Rust Bridge. Rust core at `packages/veil-sdk-dart/rust/`.
 
+## Codebase Exploration
+
+Before exploring the codebase, use the gitingest MCP tool to create a summary of the project structure instead of reading every file individually.
+
 ## Response Style
 
 Keep responses concise to minimize token usage. Avoid verbose explanations unless asked. Prefer short confirmations, bullet points, and code over prose.
