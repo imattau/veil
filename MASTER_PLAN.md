@@ -119,9 +119,31 @@ This document consolidates all feature-specific plans and roadmaps for the VEIL 
 - [x] **UI Components**: `VeilPostCard`, `ReactionTray`, `PollWidget`, `LiveStatusBanner`.
 - [x] **Visuals**: Tabbed navigation, Glassmorphism, Network Pulse.
 - [x] **Rich Content**: Clickable hashtags/mentions/links, Nested Boosts.
-- [ ] Implement `LinkPreviewCard`.
-- [ ] Add `MediaGrid` support.
-- [ ] Enhance `ComposerView` with social parsing.
+- [x] **Bug Fixes & Maintenance**:
+    - [x] Fix `NodeState.copyWith` silently clearing `lastError`.
+    - [x] Fix infinite media fetch retry loop with no backoff in `SocialController`.
+    - [x] Fix optimistic profile hardcoded `seq: 999999` blocking real updates.
+    - [x] Fix `NodeService._addFeedEvent` double `notifyListeners`.
+    - [x] Fix `_formatTime` showing "0m" for recent posts.
+    - [x] Fix silent publish failures in `ComposerView` and `ProfileEditView`.
+    - [x] Fix existing avatar not loading in `ProfileEditView` (UX-1).
+    - [x] Fix hardcoded white background in `SemanticFeedCard` (UX-2).
+    - [x] Implement navigation for hashtags/mentions/links in `RichTextView` (UX-3).
+    - [x] Add image lightbox for media expand in `VeilPostCard` (UX-4).
+    - [x] Upgrade `FeedShimmer` to use gradient sweep (UX-5).
+    - [x] Add character count and limits to `ComposerView` (UX-6).
+    - [x] Implement vote deduplication in `PollWidget` (UX-7).
+    - [x] Add dismiss/action to `_BackupReminder` (UX-8).
+- [x] **List Objects & Preferences**:
+    - [x] Implement `publishList()` and `publishAppPreferences()` in `NodeService`.
+    - [x] Add "latest-wins" cache for lists and preferences in `NodeService`.
+    - [x] Implement `PreferencesController` for app-wide settings sync.
+    - [x] Add bookmark action to `VeilPostCard`.
+    - [x] Create Bookmarks view and Settings screen.
+    - [x] Document `/list` and `/app_preferences` in `node_rpc.md`.
+- [x] Implement `LinkPreviewCard`.
+- [x] Add `MediaGrid` support.
+- [x] Enhance `ComposerView` with social parsing.
 - [ ] Implement unit tests for rich content.
 
 ### VPS Node (`apps/veil-vps-node`)

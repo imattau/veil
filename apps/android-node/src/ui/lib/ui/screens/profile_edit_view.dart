@@ -6,8 +6,13 @@ import '../theme/veil_theme.dart';
 
 class ProfileEditView extends StatefulWidget {
   final NodeService service;
+  final SocialController controller;
 
-  const ProfileEditView({super.key, required this.service});
+  const ProfileEditView({
+    super.key,
+    required this.service,
+    required this.controller,
+  });
 
   @override
   State<ProfileEditView> createState() => _ProfileEditViewState();
@@ -44,6 +49,7 @@ class _ProfileEditViewState extends State<ProfileEditView> {
       source: ImageSource.gallery,
       maxWidth: 512,
       maxHeight: 512,
+      imageQuality: 80,
     );
     if (image != null) {
       final bytes = await image.readAsBytes();
@@ -72,13 +78,17 @@ class _ProfileEditViewState extends State<ProfileEditView> {
         finalAvatarRoot = root;
       }
 
-      await widget.service.publishProfile(
+      final ok = await widget.service.publishProfile(
         displayName: name,
         bio: bio,
         lightningAddress: ln,
         avatarMediaRoot: finalAvatarRoot,
       );
-      if (mounted) Navigator.pop(context);
+      if (ok) {
+        if (mounted) Navigator.pop(context);
+      } else {
+        throw Exception(widget.service.state.lastError ?? 'Save failed');
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -126,9 +136,16 @@ class _ProfileEditViewState extends State<ProfileEditView> {
                     backgroundColor: VeilTheme.surface,
                     backgroundImage: _selectedImageBytes != null
                         ? MemoryImage(_selectedImageBytes!)
-                        : null,
-                    child:
-                        _selectedImageBytes == null && _avatarMediaRoot == null
+                        : (_avatarMediaRoot != null &&
+                                widget.controller.imageCache
+                                    .containsKey(_avatarMediaRoot))
+                            ? MemoryImage(widget.controller
+                                .imageCache[_avatarMediaRoot!]!)
+                            : null,
+                    child: _selectedImageBytes == null &&
+                            (_avatarMediaRoot == null ||
+                                !widget.controller.imageCache
+                                    .containsKey(_avatarMediaRoot))
                         ? const Icon(
                             Icons.person,
                             size: 50,

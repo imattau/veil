@@ -16,7 +16,7 @@ class ComposerView extends StatefulWidget {
 }
 
 class _ComposerViewState extends State<ComposerView> {
-  final TextEditingController _textController = TextEditingController();
+  final TextEditingController _textController = SocialTextEditingController();
   String _selectedChannel = 'general';
   bool _isPublishing = false;
   Uint8List? _selectedImage;
@@ -34,6 +34,7 @@ class _ComposerViewState extends State<ComposerView> {
     final image = await _picker.pickImage(
       source: ImageSource.gallery,
       maxWidth: 1024,
+      imageQuality: 80,
     );
     if (image != null) {
       final bytes = await image.readAsBytes();
@@ -57,12 +58,16 @@ class _ComposerViewState extends State<ComposerView> {
         }
       }
 
-      await widget.service.publishPost(
+      final ok = await widget.service.publishPost(
         text: text,
         channelId: _selectedChannel,
         mediaRoots: mediaRoot != null ? [mediaRoot] : const [],
       );
-      if (mounted) Navigator.pop(context);
+      if (ok) {
+        if (mounted) Navigator.pop(context);
+      } else {
+        throw Exception(widget.service.state.lastError ?? 'Publish failed');
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -82,12 +87,16 @@ class _ComposerViewState extends State<ComposerView> {
     if (result == null) return;
     setState(() => _isPublishing = true);
     try {
-      await widget.service.publishPoll(
+      final ok = await widget.service.publishPoll(
         question: result.question,
         options: result.options,
         channelId: _selectedChannel,
       );
-      if (mounted) Navigator.pop(context);
+      if (ok) {
+        if (mounted) Navigator.pop(context);
+      } else {
+        throw Exception(widget.service.state.lastError ?? 'Poll failed');
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -153,11 +162,13 @@ class _ComposerViewState extends State<ComposerView> {
                     controller: _textController,
                     autofocus: true,
                     maxLines: null,
+                    maxLength: 4096,
                     style: const TextStyle(fontSize: 18),
                     decoration: const InputDecoration(
                       hintText: "What's happening?",
                       hintStyle: TextStyle(color: VeilTheme.textSecondary),
                       border: InputBorder.none,
+                      counterText: '',
                     ),
                   ),
                   if (_selectedImage != null)
@@ -220,6 +231,20 @@ class _ComposerViewState extends State<ComposerView> {
             icon: const Icon(Icons.poll_outlined, color: VeilTheme.accent),
           ),
           const Spacer(),
+          ListenableBuilder(
+            listenable: _textController,
+            builder: (context, _) {
+              final count = _textController.text.length;
+              return Text(
+                '$count / 4096',
+                style: TextStyle(
+                  color: count > 4000 ? Colors.red : VeilTheme.textSecondary,
+                  fontSize: 12,
+                ),
+              );
+            },
+          ),
+          const SizedBox(width: 16),
           ElevatedButton(
             onPressed: _isPublishing ? null : _handlePublish,
             style: ElevatedButton.styleFrom(
@@ -347,5 +372,48 @@ class _CreatePollDialogState extends State<_CreatePollDialog> {
         ),
       ],
     );
+  }
+}
+
+class SocialTextEditingController extends TextEditingController {
+  @override
+  TextSpan buildTextSpan({
+    required BuildContext context,
+    TextStyle? style,
+    required bool withComposing,
+  }) {
+    final text = value.text;
+    final List<InlineSpan> spans = [];
+    final pattern = RegExp(
+      r'(https?:\/\/[^\s]+|#[A-Za-z0-9_]+|@[A-Za-z0-9_]+)',
+    );
+
+    var cursor = 0;
+    for (final match in pattern.allMatches(text)) {
+      if (match.start > cursor) {
+        spans.add(
+          TextSpan(text: text.substring(cursor, match.start), style: style),
+        );
+      }
+
+      final token = match.group(0)!;
+      spans.add(
+        TextSpan(
+          text: token,
+          style: style?.copyWith(
+            color: VeilTheme.accent,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      );
+
+      cursor = match.end;
+    }
+
+    if (cursor < text.length) {
+      spans.add(TextSpan(text: text.substring(cursor), style: style));
+    }
+
+    return TextSpan(style: style, children: spans);
   }
 }

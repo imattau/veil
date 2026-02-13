@@ -2,18 +2,28 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../logic/node_service.dart';
 import '../../logic/social_controller.dart';
+import '../../logic/list_controller.dart';
+import '../../logic/preferences_controller.dart';
 import '../../logic/node_contact_config.dart';
 import '../theme/veil_theme.dart';
 import './profile_edit_view.dart';
+import './bookmarks_view.dart';
+import './settings_view.dart';
 
 class ProfileView extends StatefulWidget {
   final NodeService service;
   final SocialController controller;
+  final ListController? listController;
+  final PreferencesController? preferencesController;
+  final String? targetPubkey;
 
   const ProfileView({
     super.key,
     required this.service,
     required this.controller,
+    this.listController,
+    this.preferencesController,
+    this.targetPubkey,
   });
 
   @override
@@ -96,7 +106,8 @@ class _ProfileViewState extends State<ProfileView> {
     return ListenableBuilder(
       listenable: widget.service,
       builder: (context, _) {
-        final pubkey = widget.service.state.identityHex ?? 'Unknown';
+        final pubkey = widget.targetPubkey ?? widget.service.state.identityHex ?? 'Unknown';
+        final isSelf = pubkey == widget.service.state.identityHex;
         final profile = widget.service.profiles[pubkey];
         final displayName =
             profile?.data['display_name'] as String? ?? 'Set Name';
@@ -187,32 +198,52 @@ class _ProfileViewState extends State<ProfileView> {
                 ),
               ),
               const SizedBox(height: 32),
-              _ProfileSection(
-                title: 'Account',
-                children: [
-                  _ProfileTile(
-                    icon: Icons.badge_outlined,
-                    title: 'Edit Profile',
-                    subtitle: 'Set your name and bio',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) =>
-                              ProfileEditView(service: widget.service),
-                        ),
-                      );
-                    },
-                  ),
-                  _ProfileTile(
-                    icon: Icons.bolt_outlined,
-                    title: 'Lightning Address',
-                    subtitle: 'Configure your zap address',
-                    onTap: () {},
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
+              if (isSelf)
+                _ProfileSection(
+                  title: 'Account',
+                  children: [
+                    _ProfileTile(
+                      icon: Icons.badge_outlined,
+                      title: 'Edit Profile',
+                      subtitle: 'Set your name and bio',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ProfileEditView(
+                              service: widget.service,
+                              controller: widget.controller,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    _ProfileTile(
+                      icon: Icons.bolt_outlined,
+                      title: 'Lightning Address',
+                      subtitle: 'Configure your zap address',
+                      onTap: () {},
+                    ),
+                    if (widget.listController != null)
+                      _ProfileTile(
+                        icon: Icons.bookmark_outline,
+                        title: 'Bookmarks',
+                        subtitle: 'Your saved posts',
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => BookmarksView(
+                                controller: widget.controller,
+                                listController: widget.listController!,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                  ],
+                ),
+              if (isSelf) const SizedBox(height: 24),
               _ProfileSection(
                 title: 'Connections',
                 children: [
@@ -222,35 +253,54 @@ class _ProfileViewState extends State<ProfileView> {
                   ),
                 ],
               ),
-              const SizedBox(height: 24),
-              _ProfileSection(
-                title: 'Nodes',
-                children: [_NodeContactsCard(service: widget.service)],
-              ),
-              const SizedBox(height: 24),
-              _ProfileSection(
-                title: 'Security',
-                children: [
-                  _ProfileTile(
-                    icon: Icons.key_outlined,
-                    title: 'Backup Identity',
-                    subtitle: 'Export your secret keys',
-                    onTap: _exportIdentity,
-                  ),
-                  _ProfileTile(
-                    icon: Icons.settings_outlined,
-                    title: 'Import Identity',
-                    subtitle: 'Restore from secret key',
-                    onTap: _importIdentity,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 40),
-              TextButton(
-                onPressed: widget.service.stop,
-                style: TextButton.styleFrom(foregroundColor: Colors.red),
-                child: const Text('Stop Veil Node'),
-              ),
+              if (isSelf) ...[
+                const SizedBox(height: 24),
+                _ProfileSection(
+                  title: 'Nodes',
+                  children: [_NodeContactsCard(service: widget.service)],
+                ),
+                const SizedBox(height: 24),
+                _ProfileSection(
+                  title: 'Security',
+                  children: [
+                                      _ProfileTile(
+                                        icon: Icons.key_outlined,
+                                        title: 'Backup Identity',
+                                        subtitle: 'Export your secret keys',
+                                        onTap: _exportIdentity,
+                                      ),
+                                      if (widget.preferencesController != null)
+                                        _ProfileTile(
+                                          icon: Icons.settings_outlined,
+                                          title: 'App Settings',
+                                          subtitle: 'Theme and preferences',
+                                          onTap: () {
+                                            Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (context) => SettingsView(
+                                                  controller: widget.preferencesController!,
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      _ProfileTile(
+                                        icon: Icons.restore_outlined,
+                                        title: 'Import Identity',
+                                        subtitle: 'Restore from secret key',
+                                        onTap: _importIdentity,
+                                      ),
+                                    ],
+                                  ),
+                    
+                const SizedBox(height: 40),
+                TextButton(
+                  onPressed: widget.service.stop,
+                  style: TextButton.styleFrom(foregroundColor: Colors.red),
+                  child: const Text('Stop Veil Node'),
+                ),
+              ],
             ],
           ),
         );

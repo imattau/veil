@@ -16,6 +16,8 @@ import './inbox_view.dart';
 import './explore_view.dart';
 import '../components/new_message_dialog.dart';
 import '../../logic/messaging_controller.dart';
+import '../../logic/list_controller.dart';
+import '../../logic/preferences_controller.dart';
 
 class SocialHome extends StatefulWidget {
   const SocialHome({super.key});
@@ -28,13 +30,18 @@ class _SocialHomeState extends State<SocialHome> {
   final NodeService _service = NodeService();
   late final SocialController _controller;
   late final MessagingController _messagingController;
+  late final ListController _listController;
+  late final PreferencesController _preferencesController;
   int _currentIndex = 0;
+  bool _hideBackupReminder = false;
 
   @override
   void initState() {
     super.initState();
     _controller = SocialController(_service);
     _messagingController = MessagingController(_service);
+    _listController = ListController(_service);
+    _preferencesController = PreferencesController(_service);
     _service.start();
   }
 
@@ -42,14 +49,30 @@ class _SocialHomeState extends State<SocialHome> {
   void dispose() {
     _controller.dispose();
     _messagingController.dispose();
+    _listController.dispose();
+    _preferencesController.dispose();
     _service.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBody: true,
+    return ListenableBuilder(
+      listenable: _service,
+      builder: (context, _) {
+        final error = _service.state.lastError;
+        if (error != null && error.isNotEmpty) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(error)),
+              );
+              _service.clearError();
+            }
+          });
+        }
+        return Scaffold(
+          extendBody: true,
       extendBodyBehindAppBar: true,
       endDrawer: NetworkStatusDrawer(service: _service),
       appBar: PreferredSize(
@@ -85,13 +108,24 @@ class _SocialHomeState extends State<SocialHome> {
       body: IndexedStack(
         index: _currentIndex,
         children: [
-          _FeedView(controller: _controller),
+          _FeedView(
+            controller: _controller,
+            listController: _listController,
+            showBackupReminder: !_hideBackupReminder,
+            onDismissReminder: () => setState(() => _hideBackupReminder = true),
+            onBackup: () => setState(() => _currentIndex = 3), // Profile tab
+          ),
           ExploreView(service: _service),
           InboxView(
             controller: _messagingController,
             socialController: _controller,
           ),
-          ProfileView(service: _service, controller: _controller),
+          ProfileView(
+            service: _service,
+            controller: _controller,
+            listController: _listController,
+            preferencesController: _preferencesController,
+          ),
         ],
       ),
       bottomNavigationBar: ClipRect(
@@ -128,6 +162,8 @@ class _SocialHomeState extends State<SocialHome> {
         ),
       ),
       floatingActionButton: _buildContextualFAB(),
+    );
+      },
     );
   }
 
@@ -219,8 +255,18 @@ class _SocialHomeState extends State<SocialHome> {
 
 class _FeedView extends StatelessWidget {
   final SocialController controller;
+  final ListController listController;
+  final VoidCallback onBackup;
+  final VoidCallback onDismissReminder;
+  final bool showBackupReminder;
 
-  const _FeedView({required this.controller});
+  const _FeedView({
+    required this.controller,
+    required this.listController,
+    required this.onBackup,
+    required this.onDismissReminder,
+    required this.showBackupReminder,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -264,7 +310,11 @@ class _FeedView extends StatelessWidget {
               if (index == 0) {
                 return Column(
                   children: [
-                    if (!state.hasBackedUp) const _BackupReminder(),
+                    if (showBackupReminder && !state.hasBackedUp)
+                      _BackupReminder(
+                        onBackup: onBackup,
+                        onDismiss: onDismissReminder,
+                      ),
                     LiveStatusBanner(controller: controller),
                   ],
                 );
@@ -273,7 +323,11 @@ class _FeedView extends StatelessWidget {
               if (event.isPoll) {
                 return PollWidget(event: event, controller: controller);
               }
-              return VeilPostCard(event: event, controller: controller);
+              return VeilPostCard(
+                event: event,
+                controller: controller,
+                listController: listController,
+              );
             },
           ),
         );
@@ -283,7 +337,10 @@ class _FeedView extends StatelessWidget {
 }
 
 class _BackupReminder extends StatelessWidget {
-  const _BackupReminder();
+  final VoidCallback onDismiss;
+  final VoidCallback onBackup;
+
+  const _BackupReminder({required this.onDismiss, required this.onBackup});
 
   @override
   Widget build(BuildContext context) {
@@ -295,15 +352,37 @@ class _BackupReminder extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.amber.withOpacity(0.3)),
       ),
-      child: Row(
+      child: Column(
         children: [
-          const Icon(Icons.warning_amber_rounded, color: Colors.amber),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Text(
-              'Identity not backed up! Save your secret keys to avoid losing access.',
-              style: TextStyle(fontSize: 13, color: Colors.amber),
-            ),
+          Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: Colors.amber),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'Identity not backed up! Save your secret keys to avoid losing access.',
+                  style: TextStyle(fontSize: 13, color: Colors.amber),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 18, color: Colors.amber),
+                onPressed: onDismiss,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: onBackup,
+                child: const Text('BACK UP NOW',
+                    style: TextStyle(
+                        color: Colors.amber,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12)),
+              ),
+            ],
           ),
         ],
       ),

@@ -121,8 +121,8 @@ pub async fn serve(addr: SocketAddr, state: AppState) {
     axum::serve(listener, app).await.expect("serve");
 }
 
-const MAX_RAW_PAYLOAD_BYTES: usize = 256 * 1024;
-const MAX_BUNDLE_JSON_BYTES: usize = 256 * 1024;
+const MAX_RAW_PAYLOAD_BYTES: usize = 600 * 1024;
+const MAX_BUNDLE_JSON_BYTES: usize = 600 * 1024;
 const MAX_CHANNEL_LEN: usize = 64;
 const MAX_NAME_LEN: usize = 64;
 const MAX_TEXT_LEN: usize = 4096;

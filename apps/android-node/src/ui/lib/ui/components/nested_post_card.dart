@@ -75,6 +75,7 @@ class NestedPostCard extends StatelessWidget {
           const SizedBox(height: 8),
           RichTextView(
             text: originalPost.postText ?? '',
+            controller: controller,
             style: const TextStyle(fontSize: 13),
           ),
         ],

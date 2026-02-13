@@ -27,6 +27,14 @@ class PollWidget extends StatelessWidget {
         )
         .toList();
 
+    final totalVotes = votes.length;
+    final selfPubkey = controller.nodeService.state.identityHex;
+    final myVote = votes.firstWhere(
+      (v) => v.authorPubkey == selfPubkey,
+      orElse: () => const NodeEvent(seq: 0, event: 'unknown', data: {}),
+    );
+    final hasVoted = myVote.seq != 0;
+
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 12),
       padding: const EdgeInsets.all(16),
@@ -44,16 +52,15 @@ class PollWidget extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           ...List.generate(options.length, (index) {
-            final optionVotes = votes
-                .where((v) => v.data['option_index'] == index)
-                .length;
-            final totalVotes = votes.length;
+            final optionVotes =
+                votes.where((v) => v.data['option_index'] == index).length;
             final percent = totalVotes == 0 ? 0.0 : optionVotes / totalVotes;
+            final isMyVote = hasVoted && myVote.data['option_index'] == index;
 
             return Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: InkWell(
-                onTap: root == null
+                onTap: (root == null || hasVoted)
                     ? null
                     : () async {
                         await controller.nodeService.publishPollVote(
@@ -69,6 +76,9 @@ class PollWidget extends StatelessWidget {
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.05),
                         borderRadius: BorderRadius.circular(8),
+                        border: isMyVote
+                            ? Border.all(color: VeilTheme.accent, width: 1)
+                            : null,
                       ),
                     ),
                     FractionallySizedBox(
@@ -76,7 +86,9 @@ class PollWidget extends StatelessWidget {
                       child: Container(
                         height: 36,
                         decoration: BoxDecoration(
-                          color: VeilTheme.accent.withOpacity(0.2),
+                          color: isMyVote
+                              ? VeilTheme.accent.withOpacity(0.4)
+                              : VeilTheme.accent.withOpacity(0.2),
                           borderRadius: BorderRadius.circular(8),
                         ),
                       ),
@@ -88,9 +100,22 @@ class PollWidget extends StatelessWidget {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text(
-                            options[index],
-                            style: const TextStyle(fontSize: 13),
+                          Row(
+                            children: [
+                              Text(
+                                options[index],
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: isMyVote ? FontWeight.bold : null,
+                                ),
+                              ),
+                              if (isMyVote)
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 8),
+                                  child: Icon(Icons.check_circle,
+                                      size: 14, color: VeilTheme.accent),
+                                ),
+                            ],
                           ),
                           if (totalVotes > 0)
                             Text(
@@ -107,7 +132,7 @@ class PollWidget extends StatelessWidget {
           }),
           const SizedBox(height: 8),
           Text(
-            '${votes.length} votes',
+            '$totalVotes votes',
             style: Theme.of(context).textTheme.labelSmall,
           ),
         ],

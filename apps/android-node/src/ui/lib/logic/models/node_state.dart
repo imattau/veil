@@ -58,7 +58,7 @@ class NodeState {
     return NodeState(
       running: running ?? this.running,
       busy: busy ?? this.busy,
-      lastError: lastError,
+      lastError: lastError ?? this.lastError,
       identityHex: identityHex ?? this.identityHex,
       authToken: authToken ?? this.authToken,
       statusPayload: statusPayload ?? this.statusPayload,
@@ -69,4 +69,35 @@ class NodeState {
       lastUpdated: lastUpdated ?? this.lastUpdated,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NodeState &&
+          runtimeType == other.runtimeType &&
+          running == other.running &&
+          busy == other.busy &&
+          lastError == other.lastError &&
+          identityHex == other.identityHex &&
+          authToken == other.authToken &&
+          mapEquals(statusPayload, other.statusPayload) &&
+          mapEquals(healthPayload, other.healthPayload) &&
+          mapEquals(policySummary, other.policySummary) &&
+          listEquals(subscriptions, other.subscriptions) &&
+          hasBackedUp == other.hasBackedUp &&
+          lastUpdated == other.lastUpdated;
+
+  @override
+  int get hashCode =>
+      running.hashCode ^
+      busy.hashCode ^
+      lastError.hashCode ^
+      identityHex.hashCode ^
+      authToken.hashCode ^
+      statusPayload.hashCode ^
+      healthPayload.hashCode ^
+      policySummary.hashCode ^
+      subscriptions.hashCode ^
+      hasBackedUp.hashCode ^
+      lastUpdated.hashCode;
 }

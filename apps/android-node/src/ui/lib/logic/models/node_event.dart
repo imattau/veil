@@ -32,12 +32,25 @@ class NodeEvent {
   bool get isLiveStatus => bundleKind == 'live_status';
   bool get isDirectMessage => bundleKind == 'direct_message';
   bool get isGroupMessage => bundleKind == 'group_message';
+  bool get isList => bundleKind == 'list';
+  bool get isAppPreferences => bundleKind == 'app_preferences';
 
   String? get authorPubkey => data['author_pubkey_hex'] as String?;
   String? get channelId => data['channel_id'] as String?;
   String? get lightningAddress =>
       isProfile ? data['lightning_address'] as String? : null;
   int? get createdAt => (data['meta']?['created_at'] as num?)?.toInt();
+
+  // List specific
+  String? get listTitle => isList ? data['title'] as String? : null;
+  String? get listKind => isList ? data['list_kind'] as String? : null;
+  List<Map<String, dynamic>> get listItems =>
+      (data['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+
+  // AppPreferences specific
+  String? get appId => isAppPreferences ? data['app_id'] as String? : null;
+  Map<String, dynamic> get preferencesJson =>
+      isAppPreferences ? (data['settings_json'] as Map<String, dynamic>? ?? {}) : {};
 
   // Post specific
   String? get postText => isPost ? data['text'] as String? : null;

@@ -33,6 +33,9 @@ class _OptimisticRepost {
 class SocialController extends ChangeNotifier {
   final NodeService nodeService;
   final Map<String, Uint8List> imageCache = {};
+  final Set<String> _fetchingImages = {};
+  final Map<String, int> _fetchFailures = {};
+  final Map<String, DateTime> _nextFetchAllowed = {};
   final List<_OptimisticReaction> _optimisticReactions = [];
   final List<_OptimisticRepost> _optimisticReposts = [];
   final Map<String, List<NodeEvent>> _optimisticComments = {};
@@ -63,10 +66,29 @@ class SocialController extends ChangeNotifier {
   }
 
   Future<void> _fetchImage(String root) async {
-    final res = await nodeService.fetchObject(root);
-    if (res != null && res['object_b64'] != null) {
-      imageCache[root] = base64.decode(res['object_b64']);
-      notifyListeners();
+    if (_fetchingImages.contains(root)) return;
+    final now = DateTime.now();
+    final nextAllowed = _nextFetchAllowed[root];
+    if (nextAllowed != null && now.isBefore(nextAllowed)) return;
+
+    _fetchingImages.add(root);
+    try {
+      final res = await nodeService.fetchObject(root);
+      if (res != null && res['object_b64'] != null) {
+        imageCache[root] = base64.decode(res['object_b64']);
+        _fetchFailures.remove(root);
+        _nextFetchAllowed.remove(root);
+        notifyListeners();
+      } else {
+        // Record failure and set next allowed time with exponential backoff
+        final fails = (_fetchFailures[root] ?? 0) + 1;
+        _fetchFailures[root] = fails;
+        // 5s, 10s, 20s, 40s, 80s, ... max 10 mins
+        final backoffSecs = (5 * (1 << (fails - 1))).clamp(5, 600);
+        _nextFetchAllowed[root] = now.add(Duration(seconds: backoffSecs));
+      }
+    } finally {
+      _fetchingImages.remove(root);
     }
   }
 
@@ -307,8 +329,12 @@ class SocialController extends ChangeNotifier {
     }
   }
 
-  void _reconcileOptimisticEvents() {
+  bool _reconcileOptimisticEvents() {
     final now = DateTime.now().millisecondsSinceEpoch;
+    final initialCount = _optimisticReactions.length +
+        _optimisticReposts.length +
+        _optimisticComments.values.fold(0, (sum, list) => sum + list.length);
+
     _optimisticReactions.removeWhere(
       (pending) => now - pending.createdAtMs > 20000,
     );
@@ -358,6 +384,12 @@ class SocialController extends ChangeNotifier {
         _optimisticComments.remove(parentRoot);
       }
     }
+
+    final finalCount = _optimisticReactions.length +
+        _optimisticReposts.length +
+        _optimisticComments.values.fold(0, (sum, list) => sum + list.length);
+
+    return initialCount != finalCount;
   }
 
   void _expireOptimisticReaction(_OptimisticReaction pending) {

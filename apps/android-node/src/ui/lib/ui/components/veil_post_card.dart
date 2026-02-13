@@ -2,23 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../logic/models/node_event.dart';
 import '../../logic/social_controller.dart';
+import '../../logic/list_controller.dart';
 import '../theme/veil_theme.dart';
 import './reaction_tray.dart';
 import './rich_text_view.dart';
 import './nested_post_card.dart';
 import './zap_dialog.dart';
+import './link_preview_card.dart';
 import '../../logic/zap_controller.dart';
 import '../screens/post_detail_view.dart';
 
 class VeilPostCard extends StatelessWidget {
   final NodeEvent event;
   final SocialController controller;
+  final ListController? listController;
   final bool isDetail;
 
   const VeilPostCard({
     super.key,
     required this.event,
     required this.controller,
+    this.listController,
     this.isDetail = false,
   });
 
@@ -34,6 +38,14 @@ class VeilPostCard extends StatelessWidget {
         : null;
     final root = event.objectRoot;
     final targetRoot = event.isRepost ? event.targetRoot : null;
+
+    String? firstLink;
+    if (text != null) {
+      final match = RegExp(r'(https?:\/\/[^\s]+)').firstMatch(text);
+      if (match != null) {
+        firstLink = match.group(0);
+      }
+    }
 
     return InkWell(
       onTap: isDetail
@@ -121,13 +133,17 @@ class VeilPostCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              if (text != null && text.isNotEmpty) RichTextView(text: text),
+              if (text != null && text.isNotEmpty)
+                RichTextView(text: text, controller: controller),
               if (event.mediaRoots.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 _PostMediaGallery(
                   mediaRoots: event.mediaRoots,
                   controller: controller,
                 ),
+              ] else if (firstLink != null) ...[
+                const SizedBox(height: 8),
+                LinkPreviewCard(url: firstLink!),
               ],
 
               if (targetRoot != null) ...[
@@ -143,6 +159,7 @@ class VeilPostCard extends StatelessWidget {
                   postEvent: event,
                   objectRoot: root,
                   controller: controller,
+                  listController: listController,
                   isDetail: isDetail,
                 ),
               ],
@@ -208,6 +225,7 @@ class VeilPostCard extends StatelessWidget {
 
   String _formatTime(DateTime time) {
     final diff = DateTime.now().difference(time);
+    if (diff.inSeconds < 60) return 'now';
     if (diff.inMinutes < 60) return '${diff.inMinutes}m';
     if (diff.inHours < 24) return '${diff.inHours}h';
     return '${diff.inDays}d';
@@ -224,45 +242,121 @@ class _PostMediaGallery extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: mediaRoots.map((root) {
-        final bytes = controller.imageCache[root];
-        return Container(
-          margin: const EdgeInsets.only(bottom: 8),
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            color: Colors.white.withOpacity(0.03),
+    if (mediaRoots.isEmpty) return const SizedBox.shrink();
+
+    if (mediaRoots.length == 1) {
+      return _buildImage(context, mediaRoots[0], height: 220);
+    }
+
+    if (mediaRoots.length == 2) {
+      return Row(
+        children: [
+          Expanded(child: _buildImage(context, mediaRoots[0], height: 160)),
+          const SizedBox(width: 4),
+          Expanded(child: _buildImage(context, mediaRoots[1], height: 160)),
+        ],
+      );
+    }
+
+    if (mediaRoots.length == 3) {
+      return Column(
+        children: [
+          _buildImage(context, mediaRoots[0], height: 160),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(child: _buildImage(context, mediaRoots[1], height: 120)),
+              const SizedBox(width: 4),
+              Expanded(child: _buildImage(context, mediaRoots[2], height: 120)),
+            ],
           ),
-          child: bytes != null
-              ? Image.memory(
-                  bytes,
-                  fit: BoxFit.cover,
-                  width: double.infinity,
-                  height: 220,
-                  errorBuilder: (_, __, ___) => _mediaUnavailable(),
-                )
-              : SizedBox(
-                  height: 220,
-                  child: Center(
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: VeilTheme.accent.withOpacity(0.8),
-                    ),
-                  ),
-                ),
-        );
-      }).toList(),
+        ],
+      );
+    }
+
+    final display = mediaRoots.take(4).toList();
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(child: _buildImage(context, display[0], height: 120)),
+            const SizedBox(width: 4),
+            Expanded(child: _buildImage(context, display[1], height: 120)),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Expanded(child: _buildImage(context, display[2], height: 120)),
+            const SizedBox(width: 4),
+            Expanded(child: _buildImage(context, display[3], height: 120)),
+          ],
+        ),
+      ],
     );
   }
 
-  Widget _mediaUnavailable() {
-    return const SizedBox(
-      height: 220,
-      child: Center(
+  Widget _buildImage(BuildContext context, String root, {double? height}) {
+    final bytes = controller.imageCache[root];
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.white.withOpacity(0.03),
+      ),
+      child: bytes != null
+          ? GestureDetector(
+              onTap: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => Dialog.fullscreen(
+                    backgroundColor: Colors.black,
+                    child: Stack(
+                      children: [
+                        InteractiveViewer(
+                          child: Center(child: Image.memory(bytes)),
+                        ),
+                        Positioned(
+                          top: 40,
+                          right: 20,
+                          child: IconButton(
+                            icon: const Icon(Icons.close,
+                                color: Colors.white, size: 30),
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+              child: Image.memory(
+                bytes,
+                fit: BoxFit.cover,
+                width: double.infinity,
+                height: height,
+                errorBuilder: (_, __, ___) => _mediaUnavailable(height),
+              ),
+            )
+          : SizedBox(
+              height: height,
+              child: Center(
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: VeilTheme.accent.withOpacity(0.8),
+                ),
+              ),
+            ),
+    );
+  }
+
+  Widget _mediaUnavailable(double? height) {
+    return SizedBox(
+      height: height,
+      child: const Center(
         child: Text(
           'Media unavailable',
-          style: TextStyle(color: VeilTheme.textSecondary),
+          style: TextStyle(color: VeilTheme.textSecondary, fontSize: 10),
         ),
       ),
     );
@@ -273,12 +367,14 @@ class _PostFooter extends StatelessWidget {
   final NodeEvent postEvent;
   final String objectRoot;
   final SocialController controller;
+  final ListController? listController;
   final bool isDetail;
 
   const _PostFooter({
     required this.postEvent,
     required this.objectRoot,
     required this.controller,
+    this.listController,
     required this.isDetail,
   });
 
@@ -362,6 +458,26 @@ class _PostFooter extends StatelessWidget {
             }
           },
         ),
+        if (listController != null) ...[
+          const Spacer(),
+          ListenableBuilder(
+            listenable: listController!,
+            builder: (context, _) {
+              final isBookmarked = listController!.isBookmarked(objectRoot);
+              return IconButton(
+                onPressed: () {
+                  HapticFeedback.lightImpact();
+                  listController!.toggleBookmark(objectRoot);
+                },
+                icon: Icon(
+                  isBookmarked ? Icons.bookmark : Icons.bookmark_border,
+                  size: 18,
+                  color: isBookmarked ? VeilTheme.accent : VeilTheme.textSecondary,
+                ),
+              );
+            },
+          ),
+        ],
       ],
     );
   }

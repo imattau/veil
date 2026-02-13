@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../logic/models/node_event.dart';
+import '../theme/veil_theme.dart';
 
 class SemanticFeedCard extends StatelessWidget {
   final List<NodeEvent> events;
@@ -11,7 +12,7 @@ class SemanticFeedCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       elevation: 0,
-      color: Colors.white,
+      color: VeilTheme.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.all(16),

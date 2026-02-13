@@ -8,7 +8,8 @@ class FeedShimmer extends StatefulWidget {
   State<FeedShimmer> createState() => _FeedShimmerState();
 }
 
-class _FeedShimmerState extends State<FeedShimmer> with SingleTickerProviderStateMixin {
+class _FeedShimmerState extends State<FeedShimmer>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
 
   @override
@@ -28,26 +29,19 @@ class _FeedShimmerState extends State<FeedShimmer> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        return Opacity(
-          opacity: 0.3 + (0.4 * _controller.value),
-          child: child,
-        );
-      },
-      child: ListView.builder(
-        itemCount: 5,
-        padding: const EdgeInsets.all(16),
-        physics: const NeverScrollableScrollPhysics(),
-        itemBuilder: (context, index) => const _ShimmerPost(),
-      ),
+    return ListView.builder(
+      itemCount: 5,
+      padding: const EdgeInsets.all(16),
+      physics: const NeverScrollableScrollPhysics(),
+      itemBuilder: (context, index) => _ShimmerPost(controller: _controller),
     );
   }
 }
 
 class _ShimmerPost extends StatelessWidget {
-  const _ShimmerPost();
+  final Animation<double> controller;
+
+  const _ShimmerPost({required this.controller});
 
   @override
   Widget build(BuildContext context) {
@@ -60,34 +54,82 @@ class _ShimmerPost extends StatelessWidget {
           children: [
             Row(
               children: [
-                Container(
+                _ShimmerBox(
                   width: 40,
                   height: 40,
-                  decoration: const BoxDecoration(
-                    color: Colors.white10,
-                    shape: BoxShape.circle,
-                  ),
+                  controller: controller,
+                  shape: BoxShape.circle,
                 ),
                 const SizedBox(width: 12),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(width: 100, height: 12, color: Colors.white10),
+                    _ShimmerBox(
+                        width: 100, height: 12, controller: controller),
                     const SizedBox(height: 6),
-                    Container(width: 60, height: 10, color: Colors.white10),
+                    _ShimmerBox(width: 60, height: 10, controller: controller),
                   ],
                 ),
               ],
             ),
             const SizedBox(height: 16),
-            Container(width: double.infinity, height: 14, color: Colors.white10),
+            _ShimmerBox(
+                width: double.infinity, height: 14, controller: controller),
             const SizedBox(height: 8),
-            Container(width: double.infinity, height: 14, color: Colors.white10),
+            _ShimmerBox(
+                width: double.infinity, height: 14, controller: controller),
             const SizedBox(height: 8),
-            Container(width: 200, height: 14, color: Colors.white10),
+            _ShimmerBox(width: 200, height: 14, controller: controller),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ShimmerBox extends StatelessWidget {
+  final double width;
+  final double height;
+  final Animation<double> controller;
+  final BoxShape shape;
+
+  const _ShimmerBox({
+    required this.width,
+    required this.height,
+    required this.controller,
+    this.shape = BoxShape.rectangle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, child) {
+        return Container(
+          width: width,
+          height: height,
+          decoration: BoxDecoration(
+            shape: shape,
+            borderRadius: shape == BoxShape.rectangle
+                ? BorderRadius.circular(4)
+                : null,
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: const [
+                Colors.white10,
+                Colors.white24,
+                Colors.white10,
+              ],
+              stops: [
+                controller.value - 0.3,
+                controller.value,
+                controller.value + 0.3,
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

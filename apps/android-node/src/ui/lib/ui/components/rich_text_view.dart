@@ -1,12 +1,21 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../logic/social_controller.dart';
 import '../theme/veil_theme.dart';
+import '../screens/profile_view.dart';
 
 class RichTextView extends StatelessWidget {
   final String text;
   final TextStyle? style;
+  final SocialController controller;
 
-  const RichTextView({super.key, required this.text, this.style});
+  const RichTextView({
+    super.key,
+    required this.text,
+    required this.controller,
+    this.style,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -39,8 +48,14 @@ class RichTextView extends StatelessWidget {
               fontWeight: FontWeight.bold,
             ),
             recognizer: TapGestureRecognizer()
-              ..onTap = () {
-                debugPrint('Tapped hashtag: $token');
+              ..onTap = () async {
+                final channel = token.substring(1);
+                await controller.nodeService.subscribeTag(channel);
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Joined #$channel')),
+                  );
+                }
               },
           ),
         );
@@ -51,7 +66,19 @@ class RichTextView extends StatelessWidget {
             style: const TextStyle(color: VeilTheme.accent),
             recognizer: TapGestureRecognizer()
               ..onTap = () {
-                debugPrint('Tapped mention: $token');
+                final pubkey = token.substring(1);
+                if (pubkey.length == 64) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ProfileView(
+                        service: controller.nodeService,
+                        controller: controller,
+                        targetPubkey: pubkey,
+                      ),
+                    ),
+                  );
+                }
               },
           ),
         );
@@ -64,8 +91,11 @@ class RichTextView extends StatelessWidget {
               decoration: TextDecoration.underline,
             ),
             recognizer: TapGestureRecognizer()
-              ..onTap = () {
-                debugPrint('Tapped link: $token');
+              ..onTap = () async {
+                final uri = Uri.tryParse(token);
+                if (uri != null) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
               },
           ),
         );

@@ -66,6 +66,24 @@ Queues a `GroupMessageBundle` with identity-bound author.
 ### `POST /media`
 Queues a `MediaBundle` with identity-bound author.
 
+### `POST /list`
+Queues a `ListBundle` (bookmarks, curated feeds, pinned items).
+
+### `POST /app_preferences`
+Queues an `AppPreferencesBundle` (JSON settings synced via identity).
+
+### `POST /zap`
+Queues a `ZapBundle` (lightning payment receipt/proof).
+
+### `POST /repost`
+Queues a `RepostBundle` (boost).
+
+### `POST /poll`
+Queues a `PollBundle`.
+
+### `POST /poll_vote`
+Queues a `PollVoteBundle`.
+
 ### `POST /follow`
 Queues a `FollowBundle` with identity-bound follower.
 
