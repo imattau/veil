@@ -11,6 +11,8 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use veil_core::ObjectRoot;
 use veil_schema_feed::{BundleMeta, FeedBundle, PostBundle};
 
+use tracing::{error, info, warn};
+
 #[derive(Debug, Clone)]
 pub struct NostrBridgeConfig {
     pub relays: Vec<String>,
@@ -191,7 +193,7 @@ async fn relay_loop(
                 ok
             }
             Err(err) => {
-                eprintln!("nostr bridge connect failed {relay}: {err}");
+                error!("nostr bridge connect failed {relay}: {err}");
                 tokio::time::sleep(reconnect_backoff(connect_attempts, 2_000, 120_000)).await;
                 continue;
             }
@@ -212,7 +214,7 @@ async fn relay_loop(
             let msg = match frame {
                 Ok(msg) => msg,
                 Err(err) => {
-                    eprintln!("nostr bridge read failed {relay}: {err}");
+                    error!("nostr bridge read failed {relay}: {err}");
                     break;
                 }
             };

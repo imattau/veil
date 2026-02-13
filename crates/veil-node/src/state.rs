@@ -50,6 +50,9 @@ pub struct NodeState {
     /// Reconstruction inbox grouped by object root and shard index.
     pub inbox: HashMap<ObjectRoot, HashMap<u16, ShardV1>>,
     /// Recently seen shard ids used for duplicate suppression independent of cache policy.
+    #[serde(skip)]
+    pub seen_shards_lru: Option<lru::LruCache<ShardId, u64>>,
+    /// Storage for seen_shards when persisting.
     pub seen_shards: HashMap<ShardId, u64>,
     /// Pending ACK entries for timeout escalation.
     pub pending_acks: HashMap<ObjectRoot, PendingAck>,
@@ -59,6 +62,43 @@ pub struct NodeState {
     /// Reverse index of shard IDs to their object roots.
     #[serde(default)]
     pub shard_to_root: HashMap<ShardId, ObjectRoot>,
+}
+
+impl NodeState {
+    pub fn is_shard_seen(&mut self, shard_id: &ShardId, now_step: u64) -> bool {
+        let lru = self.ensure_seen_shards_lru();
+        if let Some(expiry) = lru.get(shard_id) {
+            if *expiry > now_step {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn mark_shard_seen(&mut self, shard_id: ShardId, expiry_step: u64) {
+        let lru = self.ensure_seen_shards_lru();
+        lru.put(shard_id, expiry_step);
+    }
+
+    fn ensure_seen_shards_lru(&mut self) -> &mut lru::LruCache<ShardId, u64> {
+        if self.seen_shards_lru.is_none() {
+            let mut lru = lru::LruCache::new(std::num::NonZeroUsize::new(10000).unwrap());
+            for (id, expiry) in &self.seen_shards {
+                lru.put(*id, *expiry);
+            }
+            self.seen_shards_lru = Some(lru);
+        }
+        self.seen_shards_lru.as_mut().unwrap()
+    }
+
+    pub fn prepare_for_persist(&mut self) {
+        if let Some(lru) = &self.seen_shards_lru {
+            self.seen_shards.clear();
+            for (id, expiry) in lru {
+                self.seen_shards.insert(*id, *expiry);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

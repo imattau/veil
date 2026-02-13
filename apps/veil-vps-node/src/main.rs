@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use tracing::{error, info, warn};
+
 mod http_server;
 mod nostr_bridge;
 mod settings_db;
@@ -416,13 +418,13 @@ fn current_epoch() -> Epoch {
 
 fn open_peer_db(path: &Path) -> Option<Connection> {
     if let Err(err) = ensure_parent(path) {
-        eprintln!("failed to create peer db dir: {err}");
+        error!("failed to create peer db dir: {err}");
         return None;
     }
     let conn = match Connection::open(path) {
         Ok(conn) => conn,
         Err(err) => {
-            eprintln!("failed to open peer db: {err}");
+            error!("failed to open peer db: {err}");
             return None;
         }
     };
@@ -847,6 +849,9 @@ fn encode_nostr_nsec(secret: [u8; 32]) -> Option<String> {
 
 #[tokio::main]
 async fn main() {
+    let filter = std::env::var("VEIL_LOG").unwrap_or_else(|_| "info".to_string());
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
     let mut args = std::env::args().collect::<Vec<_>>();
     if args.len() >= 2 && args[1] == "settings" {
         let mut db_path = PathBuf::from("data/settings.db");
@@ -857,12 +862,12 @@ async fn main() {
         let store = match SettingsStore::open(&db_path) {
             Ok(store) => store,
             Err(err) => {
-                eprintln!("settings db open failed: {err}");
+                error!("settings db open failed: {err}");
                 std::process::exit(1);
             }
         };
         if args.len() < 3 {
-            eprintln!(
+            error!(
                 "usage: veil-vps-node settings [--db <path>] <list|get|set|delete> [key] [value]"
             );
             std::process::exit(2);
@@ -876,13 +881,13 @@ async fn main() {
                     return;
                 }
                 Err(err) => {
-                    eprintln!("{err}");
+                    error!("{err}");
                     std::process::exit(1);
                 }
             },
             "get" => {
                 if args.len() < 4 {
-                    eprintln!("usage: veil-vps-node settings get <key>");
+                    error!("usage: veil-vps-node settings get <key>");
                     std::process::exit(2);
                 }
                 let key = &args[3];
@@ -894,13 +899,13 @@ async fn main() {
             }
             "set" => {
                 if args.len() < 5 {
-                    eprintln!("usage: veil-vps-node settings set <key> <value>");
+                    error!("usage: veil-vps-node settings set <key> <value>");
                     std::process::exit(2);
                 }
                 let key = &args[3];
                 let value = &args[4];
                 if let Err(err) = store.set(key, value) {
-                    eprintln!("{err}");
+                    error!("{err}");
                     std::process::exit(1);
                 }
                 println!("ok");
@@ -908,7 +913,7 @@ async fn main() {
             }
             "delete" => {
                 if args.len() < 4 {
-                    eprintln!("usage: veil-vps-node settings delete <key>");
+                    error!("usage: veil-vps-node settings delete <key>");
                     std::process::exit(2);
                 }
                 let key = &args[3];
@@ -919,13 +924,13 @@ async fn main() {
                     }
                     Ok(false) => std::process::exit(3),
                     Err(err) => {
-                        eprintln!("{err}");
+                        error!("{err}");
                         std::process::exit(1);
                     }
                 }
             }
             _ => {
-                eprintln!(
+                error!(
                     "usage: veil-vps-node settings [--db <path>] <list|get|set|delete> [key] [value]"
                 );
                 std::process::exit(2);
@@ -937,7 +942,7 @@ async fn main() {
     let settings_store = match SettingsStore::open(&settings_db_path) {
         Ok(store) => Some(store),
         Err(err) => {
-            eprintln!("settings db disabled: {err}");
+            warn!("settings db disabled: {err}");
             None
         }
     };
@@ -945,7 +950,7 @@ async fn main() {
         let import_path = PathBuf::from("/opt/veil-vps-node/veil-vps-node.env");
         if store.is_empty() && import_path.exists() {
             if let Ok(imported) = store.import_env_file(&import_path) {
-                eprintln!(
+                info!(
                     "settings db initialized from {} ({} entries)",
                     import_path.display(),
                     imported
@@ -961,7 +966,7 @@ async fn main() {
     );
     if !raw_alpn.trim().is_empty() {
         std::env::set_var("VEIL_QUIC_ALPN", raw_alpn.clone());
-        eprintln!("quic: using VEIL_VPS_QUIC_ALPN from settings db: {raw_alpn}");
+        info!("quic: using VEIL_VPS_QUIC_ALPN from settings db: {raw_alpn}");
     }
 
     let state_path = PathBuf::from(setting_string(
@@ -1059,7 +1064,7 @@ async fn main() {
     let node_key = match load_or_create_node_key(&node_key_path) {
         Ok(key) => key,
         Err(err) => {
-            eprintln!("fatal: {err}");
+            error!("fatal: {err}");
             return;
         }
     };
@@ -1068,12 +1073,12 @@ async fn main() {
     let node_secret_hex = hex::encode(node_key);
     let node_secret_nsec = encode_nostr_nsec(node_key).unwrap_or_default();
     let node_pubkey_hex = hex::encode(node_pubkey);
-    eprintln!("node identity (nostr x-only pubkey): {node_pubkey_hex}");
+    info!("node identity (nostr x-only pubkey): {node_pubkey_hex}");
 
     let identity = match load_or_create_identity(&quic_cert_path, &quic_key_path) {
         Ok(identity) => identity,
         Err(err) => {
-            eprintln!("fatal: {err}");
+            error!("fatal: {err}");
             return;
         }
     };
@@ -1092,7 +1097,7 @@ async fn main() {
             state.subscriptions.insert(tag);
         }
         let added = state.subscriptions.len().saturating_sub(before);
-        eprintln!("auto-subscribed to {added} core tags");
+        info!("auto-subscribed to {added} core tags");
     }
 
     let mut cfg = NodeRuntimeConfig::edge_forwarder_hot_cache_defaults();
@@ -1123,7 +1128,7 @@ async fn main() {
         wot_cfg.muted_forward_quota = 1.0;
         wot_cfg.blocked_forward_quota = 0.0;
         cfg.wot_policy.update_config(wot_cfg);
-        eprintln!("open relay mode enabled: accepting all tags and full non-blocked forwarding");
+        info!("open relay mode enabled: accepting all tags and full non-blocked forwarding");
     }
     for peer in blocked_peers {
         let pseudo = pseudo_pubkey_for_peer(&peer);
@@ -1153,7 +1158,7 @@ async fn main() {
     }) {
         Ok(adapter) => adapter,
         Err(err) => {
-            eprintln!("fatal: quic adapter failed to start: {err}");
+            error!("fatal: quic adapter failed to start: {err}");
             return;
         }
     };
@@ -1175,7 +1180,7 @@ async fn main() {
     let ws_server_adapter = ws_listen.map(|addr| {
         let adapter = WebSocketServerAdapter::listen(WebSocketServerAdapterConfig::new(&addr))
             .expect("websocket server should start");
-        eprintln!("websocket server listening on {addr}");
+        info!("websocket server listening on {addr}");
         adapter
     });
 
@@ -1199,7 +1204,7 @@ async fn main() {
         }) {
             Ok(link) => link,
             Err(err) => {
-                eprintln!("ble adapter failed to start: {err:?}");
+                error!("ble adapter failed to start: {err:?}");
                 return;
             }
         };
@@ -1291,12 +1296,12 @@ async fn main() {
     let mut bridge_batcher = FeedBatcher::default();
     let mut nostr_bridge_rx = if nostr_bridge_enabled {
         if nostr_bridge_relays.is_empty() {
-            eprintln!(
+            warn!(
                 "nostr bridge enabled but VEIL_VPS_NOSTR_RELAYS is empty; bridge not started"
             );
             None
         } else {
-            eprintln!(
+            info!(
                 "nostr bridge enabled with {} relays, channel={}, namespace={}",
                 nostr_bridge_relays.len(),
                 nostr_bridge_channel,
@@ -1339,7 +1344,7 @@ async fn main() {
     AdminAuthState::bootstrap_session_db(&admin_session_db_path);
     let restored_sessions = AdminAuthState::load_sessions_from_db(&admin_session_db_path);
     if !restored_sessions.is_empty() {
-        eprintln!(
+        info!(
             "admin auth: restored {} active sessions from {}",
             restored_sessions.len(),
             admin_session_db_path.display()
@@ -1368,13 +1373,13 @@ async fn main() {
         let listener = match tokio::net::TcpListener::bind(bind_addr).await {
             Ok(listener) => listener,
             Err(err) => {
-                eprintln!("health server bind failed on {bind_addr}: {err}");
+                error!("health server bind failed on {bind_addr}: {err}");
                 return;
             }
         };
         tokio::spawn(async move {
             if let Err(err) = axum::serve(listener, router).await {
-                eprintln!("health server error: {err}");
+                error!("health server error: {err}");
             }
         });
     }
@@ -1382,8 +1387,8 @@ async fn main() {
     let mut now_step = 0_u64;
     loop {
         if shutdown.load(Ordering::Relaxed) {
-            if let Err(err) = save_state_to_path(&state_path, &runtime.state) {
-                eprintln!("snapshot failed on shutdown: {err}");
+            if let Err(err) = save_state_to_path(&state_path, &mut runtime.state) {
+                error!("snapshot failed on shutdown: {err}");
             }
             break;
         }
@@ -1401,7 +1406,7 @@ async fn main() {
             for _ in 0..64 {
                 match rx.try_recv() {
                     Ok(item) => {
-                        eprintln!(
+                        info!(
                             "nostr bridge: relay={} event={} bytes={}",
                             item.source_relay,
                             item.source_event_id,
@@ -1465,8 +1470,8 @@ async fn main() {
         metrics.ticks.fetch_add(1, Ordering::Relaxed);
 
         if last_snapshot.elapsed() >= snapshot_interval {
-            if let Err(err) = save_state_to_path(&state_path, &runtime.state) {
-                eprintln!("snapshot failed: {err}");
+            if let Err(err) = save_state_to_path(&state_path, &mut runtime.state) {
+                error!("snapshot failed: {err}");
             }
             let mut fast_snapshot = runtime.fast_adapter.snapshot_seen();
             fast_snapshot.sort();
@@ -1507,7 +1512,7 @@ async fn main() {
             metrics
                 .last_fallback_inbound
                 .store(health.fallback_lane.inbound_received, Ordering::Relaxed);
-            eprintln!(
+            info!(
                 "fast_lane: {:?}, fallback_lane: {:?}",
                 health.fast_lane, health.fallback_lane
             );

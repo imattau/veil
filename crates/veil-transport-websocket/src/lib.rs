@@ -13,6 +13,7 @@ use thiserror::Error;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::{error, info, warn};
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
 #[derive(Debug, Clone)]
@@ -462,7 +463,7 @@ async fn run_server_worker(
     let listener = match tokio::net::TcpListener::bind(&config.bind_addr).await {
         Ok(l) => l,
         Err(err) => {
-            eprintln!(
+            error!(
                 "websocket server bind failed on {}: {}",
                 config.bind_addr, err
             );
@@ -481,7 +482,7 @@ async fn run_server_worker(
             maybe_conn = listener.accept() => {
                 if let Ok((stream, addr)) = maybe_conn {
                     let peer_id = addr.to_string();
-                    eprintln!("websocket server: accepting connection from {}", peer_id);
+                    info!("websocket server: accepting connection from {}", peer_id);
                     let (client_tx, mut client_rx) = tokio_mpsc::channel::<Vec<u8>>(128);
                     clients.insert(peer_id.clone(), client_tx);
 
@@ -492,7 +493,7 @@ async fn run_server_worker(
                     tokio::spawn(async move {
                         match tokio_tungstenite::accept_async(stream).await {
                             Ok(ws_stream) => {
-                                eprintln!("websocket server: handshake successful for {}", peer_id_inner);
+                                info!("websocket server: handshake successful for {}", peer_id_inner);
                                 let (mut write, mut read) = ws_stream.split();
                                 loop {
                                     tokio::select! {
@@ -506,11 +507,11 @@ async fn run_server_worker(
                                                     }
                                                 }
                                                 Some(Ok(Message::Close(_))) => {
-                                                    eprintln!("websocket server: connection closed by {}", peer_id_inner);
+                                                    info!("websocket server: connection closed by {}", peer_id_inner);
                                                     break;
                                                 }
                                                 Some(Err(err)) => {
-                                                    eprintln!("websocket server: read error from {}: {}", peer_id_inner, err);
+                                                    error!("websocket server: read error from {}: {}", peer_id_inner, err);
                                                     break;
                                                 }
                                                 None => break,
@@ -532,7 +533,7 @@ async fn run_server_worker(
                                 }
                             }
                             Err(err) => {
-                                eprintln!("websocket server: handshake failed for {}: {}", peer_id_inner, err);
+                                error!("websocket server: handshake failed for {}: {}", peer_id_inner, err);
                             }
                         }
                     });

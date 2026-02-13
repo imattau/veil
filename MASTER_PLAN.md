@@ -49,6 +49,13 @@ This document consolidates all feature-specific plans and roadmaps for the VEIL 
 - [x] **QUIC SNI Flex**: Support per-peer server names in QUIC adapter to allow connecting to multiple distinct VPS nodes.
 - [x] **Error Clarity**: Add granular error codes to `LaneDetail` for better remote diagnostics of transport failures.
 
+### M8 - Library & UX Standardisation
+- [ ] **Structured Logs**: Replace `eprintln!` with `tracing` macros across all apps/crates.
+- [ ] **Declarative Config**: Replace manual `setting_` helpers in VPS with a `serde`-based config loader.
+- [ ] **Standard CLI**: Use `clap` for all binary entry points (`vps-node`, `node-client`, etc.).
+- [ ] **Unified Lazy Init**: Standardize on `OnceLock` or `once_cell` workspace-wide.
+- [ ] **Human-Readable Units**: Use `humantime` and byte-unit parsing for configuration fields.
+
 ---
 
 ## 2. Transport Adapters (`crates/veil-transport-*`)

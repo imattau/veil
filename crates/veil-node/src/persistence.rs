@@ -19,7 +19,8 @@ pub enum PersistenceError {
 }
 
 /// Encodes [`NodeState`] to CBOR bytes.
-pub fn encode_state_cbor(state: &NodeState) -> Result<Vec<u8>, PersistenceError> {
+pub fn encode_state_cbor(state: &mut NodeState) -> Result<Vec<u8>, PersistenceError> {
+    state.prepare_for_persist();
     let mut bytes = Vec::new();
     ciborium::ser::into_writer(state, &mut bytes).map_err(|e| PersistenceError::Encode(e.to_string()))?;
     Ok(bytes)
@@ -33,7 +34,7 @@ pub fn decode_state_cbor(bytes: &[u8]) -> Result<NodeState, PersistenceError> {
 /// Saves state to the given path as CBOR.
 pub fn save_state_to_path(
     path: impl AsRef<Path>,
-    state: &NodeState,
+    state: &mut NodeState,
 ) -> Result<(), PersistenceError> {
     let bytes = encode_state_cbor(state)?;
     let path = path.as_ref();

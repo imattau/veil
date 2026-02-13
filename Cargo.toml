@@ -29,6 +29,8 @@ version = "0.1.0"
 [workspace.dependencies]
 blake3 = "1"
 bytes = "1"
+hex = "0.4"
+lru = "0.13"
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 ciborium = "0.2"

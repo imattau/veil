@@ -123,16 +123,15 @@ pub fn receive_shard_with_policy(
         .and_then(|p| p.required_signed_namespaces)
         .map(|required| required.contains(&shard.header.namespace.0))
         .unwrap_or(false);
-    node.seen_shards.retain(|_, expiry| *expiry > now_step);
-    if node.seen_shards.contains_key(&sid) {
+    if node.is_shard_seen(&sid, now_step) {
         return Ok(ReceiveEvent::IgnoredDuplicate);
     }
     let accept_all_tags = cache_policy.map(|p| p.accept_all_tags).unwrap_or(false);
     if !accept_all_tags && !node.subscriptions.contains(&shard.header.tag) {
-        node.seen_shards.insert(sid, now_step + ttl_steps);
+        node.mark_shard_seen(sid, now_step + ttl_steps);
         return Ok(ReceiveEvent::IgnoredNotSubscribed);
     }
-    node.seen_shards.insert(sid, now_step + ttl_steps);
+    node.mark_shard_seen(sid, now_step + ttl_steps);
 
     let encoded_shard = encode_shard_cbor(shard)?;
     if !require_signed_namespace {

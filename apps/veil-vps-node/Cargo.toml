@@ -17,6 +17,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tokio-tungstenite = "0.24"
 tower-http = { version = "0.6", features = ["cors"] }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 veil-core = { path = "../../crates/veil-core" }
 veil-codec = { path = "../../crates/veil-codec" }
 veil-crypto = { path = "../../crates/veil-crypto" }

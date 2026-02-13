@@ -373,8 +373,8 @@ impl ProtocolEngine {
             Some(path) => path.clone(),
             None => return,
         };
-        let runtime = self.inner.lock().await;
-        let _ = veil_node::persistence::save_state_to_path(path, &runtime.state);
+        let mut runtime = self.inner.lock().await;
+        let _ = veil_node::persistence::save_state_to_path(path, &mut runtime.state);
     }
 
     pub async fn persist_state(&self) {
