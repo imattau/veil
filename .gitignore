@@ -1,4 +1,5 @@
 /target/
+fuzz/target/
 
 # Rust/cargo-fuzz outputs
 fuzz/artifacts/
@@ -11,12 +12,27 @@ fuzz/coverage/
 
 # JS workspace artifacts
 node_modules/
+**/node_modules/
 packages/*/dist/
 packages/*/wasm/
 apps/*/dist/
-# Dart/Flutter test artifacts
-packages/veil-sdk-dart/.dart_tool/
-packages/veil-sdk-dart/build/
-packages/veil-sdk-dart/pubspec.lock
+
+# Dart/Flutter/Android test artifacts
+.dart_tool/
+**/ .dart_tool/
+build/
+**/build/
+pubspec.lock
+**/pubspec.lock
+*.apk
+*.so
+*.dill
+*.cache
+*.bin
+.gradle/
+**/.gradle/
+
 apps/veil_android/android/app/src/main/jniLibs/
+apps/android-node/src/ui/android/app/src/main/jniLibs/
+apps/android-node/src/ui/android/app/src/main/assets/veil_node_*
 apps/veil-vps-node/.env
