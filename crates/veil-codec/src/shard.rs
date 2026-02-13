@@ -109,15 +109,14 @@ impl ShardV1 {
 pub fn encode_shard_cbor(shard: &ShardV1) -> Result<Vec<u8>, CodecError> {
     shard.validate()?;
     let mut bytes = Vec::new();
-    ciborium::ser::into_writer(shard, &mut bytes)
-        .map_err(|e| CodecError::Encode(e.to_string()))?;
+    ciborium::ser::into_writer(shard, &mut bytes).map_err(|e| CodecError::Encode(e.to_string()))?;
     Ok(bytes)
 }
 
 /// Decodes and validates a CBOR shard.
 pub fn decode_shard_cbor(bytes: &[u8]) -> Result<ShardV1, CodecError> {
-    let shard: ShardV1 = ciborium::de::from_reader(bytes)
-        .map_err(|e| CodecError::Decode(e.to_string()))?;
+    let shard: ShardV1 =
+        ciborium::de::from_reader(bytes).map_err(|e| CodecError::Decode(e.to_string()))?;
     shard.validate()?;
     Ok(shard)
 }

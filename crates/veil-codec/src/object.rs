@@ -37,7 +37,7 @@ impl<'de> Deserialize<'de> for Signature {
     where
         D: Deserializer<'de>,
     {
-        let raw = <&[u8]>::deserialize(deserializer)?;
+        let raw = <Vec<u8>>::deserialize(deserializer)?;
         if raw.len() != 64 {
             return Err(serde::de::Error::invalid_length(
                 raw.len(),
@@ -46,7 +46,7 @@ impl<'de> Deserialize<'de> for Signature {
         }
 
         let mut bytes = [0_u8; 64];
-        bytes.copy_from_slice(raw);
+        bytes.copy_from_slice(&raw);
         Ok(Self(bytes))
     }
 }
@@ -168,8 +168,8 @@ pub fn encode_object_cbor(object: &ObjectV1) -> Result<Vec<u8>, CodecError> {
 
 /// Decodes and validates a full CBOR object.
 pub fn decode_object_cbor(bytes: &[u8]) -> Result<ObjectV1, CodecError> {
-    let object: ObjectV1 = ciborium::de::from_reader(bytes)
-        .map_err(|e| CodecError::Decode(e.to_string()))?;
+    let object: ObjectV1 =
+        ciborium::de::from_reader(bytes).map_err(|e| CodecError::Decode(e.to_string()))?;
     object.validate()?;
     Ok(object)
 }
@@ -177,8 +177,8 @@ pub fn decode_object_cbor(bytes: &[u8]) -> Result<ObjectV1, CodecError> {
 /// Decodes one object prefix from a byte slice, returning bytes consumed.
 pub fn decode_object_cbor_prefix(bytes: &[u8]) -> Result<(ObjectV1, usize), CodecError> {
     let mut cursor = std::io::Cursor::new(bytes);
-    let object: ObjectV1 = ciborium::de::from_reader(&mut cursor)
-        .map_err(|e| CodecError::Decode(e.to_string()))?;
+    let object: ObjectV1 =
+        ciborium::de::from_reader(&mut cursor).map_err(|e| CodecError::Decode(e.to_string()))?;
     object.validate()?;
     Ok((object, cursor.position() as usize))
 }

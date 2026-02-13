@@ -117,4 +117,46 @@ mod tests {
         assert!(state.seen_shards.is_empty());
         assert!(state.pending_acks.is_empty());
     }
+
+    #[test]
+    fn shard_deduplication_works() {
+        let mut state = NodeState::default();
+        let sid = [0xAA; 32];
+
+        assert!(!state.is_shard_seen(&sid, 10));
+        state.mark_shard_seen(sid, 20);
+        assert!(state.is_shard_seen(&sid, 10));
+        assert!(!state.is_shard_seen(&sid, 25)); // Expired
+    }
+
+    #[test]
+    fn shard_deduplication_lru_limits() {
+        let mut state = NodeState::default();
+        // Force a small LRU for testing if we could, but it's hardcoded to 10000.
+        // We'll just verify basic functionality and then test persistence.
+        for i in 0..10 {
+            state.mark_shard_seen([i; 32], 100);
+        }
+        assert!(state.is_shard_seen(&[5; 32], 10));
+    }
+
+    #[test]
+    fn prepare_for_persist_populates_seen_shards() {
+        let mut state = NodeState::default();
+        state.mark_shard_seen([0x11; 32], 100);
+        state.mark_shard_seen([0x22; 32], 200);
+
+        state.prepare_for_persist();
+        assert_eq!(state.seen_shards.get(&[0x11; 32]), Some(&100));
+        assert_eq!(state.seen_shards.get(&[0x22; 32]), Some(&200));
+    }
+
+    #[test]
+    fn lazy_lru_restores_from_seen_shards() {
+        let mut state = NodeState::default();
+        state.seen_shards.insert([0x33; 32], 300);
+
+        // This should trigger lazy initialization of seen_shards_lru
+        assert!(state.is_shard_seen(&[0x33; 32], 100));
+    }
 }

@@ -125,7 +125,7 @@ impl QueueWorker {
                     }
                 }
             }
-            
+
             if busy {
                 // Short sleep when busy to process backlogs quickly
                 sleep(Duration::from_millis(10)).await;

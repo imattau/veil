@@ -298,7 +298,7 @@ impl ProtocolEngine {
 
     pub async fn reconstruct_payload(&self, root: [u8; 32]) -> Option<Vec<u8>> {
         let runtime = self.inner.lock().await;
-        
+
         // Try direct lookup by root first
         if let Some(sids) = runtime.state.shard_index.get(&root) {
             let mut shards = Vec::new();
@@ -311,10 +311,16 @@ impl ProtocolEngine {
             }
             if !shards.is_empty() {
                 let mode = erasure_mode_from_shards(&shards, runtime.config.erasure_coding_mode);
-                if let Ok(reconstructed) = reconstruct_object_padded_with_mode(&shards, root, mode) {
+                if let Ok(reconstructed) = reconstruct_object_padded_with_mode(&shards, root, mode)
+                {
                     if let Ok((object, _)) = decode_object_cbor_prefix(&reconstructed) {
                         let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
-                        if let Ok(payload) = XChaCha20Poly1305Cipher.decrypt(&runtime.encrypt_key, object.nonce, &aad, &object.ciphertext) {
+                        if let Ok(payload) = XChaCha20Poly1305Cipher.decrypt(
+                            &runtime.encrypt_key,
+                            object.nonce,
+                            &aad,
+                            &object.ciphertext,
+                        ) {
                             return Some(payload);
                         }
                     }
@@ -336,7 +342,7 @@ impl ProtocolEngine {
                     }
                 }
             }
-            
+
             if shards.is_empty() {
                 continue;
             }
@@ -351,7 +357,7 @@ impl ProtocolEngine {
                 Ok(value) => value,
                 Err(_) => continue,
             };
-            
+
             // Check if this object contains the requested payload root
             if object.object_root != root && wire_root != root {
                 continue;

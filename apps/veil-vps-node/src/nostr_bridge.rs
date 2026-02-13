@@ -11,14 +11,14 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use veil_core::ObjectRoot;
 use veil_schema_feed::{BundleMeta, FeedBundle, PostBundle};
 
-use tracing::{error, info, warn};
+use tracing::error;
 
 #[derive(Debug, Clone)]
 pub struct NostrBridgeConfig {
     pub relays: Vec<String>,
     pub channel_id: String,
     pub namespace: u16,
-    pub since_secs: u64,
+    pub since: Duration,
     pub state_path: Option<PathBuf>,
     pub max_seen_ids: usize,
     pub persist_every_updates: usize,
@@ -201,7 +201,7 @@ async fn relay_loop(
 
         let since = {
             let guard = state.lock().unwrap_or_else(|e| e.into_inner());
-            guard.since_for_relay(&relay, config.since_secs)
+            guard.since_for_relay(&relay, config.since.as_secs())
         };
         let sub_id = "veil-bridge";
         let req = json!(["REQ", sub_id, { "kinds": [1], "since": since }]).to_string();
@@ -382,7 +382,7 @@ mod tests {
             relays: relays.clone(),
             channel_id: "nostr-bridge".to_string(),
             namespace: 32,
-            since_secs: 3_600,
+            since: std::time::Duration::from_secs(3_600),
             state_path: None,
             max_seen_ids: 1_000,
             persist_every_updates: 1,
@@ -424,7 +424,7 @@ mod tests {
                 relays: relays.clone(),
                 channel_id: "nostr-bridge".to_string(),
                 namespace: 32,
-                since_secs: 3_600,
+                since: std::time::Duration::from_secs(3_600),
                 state_path: Some(state_path.clone()),
                 max_seen_ids: 2_000,
                 persist_every_updates: 1,
@@ -462,7 +462,7 @@ mod tests {
             relays: relays.clone(),
             channel_id: "nostr-bridge".to_string(),
             namespace: 32,
-            since_secs: 3_600,
+            since: std::time::Duration::from_secs(3_600),
             state_path: Some(state_path.clone()),
             max_seen_ids: 2_000,
             persist_every_updates: 1,

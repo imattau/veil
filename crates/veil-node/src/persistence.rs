@@ -22,7 +22,8 @@ pub enum PersistenceError {
 pub fn encode_state_cbor(state: &mut NodeState) -> Result<Vec<u8>, PersistenceError> {
     state.prepare_for_persist();
     let mut bytes = Vec::new();
-    ciborium::ser::into_writer(state, &mut bytes).map_err(|e| PersistenceError::Encode(e.to_string()))?;
+    ciborium::ser::into_writer(state, &mut bytes)
+        .map_err(|e| PersistenceError::Encode(e.to_string()))?;
     Ok(bytes)
 }
 
@@ -96,7 +97,7 @@ mod tests {
         state.shard_tier.insert([0x22; 32], TrustTier::Known);
         state.shard_requested.insert([0x22; 32], 7);
 
-        let encoded = encode_state_cbor(&state).expect("state should encode");
+        let encoded = encode_state_cbor(&mut state).expect("state should encode");
         let decoded = decode_state_cbor(&encoded).expect("state should decode");
 
         assert_eq!(decoded.subscriptions, state.subscriptions);
@@ -112,7 +113,7 @@ mod tests {
         state.subscriptions.insert([0xAB; 32]);
 
         let file = temp_path("state");
-        save_state_to_path(&file, &state).expect("state should be saved");
+        save_state_to_path(&file, &mut state).expect("state should be saved");
         let loaded = load_state_from_path(&file).expect("state should load");
         assert_eq!(loaded.subscriptions, state.subscriptions);
 

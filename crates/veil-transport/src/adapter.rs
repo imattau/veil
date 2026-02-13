@@ -305,7 +305,9 @@ mod tests {
                 outbound_send_err: 0,
                 inbound_received: 1,
                 inbound_dropped: 0,
-                reconnect_attempts: 0
+                reconnect_attempts: 0,
+                last_error: None,
+                last_error_code: None,
             }
         );
     }

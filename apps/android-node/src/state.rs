@@ -1045,6 +1045,7 @@ mod tests {
                 lane: "quic".to_string(),
                 connected: true,
                 last_error: None,
+                last_error_code: None,
                 stats: crate::api::LaneStats::default(),
             },
             LaneDetail {
@@ -1052,6 +1053,7 @@ mod tests {
                 lane: "websocket".to_string(),
                 connected: false,
                 last_error: Some("send_error".to_string()),
+                last_error_code: Some("500".to_string()),
                 stats: crate::api::LaneStats::default(),
             },
         ]);

@@ -601,7 +601,8 @@ fn build_signed_encoded_object(
     signer: &Ed25519Signer,
 ) -> Vec<u8> {
     let mut batch_payload = Vec::new();
-    ciborium::ser::into_writer(&vec![payload_item.to_vec()], &mut batch_payload).expect("encode batch");
+    ciborium::ser::into_writer(&vec![payload_item.to_vec()], &mut batch_payload)
+        .expect("encode batch");
     let nonce = derive_object_nonce(tag, namespace, epoch, now_step, &batch_payload);
     let aad = build_veil_aad(tag, namespace, epoch);
     let envelope = XChaCha20Poly1305Cipher
@@ -636,7 +637,8 @@ fn build_unsigned_encoded_object(
     now_step: u64,
 ) -> Vec<u8> {
     let mut batch_payload = Vec::new();
-    ciborium::ser::into_writer(&vec![payload_item.to_vec()], &mut batch_payload).expect("encode batch");
+    ciborium::ser::into_writer(&vec![payload_item.to_vec()], &mut batch_payload)
+        .expect("encode batch");
     let nonce = derive_object_nonce(tag, namespace, epoch, now_step, &batch_payload);
     let aad = build_veil_aad(tag, namespace, epoch);
     let envelope = XChaCha20Poly1305Cipher

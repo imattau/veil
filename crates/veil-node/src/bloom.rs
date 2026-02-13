@@ -72,16 +72,17 @@ pub struct BloomExchangeMessage {
     pub filter: BloomFilter,
 }
 
-pub fn encode_bloom_exchange_cbor(
-    epoch: u32,
-    filter: BloomFilter,
-) -> Result<Vec<u8>, String> {
+pub fn encode_bloom_exchange_cbor(epoch: u32, filter: BloomFilter) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::new();
-    ciborium::ser::into_writer(&BloomExchangeMessage {
-        version: BLOOM_EXCHANGE_V1,
-        epoch,
-        filter,
-    }, &mut bytes).map_err(|e| e.to_string())?;
+    ciborium::ser::into_writer(
+        &BloomExchangeMessage {
+            version: BLOOM_EXCHANGE_V1,
+            epoch,
+            filter,
+        },
+        &mut bytes,
+    )
+    .map_err(|e| e.to_string())?;
     Ok(bytes)
 }
 
@@ -89,10 +90,7 @@ pub fn decode_bloom_exchange_cbor(bytes: &[u8]) -> Result<BloomExchangeMessage, 
     ciborium::de::from_reader(bytes).map_err(|e| e.to_string())
 }
 
-pub fn encode_bloom_exchange_packet(
-    epoch: u32,
-    filter: BloomFilter,
-) -> Result<Vec<u8>, String> {
+pub fn encode_bloom_exchange_packet(epoch: u32, filter: BloomFilter) -> Result<Vec<u8>, String> {
     let payload = encode_bloom_exchange_cbor(epoch, filter)?;
     let mut out = Vec::with_capacity(BLOOM_PACKET_MAGIC.len() + payload.len());
     out.extend_from_slice(BLOOM_PACKET_MAGIC);

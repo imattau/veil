@@ -36,16 +36,6 @@ impl SettingsStore {
             .ok()
     }
 
-    pub fn set_if_absent(&self, key: &str, value: &str) -> Result<(), String> {
-        self.conn
-            .execute(
-                "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
-                params![key, value, now_ms()],
-            )
-            .map(|_| ())
-            .map_err(|e| format!("set_if_absent({key}): {e}"))
-    }
-
     pub fn set(&self, key: &str, value: &str) -> Result<(), String> {
         self.conn
             .execute(
@@ -82,36 +72,6 @@ impl SettingsStore {
             out.push((k, v));
         }
         Ok(out)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.conn
-            .query_row("SELECT COUNT(*) FROM settings", [], |r| r.get::<_, i64>(0))
-            .map(|count| count == 0)
-            .unwrap_or(false)
-    }
-
-    pub fn import_env_file(&self, path: &Path) -> Result<usize, String> {
-        let content = fs::read_to_string(path).map_err(|e| format!("read env file: {e}"))?;
-        let mut inserted = 0usize;
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            let Some((key, value)) = trimmed.split_once('=') else {
-                continue;
-            };
-            let key = key.trim();
-            let value = value.trim();
-            if key.is_empty() {
-                continue;
-            }
-            if self.set_if_absent(key, value).is_ok() {
-                inserted += 1;
-            }
-        }
-        Ok(inserted)
     }
 }
 

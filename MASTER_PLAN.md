@@ -50,11 +50,12 @@ This document consolidates all feature-specific plans and roadmaps for the VEIL 
 - [x] **Error Clarity**: Add granular error codes to `LaneDetail` for better remote diagnostics of transport failures.
 
 ### M8 - Library & UX Standardisation
-- [ ] **Structured Logs**: Replace `eprintln!` with `tracing` macros across all apps/crates.
-- [ ] **Declarative Config**: Replace manual `setting_` helpers in VPS with a `serde`-based config loader.
-- [ ] **Standard CLI**: Use `clap` for all binary entry points (`vps-node`, `node-client`, etc.).
-- [ ] **Unified Lazy Init**: Standardize on `OnceLock` or `once_cell` workspace-wide.
-- [ ] **Human-Readable Units**: Use `humantime` and byte-unit parsing for configuration fields.
+- [x] **Standard CLI**: Migrate `vps-node` and simulation tools to `clap` for robust argument parsing and help generation.
+- [x] **Declarative Config**: Replace manual `setting_` helpers in VPS with a `serde`-based `Config` struct and `config-rs`.
+- [x] **Human-Readable Units**: Support `humantime` durations (e.g., \"5s\") and `byte-unit` sizes (e.g., \"128KiB\") in configuration.
+- [x] **Unified Lazy Init**: Replace `Arc<Mutex<Option<T>>>` with `OnceLock` or `once_cell` for shared resources.
+- [ ] **Concurrent Collections**: Evaluate `DashMap` for high-contention shard/peer tables to reduce global lock contention.
+- [ ] **Structured Logs**: Finish migrating all crates from `eprintln!` to `tracing` macros.
 
 ---
 

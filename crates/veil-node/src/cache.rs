@@ -14,7 +14,14 @@ pub fn cache_put(
     let object_root = decode_shard_cbor(&shard_bytes)
         .ok()
         .map(|s| s.header.object_root);
-    cache_put_internal(node, shard_id, shard_bytes, now_step, ttl_steps, object_root);
+    cache_put_internal(
+        node,
+        shard_id,
+        shard_bytes,
+        now_step,
+        ttl_steps,
+        object_root,
+    );
     *node.replica_estimate.entry(shard_id).or_insert(0) += 1;
     node.shard_tier
         .entry(shard_id)
@@ -58,7 +65,14 @@ pub fn cache_put_with_policy(
     let object_root = decode_shard_cbor(&shard_bytes)
         .ok()
         .map(|s| s.header.object_root);
-    cache_put_internal(node, shard_id, shard_bytes, now_step, ttl_steps, object_root);
+    cache_put_internal(
+        node,
+        shard_id,
+        shard_bytes,
+        now_step,
+        ttl_steps,
+        object_root,
+    );
     if matches!(tier, TrustTier::Trusted | TrustTier::Known) {
         *node.replica_estimate.entry(shard_id).or_insert(0) += 1;
     } else {
@@ -411,5 +425,45 @@ mod tests {
         assert_eq!(node.replica_estimate.get(&unknown), Some(&0));
         assert_eq!(node.replica_estimate.get(&known), Some(&1));
         assert_eq!(node.replica_estimate.get(&trusted), Some(&1));
+    }
+
+    #[test]
+    fn shard_indexing_and_removal_works() {
+        use veil_codec::shard::{
+            encode_shard_cbor, ShardHeaderV1, ShardV1, SHARD_HEADER_LEN, SHARD_V1_VERSION,
+        };
+        use veil_core::Namespace;
+
+        let mut node = NodeState::default();
+        let root = [0x11; 32];
+        let shard_id = [0xAA; 32];
+        let shard = ShardV1 {
+            header: ShardHeaderV1 {
+                version: SHARD_V1_VERSION,
+                namespace: Namespace(1),
+                epoch: veil_core::Epoch(1),
+                tag: [0x22; 32],
+                object_root: root,
+                profile_id: 1,
+                erasure_mode: veil_codec::shard::ShardErasureMode::Systematic,
+                bucket_size: 2048,
+                k: 2,
+                n: 4,
+                index: 0,
+            },
+            payload: vec![0; 2048 - SHARD_HEADER_LEN],
+        };
+        let bytes = encode_shard_cbor(&shard).unwrap();
+
+        cache_put(&mut node, shard_id, bytes, 10, 100);
+
+        // Verify indexing
+        assert_eq!(node.shard_to_root.get(&shard_id), Some(&root));
+        assert!(node.shard_index.get(&root).unwrap().contains(&shard_id));
+
+        // Verify removal
+        super::remove_shard(&mut node, shard_id);
+        assert!(!node.shard_to_root.contains_key(&shard_id));
+        assert!(!node.shard_index.contains_key(&root));
     }
 }

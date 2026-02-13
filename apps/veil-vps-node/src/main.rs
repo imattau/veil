@@ -7,8 +7,10 @@ use std::sync::{Arc, Mutex};
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use clap::{Parser, Subcommand};
 use tracing::{error, info, warn};
 
+mod config;
 mod http_server;
 mod nostr_bridge;
 mod settings_db;
@@ -46,6 +48,8 @@ use veil_transport_tor::{TorSocksAdapter, TorSocksAdapterConfig};
 use veil_transport_websocket::{
     WebSocketAdapter, WebSocketAdapterConfig, WebSocketServerAdapter, WebSocketServerAdapterConfig,
 };
+
+use crate::config::VpsConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum FallbackPeer {
@@ -352,60 +356,6 @@ where
     fn health_snapshot(&self) -> TransportHealthSnapshot {
         self.inner.health_snapshot()
     }
-}
-
-fn setting_string(store: Option<&SettingsStore>, key: &str, default: &str) -> String {
-    if let Some(store) = store {
-        if let Some(value) = store.get(key) {
-            return value;
-        }
-        let _ = store.set_if_absent(key, default);
-    }
-    default.to_string()
-}
-
-fn setting_opt_string(store: Option<&SettingsStore>, key: &str) -> Option<String> {
-    store.and_then(|s| s.get(key)).and_then(|v| {
-        let trimmed = v.trim().to_string();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed)
-        }
-    })
-}
-
-fn setting_u64(store: Option<&SettingsStore>, key: &str, default: u64) -> u64 {
-    setting_string(store, key, &default.to_string())
-        .parse::<u64>()
-        .unwrap_or(default)
-}
-
-fn setting_f64(store: Option<&SettingsStore>, key: &str, default: f64) -> f64 {
-    setting_string(store, key, &default.to_string())
-        .parse::<f64>()
-        .unwrap_or(default)
-}
-
-fn setting_usize(store: Option<&SettingsStore>, key: &str, default: usize) -> usize {
-    setting_string(store, key, &default.to_string())
-        .parse::<usize>()
-        .unwrap_or(default)
-}
-
-fn setting_bool(store: Option<&SettingsStore>, key: &str, default: bool) -> bool {
-    let value = setting_string(store, key, if default { "1" } else { "0" });
-    matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES")
-}
-
-fn setting_list(store: Option<&SettingsStore>, key: &str, default: &[&str]) -> Vec<String> {
-    let fallback = default.join(",");
-    setting_string(store, key, &fallback)
-        .split(',')
-        .map(|entry| entry.trim())
-        .filter(|entry| !entry.is_empty())
-        .map(|entry| entry.to_string())
-        .collect()
 }
 
 fn current_epoch() -> Epoch {
@@ -847,219 +797,167 @@ fn encode_nostr_nsec(secret: [u8; 32]) -> Option<String> {
     bech32::encode::<Bech32>(hrp, &secret).ok()
 }
 
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Path to configuration file
+    #[arg(long, short)]
+    config: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run the VPS node (default)
+    Run,
+    /// Manage node settings
+    Settings {
+        /// Path to settings database
+        #[arg(long, default_value = "data/settings.db")]
+        db: PathBuf,
+        #[command(subcommand)]
+        action: SettingsCommands,
+    },
+    /// Export node identity (nsec)
+    Identity,
+}
+
+#[derive(Subcommand)]
+enum SettingsCommands {
+    /// List all settings
+    List,
+    /// Get a specific setting
+    Get { key: String },
+    /// Set a setting value
+    Set { key: String, value: String },
+    /// Delete a setting
+    Delete { key: String },
+}
+
 #[tokio::main]
 async fn main() {
     let filter = std::env::var("VEIL_LOG").unwrap_or_else(|_| "info".to_string());
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let mut args = std::env::args().collect::<Vec<_>>();
-    if args.len() >= 2 && args[1] == "settings" {
-        let mut db_path = PathBuf::from("data/settings.db");
-        if args.len() >= 4 && args[2] == "--db" {
-            db_path = PathBuf::from(args[3].clone());
-            args.drain(2..4);
-        }
-        let store = match SettingsStore::open(&db_path) {
-            Ok(store) => store,
-            Err(err) => {
-                error!("settings db open failed: {err}");
-                std::process::exit(1);
-            }
-        };
-        if args.len() < 3 {
-            error!(
-                "usage: veil-vps-node settings [--db <path>] <list|get|set|delete> [key] [value]"
-            );
-            std::process::exit(2);
-        }
-        match args[2].as_str() {
-            "list" => match store.list() {
-                Ok(items) => {
-                    for (k, v) in items {
-                        println!("{k}={v}");
-                    }
-                    return;
-                }
+    let cli = Cli::parse();
+
+    match &cli.command {
+        Some(Commands::Settings { db, action }) => {
+            let store = match SettingsStore::open(db) {
+                Ok(store) => store,
                 Err(err) => {
-                    error!("{err}");
+                    error!("settings db open failed: {err}");
                     std::process::exit(1);
                 }
-            },
-            "get" => {
-                if args.len() < 4 {
-                    error!("usage: veil-vps-node settings get <key>");
-                    std::process::exit(2);
-                }
-                let key = &args[3];
-                if let Some(v) = store.get(key) {
-                    println!("{v}");
-                    return;
-                }
-                std::process::exit(3);
-            }
-            "set" => {
-                if args.len() < 5 {
-                    error!("usage: veil-vps-node settings set <key> <value>");
-                    std::process::exit(2);
-                }
-                let key = &args[3];
-                let value = &args[4];
-                if let Err(err) = store.set(key, value) {
-                    error!("{err}");
-                    std::process::exit(1);
-                }
-                println!("ok");
-                return;
-            }
-            "delete" => {
-                if args.len() < 4 {
-                    error!("usage: veil-vps-node settings delete <key>");
-                    std::process::exit(2);
-                }
-                let key = &args[3];
-                match store.delete(key) {
-                    Ok(true) => {
-                        println!("deleted");
-                        return;
+            };
+
+            match action {
+                SettingsCommands::List => match store.list() {
+                    Ok(items) => {
+                        for (k, v) in items {
+                            println!("{k}={v}");
+                        }
                     }
+                    Err(err) => {
+                        error!("{err}");
+                        std::process::exit(1);
+                    }
+                },
+                SettingsCommands::Get { key } => {
+                    if let Some(v) = store.get(key) {
+                        println!("{v}");
+                    } else {
+                        std::process::exit(3);
+                    }
+                }
+                SettingsCommands::Set { key, value } => {
+                    if let Err(err) = store.set(key, value.trim()) {
+                        error!("{err}");
+                        std::process::exit(1);
+                    }
+                    println!("ok");
+                }
+                SettingsCommands::Delete { key } => match store.delete(key) {
+                    Ok(true) => println!("deleted"),
                     Ok(false) => std::process::exit(3),
                     Err(err) => {
                         error!("{err}");
                         std::process::exit(1);
                     }
-                }
+                },
             }
-            _ => {
-                error!(
-                    "usage: veil-vps-node settings [--db <path>] <list|get|set|delete> [key] [value]"
-                );
-                std::process::exit(2);
-            }
+            return;
         }
+        _ => {}
     }
+
+    let config = match VpsConfig::new(cli.config) {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            error!("failed to load config: {err}");
+            std::process::exit(1);
+        }
+    };
 
     let settings_db_path = PathBuf::from("data/settings.db");
-    let settings_store = match SettingsStore::open(&settings_db_path) {
-        Ok(store) => Some(store),
-        Err(err) => {
-            warn!("settings db disabled: {err}");
-            None
-        }
-    };
-    if let Some(store) = settings_store.as_ref() {
-        let import_path = PathBuf::from("/opt/veil-vps-node/veil-vps-node.env");
-        if store.is_empty() && import_path.exists() {
-            if let Ok(imported) = store.import_env_file(&import_path) {
-                info!(
-                    "settings db initialized from {} ({} entries)",
-                    import_path.display(),
-                    imported
-                );
-            }
-        }
-    }
-    let settings = settings_store.as_ref();
-    let raw_alpn = setting_string(
-        settings,
-        "VEIL_VPS_QUIC_ALPN",
-        "veil-quic/1,veil/1,veil-node,veil,h3,hq-29",
-    );
+
+    let raw_alpn = &config.quic_alpn;
     if !raw_alpn.trim().is_empty() {
-        std::env::set_var("VEIL_QUIC_ALPN", raw_alpn.clone());
-        info!("quic: using VEIL_VPS_QUIC_ALPN from settings db: {raw_alpn}");
+        std::env::set_var("VEIL_QUIC_ALPN", raw_alpn);
+        info!("quic: using VEIL_VPS_QUIC_ALPN from config: {raw_alpn}");
     }
 
-    let state_path = PathBuf::from(setting_string(
-        settings,
-        "VEIL_VPS_STATE_PATH",
-        "data/veil-vps-node-state.cbor",
-    ));
-    let node_key_path = PathBuf::from(setting_string(
-        settings,
-        "VEIL_VPS_NODE_KEY_PATH",
-        "data/node_identity.key",
-    ));
-    let quic_cert_path = PathBuf::from(setting_string(
-        settings,
-        "VEIL_VPS_QUIC_CERT_PATH",
-        "data/quic_cert.der",
-    ));
-    let quic_key_path = PathBuf::from(setting_string(
-        settings,
-        "VEIL_VPS_QUIC_KEY_PATH",
-        "data/quic_key.der",
-    ));
-    let snapshot_secs = setting_u64(settings, "VEIL_VPS_SNAPSHOT_SECS", 60);
-    let tick_ms = setting_u64(settings, "VEIL_VPS_TICK_MS", 50);
-    let health_bind = setting_string(settings, "VEIL_VPS_HEALTH_BIND", "127.0.0.1");
-    let health_port = setting_u64(settings, "VEIL_VPS_HEALTH_PORT", 9090) as u16;
-    let admin_session_db_path = PathBuf::from(setting_string(
-        settings,
-        "VEIL_VPS_ADMIN_SESSION_DB_PATH",
-        "data/admin-sessions.db",
-    ));
-    let fast_peers = setting_list(settings, "VEIL_VPS_FAST_PEERS", &[]);
-    let core_tags = setting_list(settings, "VEIL_VPS_CORE_TAGS", &[]);
-    let tor_peers = setting_list(settings, "VEIL_VPS_TOR_PEERS", &[]);
+    let state_path = config.state_path.clone();
+    let node_key_path = config.node_key_path.clone();
+    let quic_cert_path = config.quic_cert_path.clone();
+    let quic_key_path = config.quic_key_path.clone();
+    let snapshot_interval = config.snapshot_interval;
+    let tick_interval = config.tick_interval;
+    let health_bind = config.health_bind.clone();
+    let health_port = config.health_port;
+    let admin_session_db_path = config.admin_session_db_path.clone();
+    let fast_peers = config.fast_peers.clone();
+    let core_tags = config.core_tags.clone();
+    let tor_peers = config.tor_peers.clone();
     #[cfg(feature = "ble")]
-    let ble_enabled = setting_bool(settings, "VEIL_VPS_BLE_ENABLE", false);
+    let ble_enabled = config.ble_enabled;
     #[cfg(feature = "ble")]
-    let ble_peers = if ble_enabled {
-        setting_list(settings, "VEIL_VPS_BLE_PEERS", &[])
-    } else {
-        Vec::new()
-    };
+    let ble_peers = config.ble_peers.clone();
     #[cfg(feature = "ble")]
-    let ble_allowlist = setting_list(settings, "VEIL_VPS_BLE_ALLOWLIST", &[]);
+    let ble_allowlist = config.ble_allowlist.clone();
     #[cfg(feature = "ble")]
-    let ble_mtu = setting_usize(settings, "VEIL_VPS_BLE_MTU", 180);
-    let peer_db_path = PathBuf::from(setting_string(
-        settings,
-        "VEIL_VPS_PEER_DB_PATH",
-        "data/peers.db",
-    ));
-    let max_dynamic_peers = setting_usize(settings, "VEIL_VPS_MAX_DYNAMIC_PEERS", 512);
+    let ble_mtu = config.ble_mtu;
+    let peer_db_path = config.peer_db_path.clone();
+    let max_dynamic_peers = config.max_dynamic_peers;
 
-    let quic_bind = setting_string(settings, "VEIL_VPS_QUIC_BIND", "0.0.0.0:5000");
-    let ws_url = setting_opt_string(settings, "VEIL_VPS_WS_URL");
-    let ws_listen = setting_opt_string(settings, "VEIL_VPS_WS_LISTEN");
-    let ws_peer = setting_opt_string(settings, "VEIL_VPS_WS_PEER");
+    let quic_bind = config.quic_bind.clone();
+    let ws_url = config.ws_url.clone();
+    let ws_listen = config.ws_listen.clone();
+    let ws_peer = config.ws_peer.clone();
     let ws_peer_id = ws_peer.clone().unwrap_or_else(|| "ws-peer".to_string());
-    let tor_socks_addr = setting_opt_string(settings, "VEIL_VPS_TOR_SOCKS_ADDR");
+    let tor_socks_addr = config.tor_socks_addr.clone();
 
-    let adaptive_scoring = setting_bool(settings, "VEIL_VPS_ADAPTIVE_LANE_SCORING", true);
-    let probabilistic_forwarding =
-        setting_bool(settings, "VEIL_VPS_PROBABILISTIC_FORWARDING", true);
-    let forwarding_min_probability =
-        setting_f64(settings, "VEIL_VPS_FORWARD_MIN_PROBABILITY", 0.10);
-    let forwarding_replica_divisor = setting_u64(settings, "VEIL_VPS_FORWARD_REPLICA_DIVISOR", 8);
-    let bloom_exchange = setting_bool(settings, "VEIL_VPS_BLOOM_EXCHANGE", true);
-    let bloom_interval_steps = setting_u64(settings, "VEIL_VPS_BLOOM_INTERVAL_STEPS", 128);
-    let bloom_false_positive_rate =
-        setting_f64(settings, "VEIL_VPS_BLOOM_FALSE_POSITIVE_RATE", 0.05);
-    let max_cache_shards = setting_usize(settings, "VEIL_VPS_MAX_CACHE_SHARDS", 200_000);
-    let bucket_jitter = setting_usize(settings, "VEIL_VPS_BUCKET_JITTER", 0);
-    let open_relay = setting_bool(settings, "VEIL_VPS_OPEN_RELAY", false);
-    let blocked_peers = setting_list(settings, "VEIL_VPS_BLOCKED_PEERS", &[]);
-    let nostr_bridge_enabled = setting_bool(settings, "VEIL_VPS_NOSTR_BRIDGE_ENABLE", false);
-    let nostr_bridge_relays = setting_list(settings, "VEIL_VPS_NOSTR_RELAYS", &[]);
-    let nostr_bridge_channel =
-        setting_string(settings, "VEIL_VPS_NOSTR_CHANNEL_ID", "nostr-bridge");
-    let nostr_bridge_namespace = setting_u64(settings, "VEIL_VPS_NOSTR_NAMESPACE", 32) as u16;
-    let nostr_bridge_since_secs = setting_u64(settings, "VEIL_VPS_NOSTR_SINCE_SECS", 3600);
-    let nostr_bridge_state_path = PathBuf::from(setting_string(
-        settings,
-        "VEIL_VPS_NOSTR_BRIDGE_STATE_PATH",
-        "data/nostr-bridge-state.json",
-    ));
-    let nostr_bridge_max_seen = setting_usize(settings, "VEIL_VPS_NOSTR_MAX_SEEN_IDS", 20_000);
-    let nostr_bridge_persist_every =
-        setting_usize(settings, "VEIL_VPS_NOSTR_PERSIST_EVERY_UPDATES", 32);
-    let required_signed = parse_required_signed_namespaces(&setting_list(
-        settings,
-        "VEIL_VPS_REQUIRED_SIGNED_NAMESPACES",
-        &[],
-    ));
+    let adaptive_scoring = config.adaptive_lane_scoring;
+    let probabilistic_forwarding = config.probabilistic_forwarding;
+    let forwarding_min_probability = config.forwarding_min_probability;
+    let forwarding_replica_divisor = config.forwarding_replica_divisor;
+    let bloom_exchange = config.bloom_exchange;
+    let bloom_interval_steps = config.bloom_interval_steps;
+    let bloom_false_positive_rate = config.bloom_false_positive_rate;
+    let max_cache_shards = config.max_cache_shards;
+    let bucket_jitter = config.bucket_jitter;
+    let open_relay = config.open_relay;
+    let blocked_peers = config.blocked_peers.clone();
+    let nostr_bridge_enabled = config.nostr_bridge_enabled;
+    let nostr_bridge_relays = config.nostr_bridge_relays.clone();
+    let nostr_bridge_channel = config.nostr_bridge_channel_id.clone();
+    let nostr_bridge_namespace = config.nostr_bridge_namespace as u16;
+    let nostr_bridge_since = config.nostr_bridge_since;
+    let nostr_bridge_state_path = config.nostr_bridge_state_path.clone();
+    let nostr_bridge_max_seen = config.nostr_bridge_max_seen_ids;
+    let nostr_bridge_persist_every = config.nostr_bridge_persist_every_updates;
+    let required_signed = parse_required_signed_namespaces(&config.required_signed_namespaces);
 
     let node_key = match load_or_create_node_key(&node_key_path) {
         Ok(key) => key,
@@ -1075,6 +973,12 @@ async fn main() {
     let node_pubkey_hex = hex::encode(node_pubkey);
     info!("node identity (nostr x-only pubkey): {node_pubkey_hex}");
 
+    if let Some(Commands::Identity) = &cli.command {
+        println!("nsec: {node_secret_nsec}");
+        println!("hex:  {node_secret_hex}");
+        return;
+    }
+
     let identity = match load_or_create_identity(&quic_cert_path, &quic_key_path) {
         Ok(identity) => identity,
         Err(err) => {
@@ -1083,7 +987,7 @@ async fn main() {
         }
     };
 
-    let trusted_cert_paths = setting_list(settings, "VEIL_VPS_QUIC_TRUSTED_CERTS", &[]);
+    let trusted_cert_paths = config.quic_trusted_certs.clone();
     let mut trusted = load_trusted_certs(&trusted_cert_paths);
     if trusted.is_empty() {
         trusted.push(identity.cert_der.clone());
@@ -1296,9 +1200,7 @@ async fn main() {
     let mut bridge_batcher = FeedBatcher::default();
     let mut nostr_bridge_rx = if nostr_bridge_enabled {
         if nostr_bridge_relays.is_empty() {
-            warn!(
-                "nostr bridge enabled but VEIL_VPS_NOSTR_RELAYS is empty; bridge not started"
-            );
+            warn!("nostr bridge enabled but VEIL_VPS_NOSTR_RELAYS is empty; bridge not started");
             None
         } else {
             info!(
@@ -1311,7 +1213,7 @@ async fn main() {
                 relays: nostr_bridge_relays.clone(),
                 channel_id: nostr_bridge_channel.clone(),
                 namespace: nostr_bridge_namespace,
-                since_secs: nostr_bridge_since_secs,
+                since: nostr_bridge_since,
                 state_path: Some(nostr_bridge_state_path.clone()),
                 max_seen_ids: nostr_bridge_max_seen,
                 persist_every_updates: nostr_bridge_persist_every,
@@ -1323,8 +1225,6 @@ async fn main() {
     let bridge_namespace = Namespace(nostr_bridge_namespace);
     let bridge_tag = derive_channel_feed_tag(&node_pubkey, bridge_namespace, &nostr_bridge_channel);
 
-    let tick_interval = Duration::from_millis(tick_ms);
-    let snapshot_interval = Duration::from_secs(snapshot_secs);
     let mut last_snapshot = Instant::now();
 
     let mut last_health_log = Instant::now();
@@ -1525,7 +1425,10 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_fallback_peers, merge_peers, parse_fallback_peer_strings, FallbackPeer};
+    use super::{
+        encode_fallback_peers, merge_peers, parse_fallback_peer_strings, Cli, Commands,
+        FallbackPeer, SettingsCommands,
+    };
 
     #[test]
     fn parse_fallback_peer_strings_supports_websocket_server_prefix() {
@@ -1562,5 +1465,52 @@ mod tests {
         let encoded = encode_fallback_peers(&peers);
         let decoded = parse_fallback_peer_strings(&encoded);
         assert_eq!(decoded, peers);
+    }
+
+    #[test]
+    fn test_cli_parsing() {
+        use clap::Parser;
+
+        // Test 'run' (implicit)
+        let cli = Cli::try_parse_from(&["veil-vps-node"]).unwrap();
+        assert!(cli.command.is_none());
+
+        // Test 'run' (explicit)
+        let cli = Cli::try_parse_from(&["veil-vps-node", "run"]).unwrap();
+        match cli.command {
+            Some(Commands::Run) => {}
+            _ => panic!("expected Run command"),
+        }
+
+        // Test 'settings'
+        let cli = Cli::try_parse_from(&["veil-vps-node", "settings", "list"]).unwrap();
+        match cli.command {
+            Some(Commands::Settings {
+                action: SettingsCommands::List,
+                ..
+            }) => {}
+            _ => panic!("expected Settings List command"),
+        }
+
+        // Test 'settings' with custom DB
+        let cli = Cli::try_parse_from(&[
+            "veil-vps-node",
+            "settings",
+            "--db",
+            "custom.db",
+            "get",
+            "key",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Settings {
+                ref db,
+                action: SettingsCommands::Get { ref key },
+            }) => {
+                assert_eq!(db, &std::path::PathBuf::from("custom.db"));
+                assert_eq!(key, "key");
+            }
+            _ => panic!("expected Settings Get command"),
+        }
     }
 }

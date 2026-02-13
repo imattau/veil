@@ -172,7 +172,7 @@ pub mod api {
     }
 }
 
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::net::SocketAddr;
@@ -360,7 +360,7 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
     };
     eprintln!("FFI: Parsed address: {}", addr);
 
-    let cert_store: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
+    let cert_store: Arc<OnceCell<Vec<u8>>> = Arc::new(OnceCell::new());
     let cert_store_clone = Arc::clone(&cert_store);
 
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -436,8 +436,7 @@ pub extern "C" fn veil_quic_fetch_peer_cert(
         return std::ptr::null_mut();
     }
 
-    let cert_guard = cert_store.lock().ok();
-    let cert = cert_guard.and_then(|guard| guard.clone());
+    let cert = cert_store.get().cloned();
     let Some(cert) = cert else {
         eprintln!("FFI: No certificate recorded by verifier.");
         return std::ptr::null_mut();
@@ -593,14 +592,12 @@ pub extern "C" fn veil_quic_stop(handle: u64) {
 
 #[derive(Debug)]
 struct RecordingVerifier {
-    store: Arc<Mutex<Option<Vec<u8>>>>,
+    store: Arc<OnceCell<Vec<u8>>>,
 }
 
 impl RecordingVerifier {
     fn record(&self, cert: &[u8]) {
-        if let Ok(mut guard) = self.store.lock() {
-            *guard = Some(cert.to_vec());
-        }
+        let _ = self.store.set(cert.to_vec());
     }
 }
 
@@ -650,11 +647,40 @@ impl rustls::client::danger::ServerCertVerifier for RecordingVerifier {
 fn build_insecure_client_config(
     verifier: RecordingVerifier,
 ) -> Result<quinn::ClientConfig, String> {
-    let tls = rustls::ClientConfig::builder()
+    let mut tls = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
         .with_no_client_auth();
+    tls.alpn_protocols = vec![
+        b"veil-quic/1".to_vec(),
+        b"veil/1".to_vec(),
+        b"veil-node".to_vec(),
+        b"veil".to_vec(),
+        b"h3".to_vec(),
+        b"hq-29".to_vec(),
+    ];
     let quic_tls =
         quinn::crypto::rustls::QuicClientConfig::try_from(tls).map_err(|_| "invalid tls config")?;
     Ok(quinn::ClientConfig::new(Arc::new(quic_tls)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_recording_verifier_once_cell() {
+        let store = Arc::new(OnceCell::new());
+        let verifier = RecordingVerifier {
+            store: store.clone(),
+        };
+
+        // First record should succeed
+        verifier.record(b"cert1");
+        assert_eq!(store.get().unwrap(), b"cert1");
+
+        // Second record should be ignored (OnceCell property)
+        verifier.record(b"cert2");
+        assert_eq!(store.get().unwrap(), b"cert1");
+    }
 }

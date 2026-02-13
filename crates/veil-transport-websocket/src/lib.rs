@@ -13,7 +13,7 @@ use thiserror::Error;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
 #[derive(Debug, Clone)]

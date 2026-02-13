@@ -7,13 +7,17 @@ license = "GPL-2.0-or-later"
 [dependencies]
 axum = { version = "0.7", features = ["json"] }
 bech32 = "0.11"
+clap.workspace = true
+config = "0.14"
 futures-util = "0.3"
 hex = "0.4"
+humantime-serde = "1.1"
 rand = { workspace = true }
 rustls = "0.23"
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { workspace = true }
 serde_json = "1"
+toml.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tokio-tungstenite = "0.24"
 tower-http = { version = "0.6", features = ["cors"] }
