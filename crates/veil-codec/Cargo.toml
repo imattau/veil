@@ -6,6 +6,6 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
-serde_cbor.workspace = true
+ciborium.workspace = true
 thiserror.workspace = true
 veil-core = { path = "../veil-core" }

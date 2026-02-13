@@ -337,7 +337,7 @@ pub async fn handle_discovery_payload(
     if let Ok(msg) = serde_json::from_slice::<DiscoveryMessage>(payload) {
         return handle_discovery_message(state, protocol, msg).await;
     }
-    if let Ok(items) = serde_cbor::from_slice::<Vec<Vec<u8>>>(payload) {
+    if let Ok(items) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload) {
         let mut handled = false;
         for item in items {
             if let Ok(msg) = serde_json::from_slice::<DiscoveryMessage>(&item) {

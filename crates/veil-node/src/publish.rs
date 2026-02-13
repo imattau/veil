@@ -31,7 +31,7 @@ pub enum PublishError {
     #[error("signing error: {0}")]
     Signing(#[from] SigningError),
     #[error("payload encoding error: {0}")]
-    PayloadEncode(#[from] serde_cbor::Error),
+    PayloadEncode(String),
     #[error("signed object requested but signer was not provided")]
     MissingSigner,
     #[error("object exceeds max size ({size} > {max})")]
@@ -294,7 +294,9 @@ pub fn publish_queue_tick_multi_lane<
         return Ok(None);
     }
 
-    let payload = serde_cbor::to_vec(&items)?;
+    let mut payload = Vec::new();
+    ciborium::ser::into_writer(&items, &mut payload)
+        .map_err(|e| PublishError::PayloadEncode(e.to_string()))?;
     let mut flags = params.flags;
     if items.len() > 1 {
         flags |= OBJECT_FLAG_BATCHED;

@@ -80,8 +80,8 @@ pub struct ReceiveCachePolicy<'a> {
 }
 
 /// Decodes a queue-batched app payload into its original item list.
-pub fn decode_batched_payload(payload: &[u8]) -> Result<Vec<Vec<u8>>, serde_cbor::Error> {
-    serde_cbor::from_slice(payload)
+pub fn decode_batched_payload(payload: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    ciborium::de::from_reader(payload).map_err(|e| e.to_string())
 }
 
 /// Processes a single inbound shard with default cache insertion behavior.
@@ -495,7 +495,8 @@ mod tests {
     #[test]
     fn decode_batched_payload_round_trip() {
         let items = vec![b"first".to_vec(), b"second".to_vec()];
-        let encoded = serde_cbor::to_vec(&items).expect("items should encode");
+        let mut encoded = Vec::new();
+        ciborium::ser::into_writer(&items, &mut encoded).expect("items should encode");
         let decoded = decode_batched_payload(&encoded).expect("batched payload should decode");
         assert_eq!(decoded, items);
     }

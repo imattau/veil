@@ -658,7 +658,7 @@ impl NodeState {
         let mut feed_bundles = Vec::new();
         if let Ok(bundle) = serde_json::from_slice::<FeedBundle>(payload) {
             feed_bundles.push(bundle);
-        } else if let Ok(batch) = serde_cbor::from_slice::<Vec<Vec<u8>>>(payload) {
+        } else if let Ok(batch) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload) {
             for item in batch {
                 if let Ok(bundle) = serde_json::from_slice::<FeedBundle>(&item) {
                     feed_bundles.push(bundle);
@@ -704,7 +704,7 @@ impl NodeState {
         let mut endorsements = Vec::new();
         if let Some(parsed) = parse_endorsement_payload(payload) {
             endorsements.push(parsed);
-        } else if let Ok(batch) = serde_cbor::from_slice::<Vec<Vec<u8>>>(payload) {
+        } else if let Ok(batch) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload) {
             for item in batch {
                 if let Some(parsed) = parse_endorsement_payload(&item) {
                     endorsements.push(parsed);

@@ -141,7 +141,10 @@ pub fn canonical_object_header_cbor(object: &ObjectV1) -> Result<Vec<u8>, CodecE
         sender_pubkey: object.sender_pubkey,
         nonce: object.nonce,
     };
-    serde_cbor::to_vec(&header).map_err(CodecError::from)
+    let mut bytes = Vec::new();
+    ciborium::ser::into_writer(&header, &mut bytes)
+        .map_err(|e| CodecError::Encode(e.to_string()))?;
+    Ok(bytes)
 }
 
 /// Computes signature digest over canonical header and ciphertext hash.
@@ -157,22 +160,27 @@ pub fn object_signature_message_digest(object: &ObjectV1) -> Result<[u8; 32], Co
 /// Encodes `ObjectV1` as CBOR after validation.
 pub fn encode_object_cbor(object: &ObjectV1) -> Result<Vec<u8>, CodecError> {
     object.validate()?;
-    serde_cbor::to_vec(object).map_err(CodecError::from)
+    let mut bytes = Vec::new();
+    ciborium::ser::into_writer(object, &mut bytes)
+        .map_err(|e| CodecError::Encode(e.to_string()))?;
+    Ok(bytes)
 }
 
 /// Decodes and validates a full CBOR object.
 pub fn decode_object_cbor(bytes: &[u8]) -> Result<ObjectV1, CodecError> {
-    let object: ObjectV1 = serde_cbor::from_slice(bytes)?;
+    let object: ObjectV1 = ciborium::de::from_reader(bytes)
+        .map_err(|e| CodecError::Decode(e.to_string()))?;
     object.validate()?;
     Ok(object)
 }
 
 /// Decodes one object prefix from a byte slice, returning bytes consumed.
 pub fn decode_object_cbor_prefix(bytes: &[u8]) -> Result<(ObjectV1, usize), CodecError> {
-    let mut deserializer = serde_cbor::de::Deserializer::from_slice(bytes);
-    let object = ObjectV1::deserialize(&mut deserializer).map_err(CodecError::from)?;
+    let mut cursor = std::io::Cursor::new(bytes);
+    let object: ObjectV1 = ciborium::de::from_reader(&mut cursor)
+        .map_err(|e| CodecError::Decode(e.to_string()))?;
     object.validate()?;
-    Ok((object, deserializer.byte_offset()))
+    Ok((object, cursor.position() as usize))
 }
 
 #[cfg(test)]

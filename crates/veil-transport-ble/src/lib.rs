@@ -170,6 +170,8 @@ impl<L: BleLink> TransportAdapter for BleAdapter<L> {
             inbound_received: self.inbound_received.load(Ordering::Relaxed),
             inbound_dropped: self.inbound_dropped.load(Ordering::Relaxed),
             reconnect_attempts: 0,
+            last_error: None,
+            last_error_code: None,
         }
     }
 }

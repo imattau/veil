@@ -9,9 +9,9 @@ use crate::state::NodeState;
 #[derive(Debug, Error)]
 pub enum PersistenceError {
     #[error("failed to encode node state: {0}")]
-    Encode(serde_cbor::Error),
+    Encode(String),
     #[error("failed to decode node state: {0}")]
-    Decode(serde_cbor::Error),
+    Decode(String),
     #[error("failed to read state file: {0}")]
     Read(std::io::Error),
     #[error("failed to write state file: {0}")]
@@ -20,12 +20,14 @@ pub enum PersistenceError {
 
 /// Encodes [`NodeState`] to CBOR bytes.
 pub fn encode_state_cbor(state: &NodeState) -> Result<Vec<u8>, PersistenceError> {
-    serde_cbor::to_vec(state).map_err(PersistenceError::Encode)
+    let mut bytes = Vec::new();
+    ciborium::ser::into_writer(state, &mut bytes).map_err(|e| PersistenceError::Encode(e.to_string()))?;
+    Ok(bytes)
 }
 
 /// Decodes [`NodeState`] from CBOR bytes.
 pub fn decode_state_cbor(bytes: &[u8]) -> Result<NodeState, PersistenceError> {
-    serde_cbor::from_slice(bytes).map_err(PersistenceError::Decode)
+    ciborium::de::from_reader(bytes).map_err(|e| PersistenceError::Decode(e.to_string()))
 }
 
 /// Saves state to the given path as CBOR.

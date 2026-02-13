@@ -203,7 +203,7 @@ pub fn parse_endorsement_payload(payload: &[u8]) -> Option<ParsedEndorsement> {
     if let Ok(p) = serde_json::from_slice::<EndorsementPayloadSerde>(payload) {
         return try_parse(p);
     }
-    if let Ok(p) = serde_cbor::from_slice::<EndorsementPayloadSerde>(payload) {
+    if let Ok(p) = ciborium::de::from_reader::<EndorsementPayloadSerde, _>(payload) {
         return try_parse(p);
     }
     None
