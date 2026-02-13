@@ -85,6 +85,45 @@
         padding: 8px 6px;
       }
       th { color: var(--muted); }
+      .toggle-grid {
+        display: grid;
+        gap: 10px;
+      }
+      .toggle-item {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px;
+        background: rgba(2, 6, 23, 0.55);
+      }
+      .toggle-group {
+        margin-top: 8px;
+      }
+      .toggle-group-title {
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+      .toggle-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .toggle-key {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 0.78rem;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .badge {
+        display: inline-block;
+        margin-top: 6px;
+        font-size: 0.72rem;
+        color: #fcd34d;
+        border: 1px solid rgba(252, 211, 77, 0.35);
+        background: rgba(120, 53, 15, 0.3);
+        border-radius: 999px;
+        padding: 2px 8px;
+      }
     </style>
   </head>
   <body>
@@ -107,6 +146,9 @@
 
       <div class="card" id="adminPanel">
         <h2>Admin Stats</h2>
+        <div class="row" style="margin-bottom: 10px;">
+          <button id="restartNodeBtn" type="button">Restart Node</button>
+        </div>
         <div class="grid">
           <div class="stat"><div class="label">Ticks</div><div class="value" id="ticks">-</div></div>
           <div class="stat"><div class="label">Delivered</div><div class="value" id="delivered">-</div></div>
@@ -142,12 +184,36 @@
           </table>
         </div>
       </div>
+
+      <div class="card" id="toggleSettingsPanel" style="display: none;">
+        <h2>Toggle Settings</h2>
+        <div class="muted">Boolean settings with instant on/off controls. Restart badge means service restart needed to apply.</div>
+        <div id="toggleSettingsStatus" class="muted" style="margin-top: 8px;">Idle.</div>
+        <div id="toggleSettingsList" class="toggle-grid" style="margin-top: 10px;"></div>
+      </div>
+
+      <div class="card" id="identityPanel" style="display: none;">
+        <h2>Server Identity Export</h2>
+        <div class="muted">Keep this secret offline. Anyone with this key can control node identity.</div>
+        <div style="margin-top: 10px;">
+          <div class="label">nsec</div>
+          <div class="value" id="serverNsec">-</div>
+          <button id="copyNsecBtn" type="button">Copy nsec</button>
+        </div>
+        <div style="margin-top: 12px;">
+          <div class="label">Secret (hex)</div>
+          <div class="value" id="serverHex">-</div>
+          <button id="copyHexBtn" type="button">Copy hex</button>
+        </div>
+        <div class="muted" id="identityStatus" style="margin-top: 8px;">Locked.</div>
+      </div>
     </main>
 
     <script>
       const serverPubkeyEl = document.getElementById("serverPubkey");
       const statusEl = document.getElementById("status");
       const adminPanelEl = document.getElementById("adminPanel");
+      const restartNodeBtn = document.getElementById("restartNodeBtn");
       const loginBtn = document.getElementById("loginBtn");
       const logoutBtn = document.getElementById("logoutBtn");
       const secretInput = document.getElementById("secretInput");
@@ -159,6 +225,23 @@
       const refreshSettingsBtn = document.getElementById("refreshSettingsBtn");
       const settingsStatusEl = document.getElementById("settingsStatus");
       const settingsTableBody = document.getElementById("settingsTableBody");
+      const toggleSettingsPanelEl = document.getElementById("toggleSettingsPanel");
+      const toggleSettingsStatusEl = document.getElementById("toggleSettingsStatus");
+      const toggleSettingsListEl = document.getElementById("toggleSettingsList");
+      const identityPanelEl = document.getElementById("identityPanel");
+      const serverNsecEl = document.getElementById("serverNsec");
+      const serverHexEl = document.getElementById("serverHex");
+      const identityStatusEl = document.getElementById("identityStatus");
+      const copyNsecBtn = document.getElementById("copyNsecBtn");
+      const copyHexBtn = document.getElementById("copyHexBtn");
+      const TOGGLE_SETTINGS = [
+        { key: "VEIL_VPS_OPEN_RELAY", label: "Open Relay", group: "Network", description: "Accept/follow non-blocked peers and tags.", defaultValue: false, restartRequired: true },
+        { key: "VEIL_VPS_NOSTR_BRIDGE_ENABLE", label: "Nostr Bridge", group: "Nostr", description: "Ingest Nostr relay events into VEIL.", defaultValue: false, restartRequired: true },
+        { key: "VEIL_VPS_ADAPTIVE_LANE_SCORING", label: "Adaptive Lane Scoring", group: "Network", description: "Auto-tune transport lane preference.", defaultValue: true, restartRequired: true },
+        { key: "VEIL_VPS_PROBABILISTIC_FORWARDING", label: "Probabilistic Forwarding", group: "Network", description: "Reduce forwarding of over-replicated shards.", defaultValue: true, restartRequired: true },
+        { key: "VEIL_VPS_BLOOM_EXCHANGE", label: "Bloom Exchange", group: "Transport", description: "Exchange Bloom filters for shard dedupe.", defaultValue: true, restartRequired: true },
+      ];
+      let latestSettingsMap = {};
 
       function token() {
         return localStorage.getItem("veil_admin_token") || "";
@@ -185,6 +268,8 @@
       function setLoggedIn(isLoggedIn) {
         adminPanelEl.style.display = isLoggedIn ? "block" : "none";
         settingsPanelEl.style.display = isLoggedIn ? "block" : "none";
+        toggleSettingsPanelEl.style.display = isLoggedIn ? "block" : "none";
+        identityPanelEl.style.display = isLoggedIn ? "block" : "none";
       }
 
       async function refreshStatus() {
@@ -198,18 +283,34 @@
           if (ok) {
             await refreshAdminStats();
             await refreshSettingsList();
+            await refreshIdentityExport();
           }
         } catch (_) {
           statusEl.textContent = "Status check failed.";
         }
       }
 
+      async function refreshIdentityExport() {
+        identityStatusEl.textContent = "Loading identity export…";
+        const res = await fetchAdmin("/admin-api/identity");
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.ok) {
+          identityStatusEl.textContent = body.error || "Failed to load identity export.";
+          return;
+        }
+        serverNsecEl.textContent = body.server_secret_nsec || "-";
+        serverHexEl.textContent = body.server_secret_hex || "-";
+        identityStatusEl.textContent = "Loaded.";
+      }
+
       function renderSettings(items) {
+        latestSettingsMap = {};
         settingsTableBody.innerHTML = "";
         for (const item of items) {
           const tr = document.createElement("tr");
           const keyTd = document.createElement("td");
           const valueTd = document.createElement("td");
+          latestSettingsMap[item[0]] = item[1];
           keyTd.textContent = item[0];
           valueTd.textContent = item[1];
           tr.appendChild(keyTd);
@@ -219,6 +320,104 @@
             settingValueInput.value = item[1];
           });
           settingsTableBody.appendChild(tr);
+        }
+        renderToggleSettings();
+      }
+
+      function parseBoolValue(rawValue, defaultValue) {
+        if (rawValue == null) return defaultValue;
+        const v = String(rawValue).trim().toLowerCase();
+        if (["1", "true", "yes", "on", "enabled"].includes(v)) return true;
+        if (["0", "false", "no", "off", "disabled"].includes(v)) return false;
+        return defaultValue;
+      }
+
+      async function upsertSetting(key, value) {
+        return fetch("/admin-api/settings", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token()}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ key, value }),
+        });
+      }
+
+      function renderToggleSettings() {
+        toggleSettingsListEl.innerHTML = "";
+        const groups = {};
+        for (const config of TOGGLE_SETTINGS) {
+          const groupName = config.group || "Other";
+          if (!groups[groupName]) {
+            groups[groupName] = [];
+          }
+          groups[groupName].push(config);
+        }
+        for (const groupName of Object.keys(groups)) {
+          const section = document.createElement("div");
+          section.className = "toggle-group";
+          const sectionTitle = document.createElement("div");
+          sectionTitle.className = "toggle-group-title";
+          sectionTitle.textContent = groupName;
+          section.appendChild(sectionTitle);
+
+          for (const config of groups[groupName]) {
+          const wrapper = document.createElement("div");
+          wrapper.className = "toggle-item";
+
+          const header = document.createElement("div");
+          header.className = "toggle-header";
+
+          const titleWrap = document.createElement("div");
+          const title = document.createElement("div");
+          title.textContent = config.label;
+          title.style.fontWeight = "600";
+          const desc = document.createElement("div");
+          desc.className = "muted";
+          desc.style.fontSize = "0.82rem";
+          desc.textContent = config.description;
+          const key = document.createElement("div");
+          key.className = "toggle-key";
+          key.textContent = config.key;
+          titleWrap.appendChild(title);
+          titleWrap.appendChild(desc);
+          titleWrap.appendChild(key);
+          if (config.restartRequired) {
+            const badge = document.createElement("span");
+            badge.className = "badge";
+            badge.textContent = "Restart required";
+            titleWrap.appendChild(badge);
+          }
+
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.style.width = "20px";
+          input.style.height = "20px";
+          input.checked = parseBoolValue(latestSettingsMap[config.key], config.defaultValue);
+          input.addEventListener("change", async () => {
+            const newValue = input.checked ? "1" : "0";
+            const previous = !input.checked;
+            toggleSettingsStatusEl.textContent = `Saving ${config.key}=${newValue}…`;
+            const res = await upsertSetting(config.key, newValue);
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok || !body.ok) {
+              input.checked = previous;
+              toggleSettingsStatusEl.textContent = body.error || `Failed to save ${config.key}.`;
+              return;
+            }
+            latestSettingsMap[config.key] = newValue;
+            toggleSettingsStatusEl.textContent = config.restartRequired
+              ? `Saved ${config.key}=${newValue}. Restart node to apply.`
+              : `Saved ${config.key}=${newValue}.`;
+            await refreshSettingsList();
+          });
+
+          header.appendChild(titleWrap);
+          header.appendChild(input);
+          wrapper.appendChild(header);
+          section.appendChild(wrapper);
+          }
+          toggleSettingsListEl.appendChild(section);
         }
       }
 
@@ -306,14 +505,7 @@
           return;
         }
         settingsStatusEl.textContent = "Saving…";
-        const res = await fetch("/admin-api/settings", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token()}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ key, value }),
-        });
+        const res = await upsertSetting(key, value);
         const body = await res.json().catch(() => ({}));
         if (!res.ok || !body.ok) {
           settingsStatusEl.textContent = body.error || "Save failed.";
@@ -346,6 +538,36 @@
 
       refreshSettingsBtn.addEventListener("click", async () => {
         await refreshSettingsList();
+      });
+
+      copyNsecBtn.addEventListener("click", async () => {
+        const value = serverNsecEl.textContent || "";
+        if (!value || value === "-") return;
+        await navigator.clipboard.writeText(value);
+        identityStatusEl.textContent = "nsec copied.";
+      });
+
+      copyHexBtn.addEventListener("click", async () => {
+        const value = serverHexEl.textContent || "";
+        if (!value || value === "-") return;
+        await navigator.clipboard.writeText(value);
+        identityStatusEl.textContent = "hex secret copied.";
+      });
+
+      restartNodeBtn.addEventListener("click", async () => {
+        const ok = confirm("Restart VEIL VPS node now? Unsaved in-memory work may be interrupted.");
+        if (!ok) return;
+        statusEl.textContent = "Restart requested…";
+        const res = await fetch("/admin-api/restart", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token()}` },
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.ok) {
+          statusEl.textContent = body.error || "Restart request failed.";
+          return;
+        }
+        statusEl.textContent = "Restart requested. Waiting for node to come back…";
       });
 
       refreshStatus();

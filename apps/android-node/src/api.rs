@@ -158,6 +158,15 @@ pub struct DirectMessagePublishResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectMessageTextPublishRequest {
+    pub namespace: u16,
+    pub channel_id: String,
+    pub recipient_pubkey_hex: String,
+    pub text: String,
+    pub reply_to_root: Option<[u8; 32]>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupMessagePublishRequest {
     pub namespace: u16,
     pub bundle: veil_schema_feed::GroupMessageBundle,
@@ -168,6 +177,34 @@ pub struct GroupMessagePublishResponse {
     pub message_id: Uuid,
     pub queued: bool,
     pub author_pubkey_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupMessageTextPublishRequest {
+    pub namespace: u16,
+    pub channel_id: String,
+    pub group_id: String,
+    pub text: String,
+    pub reply_to_root: Option<[u8; 32]>,
+    #[serde(default)]
+    pub member_pubkeys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupKeyShareRequest {
+    pub namespace: u16,
+    pub channel_id: String,
+    pub group_id: String,
+    pub member_pubkeys: Vec<String>,
+    #[serde(default)]
+    pub rotate_key: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupKeyShareResponse {
+    pub queued: bool,
+    pub key_id: String,
+    pub shares: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

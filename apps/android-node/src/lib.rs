@@ -2,6 +2,7 @@ mod adapters;
 mod api;
 mod discovery;
 mod protocol;
+mod secure_message;
 mod server;
 mod state;
 mod state_store;

@@ -12,13 +12,14 @@ fn main() {
 }
 
 fn get_json(url: &str, token: &str) -> String {
-    let mut request = ureq::get(url);
+    let client = reqwest::blocking::Client::new();
+    let mut request = client.get(url);
     if !token.is_empty() {
-        request = request.set("x-veil-token", token);
+        request = request.header("x-veil-token", token);
     }
-    match request.call() {
+    match request.send() {
         Ok(response) => response
-            .into_string()
+            .text()
             .unwrap_or_else(|_| "{\"error\":\"read_failed\"}".to_string()),
         Err(err) => format!("{{\"error\":\"{err}\"}}"),
     }

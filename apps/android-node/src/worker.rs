@@ -41,40 +41,38 @@ impl QueueWorker {
         let tick = Duration::from_millis(worker.config.tick_ms.max(50));
         loop {
             worker.step = worker.step.saturating_add(1);
-            if let Ok(event) = worker.protocol.pump_inbound().await {
-                if let Some(ReceiveEvent::Delivered {
-                    object_root,
-                    payload,
-                    namespace,
-                    epoch,
-                    tag,
+            if let Ok(Some(ReceiveEvent::Delivered {
+                object_root,
+                payload,
+                namespace,
+                epoch,
+                tag,
+                flags,
+            })) = worker.protocol.pump_inbound().await
+            {
+                if namespace == worker.protocol.discovery_namespace() {
+                    let _ =
+                        handle_discovery_payload(&worker.state, &worker.protocol, &payload).await;
+                }
+                worker.state.emit_payload(
+                    &object_root,
+                    &payload,
+                    namespace.0,
+                    epoch.0,
+                    &tag,
                     flags,
-                }) = event
+                );
+                if worker
+                    .state
+                    .ingest_endorsement_payload(&payload, worker.step)
                 {
-                    if namespace == worker.protocol.discovery_namespace() {
-                        let _ = handle_discovery_payload(&worker.state, &worker.protocol, &payload)
-                            .await;
-                    }
-                    worker.state.emit_payload(
-                        &object_root,
-                        &payload,
-                        namespace.0,
-                        epoch.0,
-                        &tag,
-                        flags,
-                    );
-                    if worker
-                        .state
-                        .ingest_endorsement_payload(&payload, worker.step)
-                    {
-                        worker
-                            .protocol
-                            .update_wot_policy(worker.state.wot_policy())
-                            .await;
-                    }
+                    worker
+                        .protocol
+                        .update_wot_policy(worker.state.wot_policy())
+                        .await;
                 }
             }
-            if worker.step % 50 == 0 {
+            if worker.step.is_multiple_of(50) {
                 worker.protocol.persist_cache_state().await;
                 worker.state.persist();
             }

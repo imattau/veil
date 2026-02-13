@@ -100,6 +100,7 @@ pub struct DiscoveryWorker {
     state: Arc<NodeState>,
     protocol: Arc<ProtocolEngine>,
     config: DiscoveryConfig,
+    http: reqwest::Client,
 }
 
 impl DiscoveryWorker {
@@ -108,10 +109,15 @@ impl DiscoveryWorker {
         protocol: Arc<ProtocolEngine>,
         config: DiscoveryConfig,
     ) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_default();
         Self {
             state,
             protocol,
             config,
+            http,
         }
     }
 
@@ -147,31 +153,27 @@ impl DiscoveryWorker {
         if targets.is_empty() {
             return;
         }
+        let mut handles = Vec::new();
         for target in targets {
             let payload = payload.clone();
             let state = Arc::clone(&self.state);
             let protocol = Arc::clone(&self.protocol);
-            let _ = tokio::task::spawn_blocking(move || {
+            let http = self.http.clone();
+            handles.push(tokio::spawn(async move {
                 let url = join_discovery_endpoint(&target, "discovery/gossip");
-                let body = match serde_json::to_string(&payload) {
-                    Ok(body) => body,
-                    Err(_) => return,
-                };
-                let response = ureq::post(&url)
-                    .set("content-type", "application/json")
-                    .send_string(&body);
-                if let Ok(resp) = response {
-                    if let Ok(text) = resp.into_string() {
-                        if let Ok(parsed) = serde_json::from_str::<DiscoveryGossipResponse>(&text) {
-                            for contact in parsed.contacts {
-                                state.add_contact(contact.clone());
-                                let _ = protocol.add_contact(&contact);
-                            }
+                let resp = http.post(&url).json(&payload).send().await;
+                if let Ok(resp) = resp {
+                    if let Ok(parsed) = resp.json::<DiscoveryGossipResponse>().await {
+                        for contact in parsed.contacts {
+                            state.add_contact(contact.clone());
+                            let _ = protocol.add_contact(&contact).await;
                         }
                     }
                 }
-            })
-            .await;
+            }));
+        }
+        for handle in handles {
+            let _ = handle.await;
         }
     }
 }
@@ -234,7 +236,7 @@ impl LanDiscoveryWorker {
                         let mut contact = announce.into_contact();
                         contact.lan_addrs.push(addr.to_string());
                         state.add_contact(contact.clone());
-                        let _ = protocol.add_contact(&contact);
+                        drop(protocol.add_contact(&contact));
                     }
                 }
             }

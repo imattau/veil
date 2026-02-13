@@ -55,6 +55,12 @@ When running with the proxy profile, the VPS node serves a landing page at
 An admin page is available at `http://<your-domain>/admin/` and authenticates
 using the node's Nostr identity secret (`VEIL_VPS_NODE_KEY_PATH` key as `nsec` or hex).
 The admin page can also manage settings in `data/settings.db` (list/get/set/delete).
+It also includes a server identity export panel (admin-authenticated) showing `nsec`
+and hex forms of the node secret key.
+Common boolean settings are exposed as on/off toggles in the admin page.
+The toggle view is grouped by area (Network/Nostr/Transport) and marks settings
+that require a node restart to take effect.
+The admin dashboard includes a one-click restart action (`/admin-api/restart`).
 
 Copy the compose env template:
 

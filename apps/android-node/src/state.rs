@@ -13,7 +13,10 @@ use crate::api::{
     QueueStatus, StatusResponse,
 };
 use crate::discovery::{DiscoveryStateHandle, DiscoveryTable};
-use crate::state_store::{IdentityRecord, QueueItem, StateStore, StoreSnapshot};
+use crate::secure_message::{
+    decrypt_direct_message_payload, decrypt_group_key_share_payload, decrypt_group_message_payload,
+};
+use crate::state_store::{GroupKeyRecord, IdentityRecord, QueueItem, StateStore, StoreSnapshot};
 use veil_crypto::signing::{NostrSigner, Signer};
 use veil_node::policy::{
     parse_endorsement_payload, EndorsementIngestResult, LocalWotPolicy, WotConfig, WotSummary,
@@ -49,6 +52,7 @@ struct StateInner {
     identity: NodeIdentity,
     wot_policy: LocalWotPolicy,
     contacts: Vec<ContactBundle>,
+    group_keys: HashMap<String, HashMap<String, [u8; 32]>>,
     discovery: DiscoveryStateHandle,
 }
 
@@ -64,13 +68,15 @@ impl NodeIdentity {
     }
 
     pub fn public_key_hex(&self) -> String {
-        hex_encode(&self.public_key)
+        hex::encode(self.public_key)
     }
 
     pub fn to_record(&self) -> IdentityRecord {
         IdentityRecord {
             public_key_hex: self.public_key_hex(),
-            secret_key_hex: hex_encode(&self.secret_key),
+            secret_key_hex: hex::encode(self.secret_key),
+            secret_key_enc_nonce_b64: None,
+            secret_key_enc_b64: None,
         }
     }
 }
@@ -96,6 +102,7 @@ impl NodeState {
             .and_then(|json| LocalWotPolicy::import_json(json).ok())
             .unwrap_or_default();
         let contacts = snapshot.contacts.clone();
+        let group_keys = parse_group_keys(&snapshot.group_keys);
         let subscriptions: HashSet<String> = snapshot.subscriptions.iter().cloned().collect();
         let event_buffer: VecDeque<EventEnvelope> = VecDeque::from(snapshot.feed_history.clone());
         let event_seq = event_buffer.iter().map(|e| e.seq).max().unwrap_or(0);
@@ -116,6 +123,7 @@ impl NodeState {
                     contacts: contacts.clone(),
                     feed_history: event_buffer.iter().cloned().collect(),
                     subscriptions: subscriptions.iter().cloned().collect(),
+                    group_keys: snapshot.group_keys.clone(),
                 });
             }
         }
@@ -143,6 +151,7 @@ impl NodeState {
                 identity,
                 wot_policy,
                 contacts,
+                group_keys,
                 discovery: DiscoveryStateHandle::new(discovery_table),
             })),
         }
@@ -373,7 +382,7 @@ impl NodeState {
         let inner = self.inner.lock().expect("state lock");
         (
             inner.identity.public_key_hex(),
-            hex_encode(&inner.identity.secret_key),
+            hex::encode(inner.identity.secret_key),
         )
     }
 
@@ -468,17 +477,9 @@ impl NodeState {
             return crate::api::PolicyListsResponse::default();
         };
         crate::api::PolicyListsResponse {
-            trusted_pubkeys: parsed
-                .trusted
-                .iter()
-                .map(|value| hex_encode(value))
-                .collect(),
-            muted_pubkeys: parsed.muted.iter().map(|value| hex_encode(value)).collect(),
-            blocked_pubkeys: parsed
-                .blocked
-                .iter()
-                .map(|value| hex_encode(value))
-                .collect(),
+            trusted_pubkeys: parsed.trusted.iter().map(hex::encode).collect(),
+            muted_pubkeys: parsed.muted.iter().map(hex::encode).collect(),
+            blocked_pubkeys: parsed.blocked.iter().map(hex::encode).collect(),
         }
     }
 
@@ -635,6 +636,25 @@ impl NodeState {
         flags: u16,
     ) {
         let mut inner = self.inner.lock().expect("state lock");
+        if let Some(material) = decrypt_group_key_share_payload(inner.identity.secret_key, payload)
+        {
+            inner
+                .group_keys
+                .entry(material.group_id.clone())
+                .or_default()
+                .insert(material.key_id.clone(), material.key);
+            emit_event_locked(
+                &mut inner,
+                "group_key_updated",
+                serde_json::json!({
+                    "group_id": material.group_id,
+                    "key_id": material.key_id,
+                }),
+            );
+            if let Some(store) = &inner.store {
+                store.persist(&snapshot_from_inner(&inner));
+            }
+        }
         let mut feed_bundles = Vec::new();
         if let Ok(bundle) = serde_json::from_slice::<FeedBundle>(payload) {
             feed_bundles.push(bundle);
@@ -645,15 +665,26 @@ impl NodeState {
                 }
             }
         }
+        let payload_for_event = decrypt_direct_message_payload(inner.identity.secret_key, payload)
+            .or_else(|| {
+                decrypt_group_message_payload(payload, |group_id, key_id| {
+                    inner
+                        .group_keys
+                        .get(group_id)
+                        .and_then(|keys| keys.get(key_id))
+                        .copied()
+                })
+            })
+            .unwrap_or_else(|| payload.to_vec());
         emit_event_locked(
             &mut inner,
             "payload",
             serde_json::json!({
-                "object_root": hex_encode(object_root),
-                "payload_b64": base64::engine::general_purpose::STANDARD.encode(payload),
+                "object_root": hex::encode(object_root),
+                "payload_b64": base64::engine::general_purpose::STANDARD.encode(payload_for_event),
                 "namespace": namespace,
                 "epoch": epoch,
-                "tag": hex_encode(tag),
+                "tag": hex::encode(tag),
                 "flags": flags,
             }),
         );
@@ -662,7 +693,7 @@ impl NodeState {
             if let Some(obj) = value.as_object_mut() {
                 obj.insert(
                     "object_root".to_string(),
-                    serde_json::json!(hex_encode(object_root)),
+                    serde_json::json!(hex::encode(object_root)),
                 );
             }
             emit_event_locked(&mut inner, "feed_bundle", value);
@@ -761,13 +792,50 @@ impl NodeState {
         self.persist_policy_locked(&mut inner);
     }
 
+    pub fn ensure_group_key(&self, group_id: &str) -> (String, [u8; 32]) {
+        let mut inner = self.inner.lock().expect("state lock");
+        if let Some(keys) = inner.group_keys.get(group_id) {
+            if let Some((key_id, key)) = keys.iter().next() {
+                return (key_id.clone(), *key);
+            }
+        }
+        let key_id = random_key_id();
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        inner
+            .group_keys
+            .entry(group_id.to_string())
+            .or_default()
+            .insert(key_id.clone(), key);
+        if let Some(store) = &inner.store {
+            store.persist(&snapshot_from_inner(&inner));
+        }
+        (key_id, key)
+    }
+
+    pub fn rotate_group_key(&self, group_id: &str) -> (String, [u8; 32]) {
+        let mut inner = self.inner.lock().expect("state lock");
+        let key_id = random_key_id();
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        inner
+            .group_keys
+            .entry(group_id.to_string())
+            .or_default()
+            .insert(key_id.clone(), key);
+        if let Some(store) = &inner.store {
+            store.persist(&snapshot_from_inner(&inner));
+        }
+        (key_id, key)
+    }
+
     pub fn inject_local_feed_bundle(&self, bundle: serde_json::Value, object_root: [u8; 32]) {
         let mut inner = self.inner.lock().expect("state lock");
         let mut value = bundle;
         if let Some(obj) = value.as_object_mut() {
             obj.insert(
                 "object_root".to_string(),
-                serde_json::json!(hex_encode(&object_root)),
+                serde_json::json!(hex::encode(object_root)),
             );
         }
         emit_event_locked(&mut inner, "feed_bundle", value);
@@ -810,6 +878,7 @@ fn snapshot_from_inner(inner: &StateInner) -> StoreSnapshot {
         contacts: inner.contacts.clone(),
         feed_history: inner.event_buffer.iter().cloned().collect(),
         subscriptions: inner.subscriptions.iter().cloned().collect(),
+        group_keys: flatten_group_keys(&inner.group_keys),
     }
 }
 
@@ -838,14 +907,6 @@ fn emit_event_locked(
     inner.event_buffer.push_back(envelope.clone());
     let _ = inner.events.send(envelope.clone());
     envelope
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push_str(&format!("{:02x}", byte));
-    }
-    out
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -888,6 +949,52 @@ fn parse_identity(record: &IdentityRecord) -> Option<NodeIdentity> {
     })
 }
 
+fn parse_group_keys(records: &[GroupKeyRecord]) -> HashMap<String, HashMap<String, [u8; 32]>> {
+    let mut out: HashMap<String, HashMap<String, [u8; 32]>> = HashMap::new();
+    for record in records {
+        if record.group_id.trim().is_empty() || record.key_id.trim().is_empty() {
+            continue;
+        }
+        if record.key_hex.len() != 64 {
+            continue;
+        }
+        let bytes = match hex::decode(&record.key_hex) {
+            Ok(v) if v.len() == 32 => v,
+            _ => continue,
+        };
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&bytes);
+        out.entry(record.group_id.clone())
+            .or_default()
+            .insert(record.key_id.clone(), key);
+    }
+    out
+}
+
+fn flatten_group_keys(
+    group_keys: &HashMap<String, HashMap<String, [u8; 32]>>,
+) -> Vec<GroupKeyRecord> {
+    let mut out = Vec::new();
+    for (group_id, keys) in group_keys {
+        for (key_id, key) in keys {
+            out.push(GroupKeyRecord {
+                group_id: group_id.clone(),
+                key_id: key_id.clone(),
+                key_hex: hex::encode(key),
+                key_enc_nonce_b64: None,
+                key_enc_b64: None,
+            });
+        }
+    }
+    out
+}
+
+fn random_key_id() -> String {
+    let mut value = [0u8; 8];
+    rand::thread_rng().fill_bytes(&mut value);
+    hex::encode(value)
+}
+
 fn generate_identity() -> NodeIdentity {
     let (secret_key, signer) = loop {
         let mut secret_key = [0u8; 32];
@@ -906,7 +1013,12 @@ fn generate_identity() -> NodeIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secure_message::{
+        encrypt_direct_message_payload, encrypt_group_key_share_payload,
+        encrypt_group_message_payload,
+    };
     use tempfile::tempdir;
+    use veil_crypto::signing::Signer;
     use veil_schema_feed::BundleMeta;
 
     #[test]
@@ -1116,6 +1228,87 @@ mod tests {
         let event = rx.try_recv().expect("should receive event");
         assert_eq!(event.event, "feed_bundle");
         assert_eq!(event.data["text"], "local post");
-        assert_eq!(event.data["object_root"], hex_encode(&root));
+        assert_eq!(event.data["object_root"], hex::encode(root));
+    }
+
+    #[test]
+    fn emits_decrypted_payload_for_direct_message_envelope() {
+        let state = NodeState::new("0.1-test");
+        let mut rx = state.subscribe_events();
+        let identity = state.identity();
+        let recipient_pubkey_hex = hex::encode(identity.public_key);
+        let sender_secret = [7u8; 32];
+        let sender_pubkey_hex = hex::encode(
+            veil_crypto::signing::NostrSigner::from_secret(sender_secret)
+                .expect("sender")
+                .public_key(),
+        );
+        let encrypted = encrypt_direct_message_payload(
+            sender_secret,
+            &sender_pubkey_hex,
+            &recipient_pubkey_hex,
+            b"hello secret",
+        )
+        .expect("encrypt");
+        state.emit_payload(&[0x44; 32], &encrypted, 32, 1, &[0x22; 32], 0);
+        let first = rx.try_recv().expect("payload event");
+        assert_eq!(first.event, "payload");
+        let payload_b64 = first
+            .data
+            .get("payload_b64")
+            .and_then(|v| v.as_str())
+            .expect("payload b64");
+        let plaintext = base64::engine::general_purpose::STANDARD
+            .decode(payload_b64)
+            .expect("decode");
+        assert_eq!(plaintext, b"hello secret");
+    }
+
+    #[test]
+    fn emits_decrypted_payload_for_group_message_envelope() {
+        let state = NodeState::new("0.1-test");
+        let mut rx = state.subscribe_events();
+        let identity = state.identity();
+        let local_pubkey_hex = hex::encode(identity.public_key);
+        let sender_secret = [6u8; 32];
+        let sender_pubkey_hex = hex::encode(
+            veil_crypto::signing::NostrSigner::from_secret(sender_secret)
+                .expect("sender")
+                .public_key(),
+        );
+        let share = encrypt_group_key_share_payload(
+            sender_secret,
+            &sender_pubkey_hex,
+            &local_pubkey_hex,
+            "group-alpha",
+            "k1",
+            [2u8; 32],
+        )
+        .expect("share");
+        state.emit_payload(&[0x46; 32], &share, 32, 1, &[0x22; 32], 0);
+        let encrypted =
+            encrypt_group_message_payload("group-alpha", "k1", [2u8; 32], b"hello group secret")
+                .expect("encrypt");
+        state.emit_payload(&[0x45; 32], &encrypted, 32, 1, &[0x22; 32], 0);
+        let mut found = false;
+        for _ in 0..6 {
+            let event = rx.try_recv().expect("event");
+            if event.event != "payload" {
+                continue;
+            }
+            let payload_b64 = event
+                .data
+                .get("payload_b64")
+                .and_then(|v| v.as_str())
+                .expect("payload b64");
+            let plaintext = base64::engine::general_purpose::STANDARD
+                .decode(payload_b64)
+                .expect("decode");
+            if plaintext == b"hello group secret" {
+                found = true;
+                break;
+            }
+        }
+        assert!(found);
     }
 }

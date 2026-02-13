@@ -4,15 +4,46 @@ import 'package:flutter/foundation.dart';
 import './node_service.dart';
 import './models/node_event.dart';
 
+class _OptimisticReaction {
+  final String objectRoot;
+  final String action;
+  final String? authorPubkey;
+  final int createdAtMs;
+
+  const _OptimisticReaction({
+    required this.objectRoot,
+    required this.action,
+    required this.authorPubkey,
+    required this.createdAtMs,
+  });
+}
+
+class _OptimisticRepost {
+  final String objectRoot;
+  final String? authorPubkey;
+  final int createdAtMs;
+
+  const _OptimisticRepost({
+    required this.objectRoot,
+    required this.authorPubkey,
+    required this.createdAtMs,
+  });
+}
+
 class SocialController extends ChangeNotifier {
   final NodeService nodeService;
   final Map<String, Uint8List> imageCache = {};
+  final List<_OptimisticReaction> _optimisticReactions = [];
+  final List<_OptimisticRepost> _optimisticReposts = [];
+  final Map<String, List<NodeEvent>> _optimisticComments = {};
+  int _optimisticSeq = -1;
 
   SocialController(this.nodeService) {
     nodeService.addListener(_onServiceUpdate);
   }
 
   void _onServiceUpdate() {
+    _reconcileOptimisticEvents();
     // Check for profiles with images
     for (var profile in nodeService.profiles.values) {
       final root = profile.data['avatar_media_root'] as String?;
@@ -57,16 +88,64 @@ class SocialController extends ChangeNotifier {
     return filtered;
   }
 
-  List<NodeEvent> getReactions(String objectRoot) =>
-      nodeService.getReactionsFor(objectRoot);
+  List<NodeEvent> getReactions(String objectRoot) => [
+    ...nodeService.getReactionsFor(objectRoot),
+    ...(() {
+      final pending = _optimisticReactions
+          .where((e) => e.objectRoot == objectRoot)
+          .toList();
+      final out = <NodeEvent>[];
+      for (var i = 0; i < pending.length; i++) {
+        final entry = pending[i];
+        out.add(
+          NodeEvent.fromJson({
+            'seq': -1000000 - i,
+            'event': 'feed_bundle',
+            'data': {
+              'kind': 'reaction',
+              'target_root': objectRoot,
+              'action_code': entry.action,
+              'author_pubkey_hex': entry.authorPubkey ?? '',
+            },
+          }),
+        );
+      }
+      return out;
+    })(),
+  ];
 
-  List<NodeEvent> getReposts(String objectRoot) =>
-      nodeService.getRepostsFor(objectRoot);
+  List<NodeEvent> getReposts(String objectRoot) => [
+    ...nodeService.getRepostsFor(objectRoot),
+    ...(() {
+      final pending = _optimisticReposts
+          .where((e) => e.objectRoot == objectRoot)
+          .toList();
+      final out = <NodeEvent>[];
+      for (var i = 0; i < pending.length; i++) {
+        final entry = pending[i];
+        out.add(
+          NodeEvent.fromJson({
+            'seq': -2000000 - i,
+            'event': 'feed_bundle',
+            'data': {
+              'kind': 'repost',
+              'target_root': objectRoot,
+              'author_pubkey_hex': entry.authorPubkey ?? '',
+            },
+          }),
+        );
+      }
+      return out;
+    })(),
+  ];
 
   List<NodeEvent> getComments(String objectRoot) {
-    return nodeService.feedEvents
-        .where((e) => e.isPost && e.replyToRoot == objectRoot)
-        .toList();
+    return [
+      ...nodeService.feedEvents.where(
+        (e) => e.isPost && e.replyToRoot == objectRoot,
+      ),
+      ...(_optimisticComments[objectRoot] ?? const []),
+    ];
   }
 
   int getZapTotal(String objectRoot) {
@@ -131,11 +210,44 @@ class SocialController extends ChangeNotifier {
     String parentRoot, {
     String? channelId,
   }) async {
+    final normalized = text.trim();
+    if (normalized.isEmpty) return;
+    final optimistic = NodeEvent.fromJson({
+      'seq': _optimisticSeq--,
+      'event': 'feed_bundle',
+      'data': {
+        'kind': 'post',
+        'text': normalized,
+        'reply_to_root': parentRoot,
+        'author_pubkey_hex': nodeService.state.identityHex ?? '',
+        'channel_id': channelId ?? 'general',
+        'meta': {
+          'version': 1,
+          'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        },
+      },
+    });
+    _optimisticComments
+        .putIfAbsent(parentRoot, () => <NodeEvent>[])
+        .add(optimistic);
+    notifyListeners();
+    _expireOptimisticComment(parentRoot, optimistic);
+    final previousError = nodeService.state.lastError;
     await nodeService.publishPost(
-      text: text,
+      text: normalized,
       replyToRoot: parentRoot,
       channelId: channelId ?? 'general',
     );
+    final failed =
+        nodeService.state.lastError != previousError &&
+        (nodeService.state.lastError?.startsWith('Post failed') ?? false);
+    if (failed) {
+      _optimisticComments[parentRoot]?.remove(optimistic);
+      if (_optimisticComments[parentRoot]?.isEmpty ?? false) {
+        _optimisticComments.remove(parentRoot);
+      }
+      notifyListeners();
+    }
   }
 
   Future<void> reactToPost(
@@ -143,11 +255,28 @@ class SocialController extends ChangeNotifier {
     String action = 'like',
     String? channelId,
   }) async {
+    final optimistic = _OptimisticReaction(
+      objectRoot: objectRoot,
+      action: action,
+      authorPubkey: nodeService.state.identityHex,
+      createdAtMs: DateTime.now().millisecondsSinceEpoch,
+    );
+    _optimisticReactions.add(optimistic);
+    notifyListeners();
+    _expireOptimisticReaction(optimistic);
+    final previousError = nodeService.state.lastError;
     await nodeService.publishReaction(
       targetRoot: objectRoot,
       actionCode: action,
       channelId: channelId ?? 'general',
     );
+    final failed =
+        nodeService.state.lastError != previousError &&
+        (nodeService.state.lastError?.startsWith('Reaction failed') ?? false);
+    if (failed) {
+      _optimisticReactions.remove(optimistic);
+      notifyListeners();
+    }
   }
 
   Future<void> repost(
@@ -155,11 +284,112 @@ class SocialController extends ChangeNotifier {
     String? comment,
     String? channelId,
   }) async {
+    final optimistic = _OptimisticRepost(
+      objectRoot: objectRoot,
+      authorPubkey: nodeService.state.identityHex,
+      createdAtMs: DateTime.now().millisecondsSinceEpoch,
+    );
+    _optimisticReposts.add(optimistic);
+    notifyListeners();
+    _expireOptimisticRepost(optimistic);
+    final previousError = nodeService.state.lastError;
     await nodeService.publishRepost(
       targetRoot: objectRoot,
       comment: comment,
       channelId: channelId ?? 'general',
     );
+    final failed =
+        nodeService.state.lastError != previousError &&
+        (nodeService.state.lastError?.startsWith('Boost failed') ?? false);
+    if (failed) {
+      _optimisticReposts.remove(optimistic);
+      notifyListeners();
+    }
+  }
+
+  void _reconcileOptimisticEvents() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _optimisticReactions.removeWhere(
+      (pending) => now - pending.createdAtMs > 20000,
+    );
+    _optimisticReposts.removeWhere(
+      (pending) => now - pending.createdAtMs > 20000,
+    );
+    if (_optimisticReactions.isNotEmpty) {
+      _optimisticReactions.removeWhere((pending) {
+        return nodeService.feedEvents.any((e) {
+          return e.isReaction &&
+              e.targetRoot == pending.objectRoot &&
+              (e.reactionAction ?? 'like') == pending.action &&
+              (pending.authorPubkey == null ||
+                  pending.authorPubkey!.isEmpty ||
+                  e.authorPubkey == pending.authorPubkey);
+        });
+      });
+    }
+    if (_optimisticReposts.isNotEmpty) {
+      _optimisticReposts.removeWhere((pending) {
+        return nodeService.feedEvents.any((e) {
+          return e.isRepost &&
+              e.targetRoot == pending.objectRoot &&
+              (pending.authorPubkey == null ||
+                  pending.authorPubkey!.isEmpty ||
+                  e.authorPubkey == pending.authorPubkey);
+        });
+      });
+    }
+    if (_optimisticComments.isNotEmpty) {
+      final toRemove = <String>[];
+      _optimisticComments.forEach((parentRoot, pendingList) {
+        pendingList.removeWhere((pending) {
+          return nodeService.feedEvents.any((e) {
+            return e.isPost &&
+                e.replyToRoot == parentRoot &&
+                (e.postText ?? '').trim() == (pending.postText ?? '').trim() &&
+                ((pending.authorPubkey ?? '').isEmpty ||
+                    e.authorPubkey == pending.authorPubkey);
+          });
+        });
+        if (pendingList.isEmpty) {
+          toRemove.add(parentRoot);
+        }
+      });
+      for (final parentRoot in toRemove) {
+        _optimisticComments.remove(parentRoot);
+      }
+    }
+  }
+
+  void _expireOptimisticReaction(_OptimisticReaction pending) {
+    Future.delayed(const Duration(seconds: 20), () {
+      final removed = _optimisticReactions.remove(pending);
+      if (removed) {
+        notifyListeners();
+      }
+    });
+  }
+
+  void _expireOptimisticRepost(_OptimisticRepost pending) {
+    Future.delayed(const Duration(seconds: 20), () {
+      final removed = _optimisticReposts.remove(pending);
+      if (removed) {
+        notifyListeners();
+      }
+    });
+  }
+
+  void _expireOptimisticComment(String parentRoot, NodeEvent pending) {
+    Future.delayed(const Duration(seconds: 20), () {
+      final list = _optimisticComments[parentRoot];
+      if (list == null) return;
+      final removed = list.remove(pending);
+      if (list.isEmpty) {
+        _optimisticComments.remove(parentRoot);
+      }
+      if (removed) {
+        notifyListeners();
+      }
+    });
   }
 
   Future<void> followUser(String pubkey, {String? channelId}) {

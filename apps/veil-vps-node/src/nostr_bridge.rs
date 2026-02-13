@@ -1,8 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::{SinkExt, StreamExt};
@@ -146,8 +145,8 @@ impl NostrBridgeState {
     }
 }
 
-pub fn start_nostr_bridge(config: NostrBridgeConfig) -> mpsc::Receiver<BridgedItem> {
-    let (tx, rx) = mpsc::channel::<BridgedItem>();
+pub fn start_nostr_bridge(config: NostrBridgeConfig) -> tokio::sync::mpsc::Receiver<BridgedItem> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<BridgedItem>(512);
     if config.relays.is_empty() {
         return rx;
     }
@@ -158,48 +157,42 @@ pub fn start_nostr_bridge(config: NostrBridgeConfig) -> mpsc::Receiver<BridgedIt
         config.max_seen_ids,
         config.persist_every_updates,
     )));
-    thread::spawn(move || {
-        let runtime = match tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => rt,
-            Err(err) => {
-                eprintln!("nostr bridge runtime failed: {err}");
-                return;
-            }
-        };
-        runtime.block_on(async move {
-            let mut handles = Vec::new();
-            for relay in relays {
-                let tx = tx.clone();
-                let cfg = config.clone();
-                let state = Arc::clone(&state);
-                handles.push(tokio::spawn(async move {
-                    relay_loop(relay, cfg, tx, state).await;
-                }));
-            }
-            for handle in handles {
-                let _ = handle.await;
-            }
+    for relay in relays {
+        let tx = tx.clone();
+        let cfg = config.clone();
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            relay_loop(relay, cfg, tx, state).await;
         });
-    });
+    }
     rx
+}
+
+fn reconnect_backoff(attempts: u32, base_ms: u64, max_ms: u64) -> Duration {
+    let exponent = attempts.saturating_sub(1).min(10);
+    let factor = 1u64.checked_shl(exponent).unwrap_or(u64::MAX);
+    let raw = base_ms.saturating_mul(factor);
+    Duration::from_millis(raw.min(max_ms).max(base_ms))
 }
 
 async fn relay_loop(
     relay: String,
     config: NostrBridgeConfig,
-    tx: mpsc::Sender<BridgedItem>,
+    tx: tokio::sync::mpsc::Sender<BridgedItem>,
     state: Arc<Mutex<NostrBridgeState>>,
 ) {
+    let mut connect_attempts: u32 = 0;
     loop {
+        connect_attempts = connect_attempts.saturating_add(1);
         let connect = connect_async(relay.as_str()).await;
         let (mut ws, _) = match connect {
-            Ok(ok) => ok,
+            Ok(ok) => {
+                connect_attempts = 0;
+                ok
+            }
             Err(err) => {
                 eprintln!("nostr bridge connect failed {relay}: {err}");
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                tokio::time::sleep(reconnect_backoff(connect_attempts, 2_000, 120_000)).await;
                 continue;
             }
         };
@@ -211,7 +204,7 @@ async fn relay_loop(
         let sub_id = "veil-bridge";
         let req = json!(["REQ", sub_id, { "kinds": [1], "since": since }]).to_string();
         if ws.send(Message::Text(req)).await.is_err() {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::time::sleep(reconnect_backoff(connect_attempts, 2_000, 120_000)).await;
             continue;
         }
 
@@ -246,6 +239,7 @@ async fn relay_loop(
                     source_relay: relay.clone(),
                     source_event_id: event.id,
                 })
+                .await
                 .is_err()
             {
                 let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -257,7 +251,7 @@ async fn relay_loop(
             let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
             guard.persist_if_due(true);
         }
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(reconnect_backoff(connect_attempts, 2_000, 120_000)).await;
     }
 }
 
@@ -304,8 +298,39 @@ fn map_event_to_payload(event: &NostrEvent, channel_id: &str, _namespace: u16) -
 
 #[cfg(test)]
 mod tests {
-    use super::{map_event_to_payload, parse_nostr_event_message, NostrBridgeState};
+    use super::{
+        map_event_to_payload, parse_nostr_event_message, reconnect_backoff, NostrBridgeState,
+    };
     use veil_schema_feed::FeedBundle;
+
+    #[test]
+    fn reconnect_backoff_increases_exponentially_and_caps() {
+        use std::time::Duration;
+        assert_eq!(
+            reconnect_backoff(1, 2_000, 120_000),
+            Duration::from_millis(2_000)
+        );
+        assert_eq!(
+            reconnect_backoff(2, 2_000, 120_000),
+            Duration::from_millis(4_000)
+        );
+        assert_eq!(
+            reconnect_backoff(3, 2_000, 120_000),
+            Duration::from_millis(8_000)
+        );
+        assert_eq!(
+            reconnect_backoff(4, 2_000, 120_000),
+            Duration::from_millis(16_000)
+        );
+        assert_eq!(
+            reconnect_backoff(10, 2_000, 120_000),
+            Duration::from_millis(120_000)
+        );
+        assert_eq!(
+            reconnect_backoff(20, 2_000, 120_000),
+            Duration::from_millis(120_000)
+        );
+    }
 
     #[test]
     fn parses_event_message() {
@@ -343,15 +368,15 @@ mod tests {
         assert_eq!(state.relay_last_created_at.get("r").copied(), Some(13));
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore = "live network test; run explicitly"]
-    fn live_relays_emit_bridge_item() {
+    async fn live_relays_emit_bridge_item() {
         let relays = vec![
             "wss://relay.damus.io".to_string(),
             "wss://nos.lol".to_string(),
             "wss://relay.snort.social".to_string(),
         ];
-        let rx = super::start_nostr_bridge(super::NostrBridgeConfig {
+        let mut rx = super::start_nostr_bridge(super::NostrBridgeConfig {
             relays: relays.clone(),
             channel_id: "nostr-bridge".to_string(),
             namespace: 32,
@@ -360,8 +385,9 @@ mod tests {
             max_seen_ids: 1_000,
             persist_every_updates: 1,
         });
-        let item = rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+        let item = tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv())
+            .await
+            .expect("timeout waiting for bridge item")
             .expect("expected at least one bridged nostr event from live relays");
         assert!(
             relays.contains(&item.source_relay),
@@ -380,9 +406,9 @@ mod tests {
         }
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore = "live network test; run explicitly"]
-    fn live_relays_restart_uses_persisted_dedupe_state() {
+    async fn live_relays_restart_uses_persisted_dedupe_state() {
         let relays = vec![
             "wss://relay.damus.io".to_string(),
             "wss://nos.lol".to_string(),
@@ -392,7 +418,7 @@ mod tests {
         let state_path = temp.path().join("nostr-bridge-state.json");
 
         let first_id = {
-            let rx = super::start_nostr_bridge(super::NostrBridgeConfig {
+            let mut rx = super::start_nostr_bridge(super::NostrBridgeConfig {
                 relays: relays.clone(),
                 channel_id: "nostr-bridge".to_string(),
                 namespace: 32,
@@ -401,8 +427,9 @@ mod tests {
                 max_seen_ids: 2_000,
                 persist_every_updates: 1,
             });
-            let item = rx
-                .recv_timeout(std::time::Duration::from_secs(30))
+            let item = tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv())
+                .await
+                .expect("timeout")
                 .expect("expected bridged event on first run");
             item.source_event_id
         };
@@ -422,14 +449,14 @@ mod tests {
                     }
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(250));
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
         assert!(
             persisted_contains_first,
             "expected first bridged event id to be persisted"
         );
 
-        let rx2 = super::start_nostr_bridge(super::NostrBridgeConfig {
+        let mut rx2 = super::start_nostr_bridge(super::NostrBridgeConfig {
             relays: relays.clone(),
             channel_id: "nostr-bridge".to_string(),
             namespace: 32,
@@ -438,8 +465,9 @@ mod tests {
             max_seen_ids: 2_000,
             persist_every_updates: 1,
         });
-        let item2 = rx2
-            .recv_timeout(std::time::Duration::from_secs(30))
+        let item2 = tokio::time::timeout(std::time::Duration::from_secs(30), rx2.recv())
+            .await
+            .expect("timeout")
             .expect("expected bridged event on second run");
         assert_ne!(
             item2.source_event_id, first_id,

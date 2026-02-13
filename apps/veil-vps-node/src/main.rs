@@ -1,23 +1,21 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::Hash;
-use std::io::{Read, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
+
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod http_server;
 mod nostr_bridge;
 mod settings_db;
 
-use bech32::Hrp;
+use bech32::{Bech32, Hrp};
 use nostr_bridge::{start_nostr_bridge, NostrBridgeConfig};
 use rand::RngCore;
 use rusqlite::{params, Connection};
 use serde::Deserialize;
-use serde_json::json;
 use settings_db::SettingsStore;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::flag;
@@ -525,23 +523,13 @@ fn parse_required_signed_namespaces(values: &[String]) -> HashSet<u16> {
     out
 }
 
-fn decode_hex_tag_32(value: &str) -> Option<[u8; 32]> {
-    if value.len() != 64 {
-        return None;
-    }
-    let mut out = [0_u8; 32];
-    for (idx, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
-        let s = std::str::from_utf8(chunk).ok()?;
-        let byte = u8::from_str_radix(s, 16).ok()?;
-        out[idx] = byte;
-    }
-    Some(out)
-}
-
 fn parse_core_tags(values: &[String]) -> Vec<[u8; 32]> {
     values
         .iter()
-        .filter_map(|value| decode_hex_tag_32(value))
+        .filter_map(|value| {
+            let bytes = hex::decode(value).ok()?;
+            <[u8; 32]>::try_from(bytes.as_slice()).ok()
+        })
         .collect()
 }
 
@@ -622,9 +610,10 @@ fn merge_peers<T: Clone + Eq + Hash>(
     discovered: &[T],
     max_total: usize,
 ) -> Vec<T> {
+    let mut seen = HashSet::with_capacity(configured.len() + discovered.len());
     let mut out = Vec::new();
     for peer in configured {
-        if !out.contains(peer) {
+        if seen.insert(peer) {
             out.push(peer.clone());
         }
     }
@@ -632,7 +621,7 @@ fn merge_peers<T: Clone + Eq + Hash>(
         if out.len() >= max_total {
             break;
         }
-        if !out.contains(peer) {
+        if seen.insert(peer) {
             out.push(peer.clone());
         }
     }
@@ -670,42 +659,44 @@ fn load_or_create_node_key(path: &Path) -> Result<[u8; 32], String> {
 }
 
 #[derive(Debug, Default)]
-struct MetricsState {
-    ticks: AtomicU64,
-    delivered: AtomicU64,
-    send_failures: AtomicU64,
-    ack_clears: AtomicU64,
-    last_fast_outbound_ok: AtomicU64,
-    last_fast_outbound_err: AtomicU64,
-    last_fallback_outbound_ok: AtomicU64,
-    last_fallback_outbound_err: AtomicU64,
-    last_fast_inbound: AtomicU64,
-    last_fallback_inbound: AtomicU64,
-    nostr_bridge_events_total: AtomicU64,
-    nostr_bridge_payload_bytes_total: AtomicU64,
-    nostr_bridge_enabled: AtomicU64,
-    nostr_bridge_relays_configured: AtomicU64,
+pub struct MetricsState {
+    pub ticks: AtomicU64,
+    pub delivered: AtomicU64,
+    pub send_failures: AtomicU64,
+    pub ack_clears: AtomicU64,
+    pub last_fast_outbound_ok: AtomicU64,
+    pub last_fast_outbound_err: AtomicU64,
+    pub last_fallback_outbound_ok: AtomicU64,
+    pub last_fallback_outbound_err: AtomicU64,
+    pub last_fast_inbound: AtomicU64,
+    pub last_fallback_inbound: AtomicU64,
+    pub nostr_bridge_events_total: AtomicU64,
+    pub nostr_bridge_payload_bytes_total: AtomicU64,
+    pub nostr_bridge_enabled: AtomicU64,
+    pub nostr_bridge_relays_configured: AtomicU64,
 }
 
 #[derive(Debug)]
-struct AdminAuthState {
-    server_pubkey: [u8; 32],
-    server_pubkey_hex: String,
-    session_ttl_secs: u64,
-    session_db_path: PathBuf,
-    settings_db_path: PathBuf,
-    sessions: Mutex<HashMap<String, u64>>,
+pub struct AdminAuthState {
+    pub server_pubkey: [u8; 32],
+    pub server_pubkey_hex: String,
+    pub server_secret_hex: String,
+    pub server_secret_nsec: String,
+    pub session_ttl_secs: u64,
+    pub session_db_path: PathBuf,
+    pub settings_db_path: PathBuf,
+    pub sessions: Mutex<HashMap<String, u64>>,
 }
 
 #[derive(Debug, Deserialize)]
-struct AdminLoginRequest {
-    secret: String,
+pub struct AdminLoginRequest {
+    pub secret: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct AdminSettingUpsertRequest {
-    key: String,
-    value: String,
+pub struct AdminSettingUpsertRequest {
+    pub key: String,
+    pub value: String,
 }
 
 impl AdminAuthState {
@@ -784,7 +775,7 @@ impl AdminAuthState {
         }
     }
 
-    fn persist_session_remove(&self, token: &str) {
+    pub fn persist_session_remove(&self, token: &str) {
         if let Ok(conn) = Connection::open(&self.session_db_path) {
             let _ = conn.execute(
                 "DELETE FROM admin_sessions WHERE token = ?1",
@@ -793,7 +784,7 @@ impl AdminAuthState {
         }
     }
 
-    fn persist_expired_prune(&self, now: u64) {
+    pub fn persist_expired_prune(&self, now: u64) {
         if let Ok(conn) = Connection::open(&self.session_db_path) {
             let _ = conn.execute(
                 "DELETE FROM admin_sessions WHERE expires_at <= ?1",
@@ -802,7 +793,7 @@ impl AdminAuthState {
         }
     }
 
-    fn add_session(&self, token: String, expires: u64) {
+    pub fn add_session(&self, token: String, expires: u64) {
         self.sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -810,7 +801,7 @@ impl AdminAuthState {
         self.persist_session_insert(&token, expires);
     }
 
-    fn revoke_session(&self, token: &str) -> bool {
+    pub fn revoke_session(&self, token: &str) -> bool {
         let removed = self
             .sessions
             .lock()
@@ -822,37 +813,19 @@ impl AdminAuthState {
     }
 }
 
-fn now_unix_secs() -> u64 {
+pub fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
 
-fn decode_hex_exact<const N: usize>(value: &str) -> Option<[u8; N]> {
-    if value.len() != N * 2 {
-        return None;
-    }
-    let mut out = [0_u8; N];
-    for (idx, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
-        let s = std::str::from_utf8(chunk).ok()?;
-        out[idx] = u8::from_str_radix(s, 16).ok()?;
-    }
-    Some(out)
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
-}
-
-fn decode_nostr_secret_input(value: &str) -> Option<[u8; 32]> {
+pub fn decode_nostr_secret_input(value: &str) -> Option<[u8; 32]> {
     let trimmed = value.trim();
-    if let Some(key) = decode_hex_exact::<32>(trimmed) {
-        return Some(key);
+    if let Ok(bytes) = hex::decode(trimmed) {
+        if let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) {
+            return Some(key);
+        }
     }
     let hrp = Hrp::parse("nsec").ok()?;
     let (decoded_hrp, data) = bech32::decode(trimmed).ok()?;
@@ -867,430 +840,13 @@ fn decode_nostr_secret_input(value: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-fn read_http_request(
-    stream: &mut std::net::TcpStream,
-) -> Option<(String, String, HashMap<String, String>, Vec<u8>)> {
-    let mut buf = Vec::new();
-    let mut tmp = [0_u8; 2048];
-    let mut header_end: Option<usize> = None;
-    let mut expected_body_len = 0usize;
-    loop {
-        let read = stream.read(&mut tmp).ok()?;
-        if read == 0 {
-            break;
-        }
-        buf.extend_from_slice(&tmp[..read]);
-        if header_end.is_none() {
-            if let Some(idx) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                header_end = Some(idx + 4);
-                let header_text = String::from_utf8_lossy(&buf[..idx + 4]);
-                for line in header_text.lines().skip(1) {
-                    let mut parts = line.splitn(2, ':');
-                    let key = parts.next().unwrap_or("").trim().to_ascii_lowercase();
-                    let value = parts.next().unwrap_or("").trim();
-                    if key == "content-length" {
-                        expected_body_len = value.parse::<usize>().unwrap_or(0).min(16 * 1024);
-                        break;
-                    }
-                }
-            }
-        }
-        if let Some(h_end) = header_end {
-            let body_len = buf.len().saturating_sub(h_end);
-            if body_len >= expected_body_len {
-                break;
-            }
-        }
-        if buf.len() > 64 * 1024 {
-            return None;
-        }
-    }
-
-    let header_end = header_end?;
-    let header = String::from_utf8_lossy(&buf[..header_end]).to_string();
-    let mut lines = header.lines();
-    let request_line = lines.next()?.to_string();
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next()?.to_string();
-    let path = parts.next()?.to_string();
-    let mut headers = HashMap::new();
-    for line in lines {
-        let mut fields = line.splitn(2, ':');
-        let key = fields.next().unwrap_or("").trim().to_ascii_lowercase();
-        let value = fields.next().unwrap_or("").trim().to_string();
-        if !key.is_empty() {
-            headers.insert(key, value);
-        }
-    }
-    let body = buf[header_end..].to_vec();
-    Some((method, path, headers, body))
+fn encode_nostr_nsec(secret: [u8; 32]) -> Option<String> {
+    let hrp = Hrp::parse("nsec").ok()?;
+    bech32::encode::<Bech32>(hrp, &secret).ok()
 }
 
-fn bearer_token(headers: &HashMap<String, String>) -> Option<&str> {
-    let auth = headers.get("authorization")?;
-    let token = auth.strip_prefix("Bearer ")?;
-    if token.is_empty() {
-        return None;
-    }
-    Some(token)
-}
-
-fn query_param(path: &str, target_key: &str) -> Option<String> {
-    let query = path.split('?').nth(1)?;
-    for pair in query.split('&') {
-        let mut parts = pair.splitn(2, '=');
-        let key = parts.next().unwrap_or("");
-        let value = parts.next().unwrap_or("");
-        if key == target_key && !value.is_empty() {
-            return Some(value.to_string());
-        }
-    }
-    None
-}
-
-fn is_admin_authenticated(headers: &HashMap<String, String>, admin: &AdminAuthState) -> bool {
-    let Some(token) = bearer_token(headers) else {
-        return false;
-    };
-    let now = now_unix_secs();
-    let mut sessions = admin.sessions.lock().unwrap_or_else(|e| e.into_inner());
-    let expired_tokens = sessions
-        .iter()
-        .filter_map(|(token, expires)| {
-            if *expires <= now {
-                Some(token.clone())
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-    sessions.retain(|_, expires| *expires > now);
-    drop(sessions);
-    if !expired_tokens.is_empty() {
-        for token in expired_tokens {
-            admin.persist_session_remove(&token);
-        }
-        admin.persist_expired_prune(now);
-    }
-    let sessions = admin.sessions.lock().unwrap_or_else(|e| e.into_inner());
-    sessions.get(token).is_some_and(|expires| *expires > now)
-}
-
-fn start_health_server(
-    bind_addr: String,
-    port: u16,
-    metrics: Arc<MetricsState>,
-    peer_snapshot: Arc<Mutex<Vec<String>>>,
-    admin_auth: Arc<AdminAuthState>,
-) {
-    if port == 0 {
-        return;
-    }
-    thread::spawn(move || {
-        let listener = match TcpListener::bind((bind_addr.as_str(), port)) {
-            Ok(listener) => listener,
-            Err(err) => {
-                eprintln!("health server bind failed on {bind_addr}:{port}: {err}");
-                return;
-            }
-        };
-        for mut stream in listener.incoming().flatten() {
-            let Some((method, path, headers, body_bytes)) = read_http_request(&mut stream) else {
-                continue;
-            };
-            let path_only = path.split('?').next().unwrap_or(path.as_str());
-            let is_health = method == "GET" && (path_only == "/health" || path_only == "/healthz");
-            let is_metrics = method == "GET" && path_only == "/metrics";
-            let is_peers = method == "GET" && path_only == "/peers";
-            let is_admin_login = method == "POST" && path_only == "/admin-api/login";
-            let is_admin_logout = method == "POST" && path_only == "/admin-api/logout";
-            let is_admin_status = method == "GET" && path_only == "/admin-api/status";
-            let is_admin_metrics = method == "GET" && path_only == "/admin-api/metrics";
-            let is_admin_peers = method == "GET" && path_only == "/admin-api/peers";
-            let is_admin_settings_get = method == "GET" && path_only == "/admin-api/settings";
-            let is_admin_settings_set = method == "POST" && path_only == "/admin-api/settings";
-            let is_admin_settings_delete = method == "DELETE" && path_only == "/admin-api/settings";
-
-            let (status, body, content_type) = if is_health {
-                ("200 OK", "ok".to_string(), "text/plain")
-            } else if is_metrics
-                || (is_admin_metrics && is_admin_authenticated(&headers, &admin_auth))
-            {
-                let body = format!(
-                    "veil_ticks_total {}\nveil_delivered_total {}\nveil_send_failures_total {}\nveil_ack_clears_total {}\nveil_fast_outbound_ok {}\nveil_fast_outbound_err {}\nveil_fallback_outbound_ok {}\nveil_fallback_outbound_err {}\nveil_fast_inbound {}\nveil_fallback_inbound {}\nveil_nostr_bridge_events_total {}\nveil_nostr_bridge_payload_bytes_total {}\nveil_nostr_bridge_enabled {}\nveil_nostr_bridge_relays_configured {}\n",
-                    metrics.ticks.load(Ordering::Relaxed),
-                    metrics.delivered.load(Ordering::Relaxed),
-                    metrics.send_failures.load(Ordering::Relaxed),
-                    metrics.ack_clears.load(Ordering::Relaxed),
-                    metrics.last_fast_outbound_ok.load(Ordering::Relaxed),
-                    metrics.last_fast_outbound_err.load(Ordering::Relaxed),
-                    metrics.last_fallback_outbound_ok.load(Ordering::Relaxed),
-                    metrics.last_fallback_outbound_err.load(Ordering::Relaxed),
-                    metrics.last_fast_inbound.load(Ordering::Relaxed),
-                    metrics.last_fallback_inbound.load(Ordering::Relaxed),
-                    metrics.nostr_bridge_events_total.load(Ordering::Relaxed),
-                    metrics
-                        .nostr_bridge_payload_bytes_total
-                        .load(Ordering::Relaxed),
-                    metrics.nostr_bridge_enabled.load(Ordering::Relaxed),
-                    metrics
-                        .nostr_bridge_relays_configured
-                        .load(Ordering::Relaxed),
-                );
-                ("200 OK", body, "text/plain")
-            } else if is_peers || (is_admin_peers && is_admin_authenticated(&headers, &admin_auth))
-            {
-                let mut limit = 200usize;
-                let mut prefix: Option<String> = None;
-                if let Some(query) = path.split('?').nth(1) {
-                    for pair in query.split('&') {
-                        let mut parts = pair.splitn(2, '=');
-                        let key = parts.next().unwrap_or("");
-                        let value = parts.next().unwrap_or("");
-                        if key == "limit" {
-                            if let Ok(parsed) = value.parse::<usize>() {
-                                limit = parsed.min(1000);
-                            }
-                        } else if key == "prefix" && !value.is_empty() {
-                            prefix = Some(value.to_string());
-                        }
-                    }
-                }
-                let peers = peer_snapshot.lock().unwrap_or_else(|e| e.into_inner());
-                let iter = peers
-                    .iter()
-                    .filter(|peer| prefix.as_ref().map(|p| peer.starts_with(p)).unwrap_or(true));
-                let body = iter.take(limit).cloned().collect::<Vec<_>>().join("\n");
-                ("200 OK", body, "text/plain")
-            } else if is_admin_login {
-                let parsed = serde_json::from_slice::<AdminLoginRequest>(&body_bytes).ok();
-                if let Some(payload) = parsed {
-                    if let Some(secret) = decode_nostr_secret_input(&payload.secret) {
-                        if let Ok(signer) = NostrSigner::from_secret(secret) {
-                            if signer.public_key() == admin_auth.server_pubkey {
-                                let mut raw = [0_u8; 32];
-                                rand::thread_rng().fill_bytes(&mut raw);
-                                let token = encode_hex(&raw);
-                                let expires = now_unix_secs() + admin_auth.session_ttl_secs;
-                                admin_auth.add_session(token.clone(), expires);
-                                (
-                                    "200 OK",
-                                    json!({
-                                        "ok": true,
-                                        "token": token,
-                                        "server_pubkey": admin_auth.server_pubkey_hex,
-                                        "expires_at": expires
-                                    })
-                                    .to_string(),
-                                    "application/json",
-                                )
-                            } else {
-                                (
-                                    "401 Unauthorized",
-                                    json!({"ok": false, "error": "wrong identity key"}).to_string(),
-                                    "application/json",
-                                )
-                            }
-                        } else {
-                            (
-                                "400 Bad Request",
-                                json!({"ok": false, "error": "invalid nostr secret"}).to_string(),
-                                "application/json",
-                            )
-                        }
-                    } else {
-                        (
-                            "400 Bad Request",
-                            json!({"ok": false, "error": "secret must be hex or nsec"}).to_string(),
-                            "application/json",
-                        )
-                    }
-                } else {
-                    (
-                        "400 Bad Request",
-                        json!({"ok": false, "error": "invalid JSON payload"}).to_string(),
-                        "application/json",
-                    )
-                }
-            } else if is_admin_logout {
-                if let Some(token) = bearer_token(&headers) {
-                    let _ = admin_auth.revoke_session(token);
-                    (
-                        "200 OK",
-                        json!({"ok": true, "logged_out": true}).to_string(),
-                        "application/json",
-                    )
-                } else {
-                    (
-                        "401 Unauthorized",
-                        json!({"ok": false, "error": "admin auth required"}).to_string(),
-                        "application/json",
-                    )
-                }
-            } else if is_admin_status {
-                let is_auth = is_admin_authenticated(&headers, &admin_auth);
-                (
-                    "200 OK",
-                    json!({
-                        "ok": is_auth,
-                        "server_pubkey": admin_auth.server_pubkey_hex
-                    })
-                    .to_string(),
-                    "application/json",
-                )
-            } else if is_admin_settings_get && is_admin_authenticated(&headers, &admin_auth) {
-                match SettingsStore::open(&admin_auth.settings_db_path) {
-                    Ok(store) => {
-                        if let Some(key) = query_param(&path, "key") {
-                            match store.get(&key) {
-                                Some(value) => (
-                                    "200 OK",
-                                    json!({"ok": true, "key": key, "value": value}).to_string(),
-                                    "application/json",
-                                ),
-                                None => (
-                                    "404 Not Found",
-                                    json!({"ok": false, "error": "setting not found"}).to_string(),
-                                    "application/json",
-                                ),
-                            }
-                        } else {
-                            match store.list() {
-                                Ok(items) => (
-                                    "200 OK",
-                                    json!({"ok": true, "items": items}).to_string(),
-                                    "application/json",
-                                ),
-                                Err(err) => (
-                                    "500 Internal Server Error",
-                                    json!({"ok": false, "error": err}).to_string(),
-                                    "application/json",
-                                ),
-                            }
-                        }
-                    }
-                    Err(err) => (
-                        "500 Internal Server Error",
-                        json!({"ok": false, "error": err}).to_string(),
-                        "application/json",
-                    ),
-                }
-            } else if is_admin_settings_set && is_admin_authenticated(&headers, &admin_auth) {
-                let parsed = serde_json::from_slice::<AdminSettingUpsertRequest>(&body_bytes).ok();
-                if let Some(payload) = parsed {
-                    let key = payload.key.trim().to_string();
-                    if key.is_empty() {
-                        (
-                            "400 Bad Request",
-                            json!({"ok": false, "error": "key is required"}).to_string(),
-                            "application/json",
-                        )
-                    } else {
-                        match SettingsStore::open(&admin_auth.settings_db_path)
-                            .and_then(|store| store.set(&key, payload.value.trim()))
-                        {
-                            Ok(()) => (
-                                "200 OK",
-                                json!({"ok": true, "key": key}).to_string(),
-                                "application/json",
-                            ),
-                            Err(err) => (
-                                "500 Internal Server Error",
-                                json!({"ok": false, "error": err}).to_string(),
-                                "application/json",
-                            ),
-                        }
-                    }
-                } else {
-                    (
-                        "400 Bad Request",
-                        json!({"ok": false, "error": "invalid JSON payload"}).to_string(),
-                        "application/json",
-                    )
-                }
-            } else if is_admin_settings_delete && is_admin_authenticated(&headers, &admin_auth) {
-                if let Some(key) = query_param(&path, "key") {
-                    match SettingsStore::open(&admin_auth.settings_db_path)
-                        .and_then(|store| store.delete(&key))
-                    {
-                        Ok(true) => (
-                            "200 OK",
-                            json!({"ok": true, "deleted": true, "key": key}).to_string(),
-                            "application/json",
-                        ),
-                        Ok(false) => (
-                            "404 Not Found",
-                            json!({"ok": false, "error": "setting not found"}).to_string(),
-                            "application/json",
-                        ),
-                        Err(err) => (
-                            "500 Internal Server Error",
-                            json!({"ok": false, "error": err}).to_string(),
-                            "application/json",
-                        ),
-                    }
-                } else {
-                    (
-                        "400 Bad Request",
-                        json!({"ok": false, "error": "key query parameter is required"})
-                            .to_string(),
-                        "application/json",
-                    )
-                }
-            } else if is_admin_metrics || is_admin_peers || is_admin_logout {
-                (
-                    "401 Unauthorized",
-                    json!({"ok": false, "error": "admin auth required"}).to_string(),
-                    "application/json",
-                )
-            } else if is_admin_settings_get || is_admin_settings_set || is_admin_settings_delete {
-                (
-                    "401 Unauthorized",
-                    json!({"ok": false, "error": "admin auth required"}).to_string(),
-                    "application/json",
-                )
-            } else {
-                ("404 Not Found", "not found".to_string(), "text/plain")
-            };
-            let resp = format!(
-                "HTTP/1.1 {status}\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\n\r\n{body}",
-                body.len(),
-            );
-            let _ = stream.write_all(resp.as_bytes());
-        }
-    });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{encode_fallback_peers, parse_fallback_peer_strings, FallbackPeer};
-
-    #[test]
-    fn parse_fallback_peer_strings_supports_websocket_server_prefix() {
-        let parsed = parse_fallback_peer_strings(&[
-            "wssrv:127.0.0.1:8080".to_string(),
-            "ws:relay-a".to_string(),
-            "tor:peer.onion:5000".to_string(),
-        ]);
-        assert!(parsed.contains(&FallbackPeer::WebSocketServer("127.0.0.1:8080".to_string())));
-        assert!(parsed.contains(&FallbackPeer::WebSocket("relay-a".to_string())));
-        assert!(parsed.contains(&FallbackPeer::Tor("peer.onion:5000".to_string())));
-    }
-
-    #[test]
-    fn encode_and_parse_roundtrip_keeps_websocket_server_peers() {
-        let peers = vec![
-            FallbackPeer::WebSocket("relay-a".to_string()),
-            FallbackPeer::WebSocketServer("192.168.1.10:8080".to_string()),
-            FallbackPeer::Tor("peer.onion:5000".to_string()),
-        ];
-        let encoded = encode_fallback_peers(&peers);
-        let decoded = parse_fallback_peer_strings(&encoded);
-        assert_eq!(decoded, peers);
-    }
-}
-
-fn main() {
+#[tokio::main]
+async fn main() {
     let mut args = std::env::args().collect::<Vec<_>>();
     if args.len() >= 2 && args[1] == "settings" {
         let mut db_path = PathBuf::from("data/settings.db");
@@ -1509,10 +1065,9 @@ fn main() {
     };
     let node_signer = NostrSigner::from_secret(node_key).expect("node key validated");
     let node_pubkey = node_signer.public_key();
-    let node_pubkey_hex = node_pubkey
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+    let node_secret_hex = hex::encode(node_key);
+    let node_secret_nsec = encode_nostr_nsec(node_key).unwrap_or_default();
+    let node_pubkey_hex = hex::encode(node_pubkey);
     eprintln!("node identity (nostr x-only pubkey): {node_pubkey_hex}");
 
     let identity = match load_or_create_identity(&quic_cert_path, &quic_key_path) {
@@ -1734,7 +1289,7 @@ fn main() {
         NostrVerifier,
     );
     let mut bridge_batcher = FeedBatcher::default();
-    let nostr_bridge_rx = if nostr_bridge_enabled {
+    let mut nostr_bridge_rx = if nostr_bridge_enabled {
         if nostr_bridge_relays.is_empty() {
             eprintln!(
                 "nostr bridge enabled but VEIL_VPS_NOSTR_RELAYS is empty; bridge not started"
@@ -1793,18 +1348,36 @@ fn main() {
     let admin_auth = Arc::new(AdminAuthState {
         server_pubkey: node_pubkey,
         server_pubkey_hex: node_pubkey_hex.clone(),
+        server_secret_hex: node_secret_hex,
+        server_secret_nsec: node_secret_nsec,
         session_ttl_secs: 24 * 60 * 60,
         session_db_path: admin_session_db_path,
         settings_db_path: settings_db_path.clone(),
         sessions: Mutex::new(restored_sessions),
     });
-    start_health_server(
-        health_bind,
-        health_port,
-        Arc::clone(&metrics),
-        Arc::clone(&peer_snapshot),
-        Arc::clone(&admin_auth),
-    );
+    if health_port != 0 {
+        let app_state = http_server::VpsAppState {
+            metrics: Arc::clone(&metrics),
+            peer_snapshot: Arc::clone(&peer_snapshot),
+            admin_auth: Arc::clone(&admin_auth),
+            shutdown: Arc::clone(&shutdown),
+        };
+        let router = http_server::build_router(app_state);
+        let bind_addr: std::net::SocketAddr =
+            format!("{health_bind}:{health_port}").parse().unwrap();
+        let listener = match tokio::net::TcpListener::bind(bind_addr).await {
+            Ok(listener) => listener,
+            Err(err) => {
+                eprintln!("health server bind failed on {bind_addr}: {err}");
+                return;
+            }
+        };
+        tokio::spawn(async move {
+            if let Err(err) = axum::serve(listener, router).await {
+                eprintln!("health server error: {err}");
+            }
+        });
+    }
 
     let mut now_step = 0_u64;
     loop {
@@ -1824,7 +1397,7 @@ fn main() {
             max_dynamic_peers,
         );
 
-        if let Some(rx) = &nostr_bridge_rx {
+        if let Some(rx) = &mut nostr_bridge_rx {
             for _ in 0..64 {
                 match rx.try_recv() {
                     Ok(item) => {
@@ -1842,8 +1415,7 @@ fn main() {
                             .fetch_add(item.payload.len() as u64, Ordering::Relaxed);
                         bridge_batcher.enqueue(item.payload);
                     }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    Err(_) => break,
                 }
             }
             let _ = publish_queue_tick_multi_lane(
@@ -1942,6 +1514,48 @@ fn main() {
             last_health_log = Instant::now();
         }
 
-        thread::sleep(tick_interval);
+        tokio::time::sleep(tick_interval).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{encode_fallback_peers, merge_peers, parse_fallback_peer_strings, FallbackPeer};
+
+    #[test]
+    fn parse_fallback_peer_strings_supports_websocket_server_prefix() {
+        let parsed = parse_fallback_peer_strings(&[
+            "wssrv:127.0.0.1:8080".to_string(),
+            "ws:relay-a".to_string(),
+            "tor:peer.onion:5000".to_string(),
+        ]);
+        assert!(parsed.contains(&FallbackPeer::WebSocketServer("127.0.0.1:8080".to_string())));
+        assert!(parsed.contains(&FallbackPeer::WebSocket("relay-a".to_string())));
+        assert!(parsed.contains(&FallbackPeer::Tor("peer.onion:5000".to_string())));
+    }
+
+    #[test]
+    fn merge_peers_deduplicates_and_caps() {
+        let configured = vec!["a".to_string(), "b".to_string(), "a".to_string()];
+        let discovered = vec![
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "e".to_string(),
+        ];
+        let merged = merge_peers(&configured, &discovered, 4);
+        assert_eq!(merged, vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn encode_and_parse_roundtrip_keeps_websocket_server_peers() {
+        let peers = vec![
+            FallbackPeer::WebSocket("relay-a".to_string()),
+            FallbackPeer::WebSocketServer("192.168.1.10:8080".to_string()),
+            FallbackPeer::Tor("peer.onion:5000".to_string()),
+        ];
+        let encoded = encode_fallback_peers(&peers);
+        let decoded = parse_fallback_peer_strings(&encoded);
+        assert_eq!(decoded, peers);
     }
 }

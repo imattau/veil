@@ -10,9 +10,15 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.util.Log
 import java.io.File
-import java.io.FileOutputStream
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -23,6 +29,8 @@ class NodeForegroundService : Service() {
         private const val CHANNEL_ID = "veil_node"
         private const val NOTIFICATION_ID = 1001
         private const val TAG = "VeilNodeService"
+        private const val STATE_KEY_ALIAS = "veil_node_state_wrap_key"
+        private const val STATE_KEY_FILE = "node_state_key.enc"
 
         @Volatile
         private var running: Boolean = false
@@ -106,6 +114,7 @@ class NodeForegroundService : Service() {
             builder.redirectErrorStream(true)
             val env = builder.environment()
             val token = loadOrCreateToken()
+            val stateKeyHex = loadOrCreateStateKeyHex()
             env["VEIL_NODE_HOST"] = "127.0.0.1"
             env["VEIL_NODE_PORT"] = "7788"
             env["VEIL_NODE_LOG_LEVEL"] = "debug"
@@ -118,6 +127,7 @@ class NodeForegroundService : Service() {
             env["VEIL_NODE_WS_PEERS"] = "ws://relay.veil-network.io:9001/ws,ws://veilnode.3nostr.com:9001/ws"
             env["VEIL_NODE_FAST_PEERS"] = "quic://bootstrap.veil-network.io:9000,quic://veilnode.3nostr.com:9000"
             env["VEIL_NODE_TOKEN"] = token
+            env["VEIL_NODE_STATE_KEY_HEX"] = stateKeyHex
             env["VEIL_DISCOVERY_BOOTSTRAP"] = "quic://bootstrap.veil-network.io:9000,ws://relay.veil-network.io:9001/ws,quic://veilnode.3nostr.com:9000,ws://veilnode.3nostr.com:9001/ws"
             env["VEIL_LAN_DISCOVERY"] = "1"
             process = builder.start()
@@ -204,6 +214,87 @@ class NodeForegroundService : Service() {
         tokenFile.writeText(created)
         authToken = created
         return created
+    }
+
+    private fun loadOrCreateStateKeyHex(): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            val legacyFile = File(filesDir, "node_state_key_hex.txt")
+            val legacy = legacyFile.takeIf { it.exists() }?.readText()?.trim()
+            val keyHex = if (!legacy.isNullOrBlank() && legacy.length == 64) {
+                legacy
+            } else {
+                val value = ByteArray(32)
+                java.security.SecureRandom().nextBytes(value)
+                value.joinToString(separator = "") { byte ->
+                    "%02x".format(byte.toInt() and 0xFF)
+                }.also { legacyFile.writeText(it) }
+            }
+            return keyHex
+        }
+        val keyFile = File(filesDir, STATE_KEY_FILE)
+        val wrapped = keyFile.takeIf { it.exists() }?.readText()?.trim()
+        val stateKeyBytes = if (!wrapped.isNullOrBlank()) {
+            decryptStateKey(wrapped) ?: createAndPersistStateKey(keyFile)
+        } else {
+            createAndPersistStateKey(keyFile)
+        }
+        return stateKeyBytes.joinToString(separator = "") { byte ->
+            "%02x".format(byte.toInt() and 0xFF)
+        }
+    }
+
+    private fun createAndPersistStateKey(target: File): ByteArray {
+        val value = ByteArray(32)
+        java.security.SecureRandom().nextBytes(value)
+        val wrapped = encryptStateKey(value)
+        target.writeText(wrapped)
+        return value
+    }
+
+    private fun encryptStateKey(raw: ByteArray): String {
+        val key = getOrCreateWrappingKey()
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val ciphertext = cipher.doFinal(raw)
+        val ivB64 = android.util.Base64.encodeToString(cipher.iv, android.util.Base64.NO_WRAP)
+        val ctB64 =
+            android.util.Base64.encodeToString(ciphertext, android.util.Base64.NO_WRAP)
+        return "$ivB64:$ctB64"
+    }
+
+    private fun decryptStateKey(encoded: String): ByteArray? {
+        val parts = encoded.split(':')
+        if (parts.size != 2) {
+            return null
+        }
+        return try {
+            val iv = android.util.Base64.decode(parts[0], android.util.Base64.NO_WRAP)
+            val ciphertext = android.util.Base64.decode(parts[1], android.util.Base64.NO_WRAP)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val spec = GCMParameterSpec(128, iv)
+            cipher.init(Cipher.DECRYPT_MODE, getOrCreateWrappingKey(), spec)
+            cipher.doFinal(ciphertext)
+        } catch (err: Exception) {
+            Log.w(TAG, "Failed to decrypt state key, rotating", err)
+            null
+        }
+    }
+
+    private fun getOrCreateWrappingKey(): SecretKey {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (keyStore.getKey(STATE_KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        val keyGenerator =
+            KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        val spec = KeyGenParameterSpec.Builder(
+            STATE_KEY_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .build()
+        keyGenerator.init(spec)
+        return keyGenerator.generateKey()
     }
 
     private fun selectAssetName(): String {

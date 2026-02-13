@@ -28,18 +28,20 @@ fn extract_js_value(body: &str, key: &str) -> Option<String> {
 
 fn fetch_vps_config(host: &str) -> Result<(u16, Vec<u8>), String> {
     let url = format!("https://{host}/config.js");
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(5))
-        .timeout_read(Duration::from_secs(8))
-        .build();
-    let response = agent.get(&url).call().map_err(|err| format!("{err}"))?;
-    if response.status() >= 400 {
-        return Err(format!("config fetch failed: HTTP {}", response.status()));
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|err| format!("{err}"))?;
+    let response = client.get(&url).send().map_err(|err| format!("{err}"))?;
+    if response.status().as_u16() >= 400 {
+        return Err(format!(
+            "config fetch failed: HTTP {}",
+            response.status().as_u16()
+        ));
     }
-    let mut body = String::new();
-    response
-        .into_reader()
-        .read_to_string(&mut body)
+    let body = response
+        .text()
         .map_err(|err| format!("failed to read config: {err}"))?;
     let quic_port = extract_js_value(&body, "VEIL_VPS_QUIC_PORT")
         .and_then(|value| value.parse::<u16>().ok())

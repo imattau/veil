@@ -101,63 +101,60 @@ async fn main() -> Result<(), String> {
         let peers = Arc::clone(&peers);
         let endpoint = endpoint.clone();
         tokio::spawn(async move {
-            match incoming.await {
-                Ok(conn) => {
-                    let remote = conn.remote_address();
-                    if debug {
-                        eprintln!("relay accepted {remote}");
-                    }
-                    if let Ok(mut list) = peers.lock() {
-                        if !list.contains(&remote) {
-                            list.push(remote);
-                        }
-                    }
-                    while let Ok(mut recv) = conn.accept_uni().await {
-                        match recv.read_to_end(128 * 1024).await {
-                            Ok(bytes) => {
-                                if debug {
-                                    eprintln!("relay recv {} bytes from {remote}", bytes.len());
-                                }
-                                let peers = match peers.lock() {
-                                    Ok(list) => list.clone(),
-                                    Err(_) => Vec::new(),
-                                };
-                                for peer in peers {
-                                    if peer == remote {
-                                        continue;
-                                    }
-                                    if debug {
-                                        eprintln!("relay connect to {peer}");
-                                    }
-                                    if let Ok(connecting) = endpoint.connect(peer, "127.0.0.1") {
-                                        if let Ok(Ok(conn)) =
-                                            tokio::time::timeout(Duration::from_secs(5), connecting)
-                                                .await
-                                        {
-                                            if debug {
-                                                eprintln!("relay connected to {peer}");
-                                            }
-                                            if let Ok(mut stream) = conn.open_uni().await {
-                                                let _ = stream.write_all(&bytes).await;
-                                                let _ = stream.finish();
-                                                let _ = stream.stopped().await;
-                                                if debug {
-                                                    eprintln!("relay sent to {peer}");
-                                                }
-                                            }
-                                        } else if debug {
-                                            eprintln!("relay connect timeout to {peer}");
-                                        }
-                                    } else if debug {
-                                        eprintln!("relay connect failed to {peer}");
-                                    }
-                                }
-                            }
-                            Err(_) => break,
-                        }
+            if let Ok(conn) = incoming.await {
+                let remote = conn.remote_address();
+                if debug {
+                    eprintln!("relay accepted {remote}");
+                }
+                if let Ok(mut list) = peers.lock() {
+                    if !list.contains(&remote) {
+                        list.push(remote);
                     }
                 }
-                Err(_) => {}
+                while let Ok(mut recv) = conn.accept_uni().await {
+                    match recv.read_to_end(128 * 1024).await {
+                        Ok(bytes) => {
+                            if debug {
+                                eprintln!("relay recv {} bytes from {remote}", bytes.len());
+                            }
+                            let peers = match peers.lock() {
+                                Ok(list) => list.clone(),
+                                Err(_) => Vec::new(),
+                            };
+                            for peer in peers {
+                                if peer == remote {
+                                    continue;
+                                }
+                                if debug {
+                                    eprintln!("relay connect to {peer}");
+                                }
+                                if let Ok(connecting) = endpoint.connect(peer, "127.0.0.1") {
+                                    if let Ok(Ok(conn)) =
+                                        tokio::time::timeout(Duration::from_secs(5), connecting)
+                                            .await
+                                    {
+                                        if debug {
+                                            eprintln!("relay connected to {peer}");
+                                        }
+                                        if let Ok(mut stream) = conn.open_uni().await {
+                                            let _ = stream.write_all(&bytes).await;
+                                            let _ = stream.finish();
+                                            let _ = stream.stopped().await;
+                                            if debug {
+                                                eprintln!("relay sent to {peer}");
+                                            }
+                                        }
+                                    } else if debug {
+                                        eprintln!("relay connect timeout to {peer}");
+                                    }
+                                } else if debug {
+                                    eprintln!("relay connect failed to {peer}");
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
             }
         });
     }

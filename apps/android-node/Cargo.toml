@@ -17,7 +17,8 @@ rand = { workspace = true }
 base64 = "0.22"
 hex = "0.4"
 blake3 = "1"
-ureq = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
+k256 = { version = "0.13", features = ["ecdh", "arithmetic", "std"] }
 veil-core = { path = "../../crates/veil-core" }
 veil-crypto = { path = "../../crates/veil-crypto" }
 veil-codec = { path = "../../crates/veil-codec" }

@@ -11,6 +11,7 @@ import './models/node_event.dart';
 import './models/node_state.dart';
 
 class NodeService extends ChangeNotifier {
+  static const int _maxEvents = 300;
   NodeState _state = NodeState.initial();
   final MethodChannel _channel = const MethodChannel('veil/node_service');
   final http.Client _client = http.Client();
@@ -21,6 +22,7 @@ class NodeService extends ChangeNotifier {
   bool _disposed = false;
 
   final List<NodeEvent> _events = [];
+  final Set<int> _eventSeqs = <int>{};
   final List<NodeEvent> _feedEvents = [];
   final Map<String, NodeEvent> _profiles = {};
   final Map<String, String> _decryptedPayloads = {};
@@ -52,27 +54,32 @@ class NodeService extends ChangeNotifier {
   }
 
   Future<void> start() async {
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true, lastError: _state.lastError));
+    if (!_beginBusyOperation('Start')) return;
+    var started = false;
     try {
       final result = await _channel.invokeMethod('start');
       _applyServiceResult(result);
+      started = true;
     } catch (err) {
       _setState(_state.copyWith(lastError: 'Start failed: $err'));
     } finally {
       _setState(_state.copyWith(busy: false));
-      await Future.delayed(const Duration(seconds: 2));
-      await _refreshServiceStatus();
-      await refresh();
-
-      if (_state.identityHex == null || _state.identityHex!.isEmpty) {
-        await rotateIdentity();
-      }
-
-      await fetchFeed();
-      await connectEvents();
-      _startPoller();
     }
+    if (!started) {
+      return;
+    }
+    await Future.delayed(const Duration(seconds: 2));
+    await _refreshServiceStatus();
+    if (!_state.running) {
+      return;
+    }
+    await refresh();
+    if (_state.identityHex == null || _state.identityHex!.isEmpty) {
+      await rotateIdentity();
+    }
+    await fetchFeed();
+    await connectEvents();
+    _startPoller();
   }
 
   void _startPoller() {
@@ -81,8 +88,7 @@ class NodeService extends ChangeNotifier {
   }
 
   Future<void> stop() async {
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true, lastError: _state.lastError));
+    if (!_beginBusyOperation('Stop')) return;
     try {
       final result = await _channel.invokeMethod('stop');
       _applyServiceResult(result);
@@ -147,8 +153,7 @@ class NodeService extends ChangeNotifier {
   }
 
   Future<void> rotateIdentity() async {
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true, lastError: _state.lastError));
+    if (!_beginBusyOperation('Rotate identity')) return;
     try {
       final response = await _client
           .post(Uri.parse('$_baseUrl/identity/rotate'), headers: _authHeader)
@@ -211,29 +216,35 @@ class NodeService extends ChangeNotifier {
 
   Future<void> fetchFeed() async {
     final result = await _getJson('/feed');
+    var changed = false;
     if (result != null && result['events'] is List) {
       final list = result['events'] as List;
       debugPrint('[NodeService] Fetched ${list.length} events from history');
       for (var item in list) {
         if (item is Map<String, dynamic>) {
           final event = NodeEvent.fromJson(item);
-          _events.add(event);
+          if (!_insertEvent(event)) {
+            continue;
+          }
+          changed = true;
           if (event.isFeedBundle) {
             _addFeedEvent(event);
           }
         }
       }
+    }
+    if (changed) {
       notifyListeners();
     }
   }
 
   Future<void> publishRaw({required String payload, int namespace = 32}) async {
-    if (_state.busy) return;
+    if (!_beginBusyOperation('Publish payload')) return;
     if (payload.trim().isEmpty) {
       _setState(_state.copyWith(lastError: 'Payload is empty'));
+      _setState(_state.copyWith(busy: false));
       return;
     }
-    _setState(_state.copyWith(busy: true));
     try {
       final response = await _client
           .post(
@@ -261,8 +272,7 @@ class NodeService extends ChangeNotifier {
     String channelId = 'general',
     int namespace = 32,
   }) async {
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Publish post')) return;
     try {
       final encodedMediaRoots = mediaRoots
           .map(_hexRootToBytes)
@@ -307,8 +317,7 @@ class NodeService extends ChangeNotifier {
     String channelId = 'general',
     int namespace = 32,
   }) async {
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Publish poll')) return;
     try {
       await _refreshServiceStatus();
       final bundle = {
@@ -347,15 +356,15 @@ class NodeService extends ChangeNotifier {
     String channelId = 'general',
     int namespace = 32,
   }) async {
-    if (_state.busy) return;
+    if (!_beginBusyOperation('Publish poll vote')) return;
     final pollRootBytes = _hexRootToBytes(pollRoot);
     if (pollRootBytes == null) {
       _setState(
         _state.copyWith(lastError: 'Poll vote failed: invalid poll root'),
       );
+      _setState(_state.copyWith(busy: false));
       return;
     }
-    _setState(_state.copyWith(busy: true));
     try {
       await _refreshServiceStatus();
       final bundle = {
@@ -395,8 +404,7 @@ class NodeService extends ChangeNotifier {
       _setState(_state.copyWith(lastError: 'Channel is empty'));
       return false;
     }
-    if (_state.busy) return false;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Subscribe')) return false;
     try {
       final response = await _client
           .post(
@@ -429,8 +437,7 @@ class NodeService extends ChangeNotifier {
       _setState(_state.copyWith(lastError: 'Channel is empty'));
       return false;
     }
-    if (_state.busy) return false;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Unsubscribe')) return false;
     try {
       final response = await _client
           .post(
@@ -463,15 +470,15 @@ class NodeService extends ChangeNotifier {
     String channelId = 'general',
     int namespace = 32,
   }) async {
-    if (_state.busy) return;
+    if (!_beginBusyOperation('Publish reaction')) return;
     final targetRootBytes = _hexRootToBytes(targetRoot);
     if (targetRootBytes == null) {
       _setState(
         _state.copyWith(lastError: 'Reaction failed: invalid target root'),
       );
+      _setState(_state.copyWith(busy: false));
       return;
     }
-    _setState(_state.copyWith(busy: true));
     try {
       await _refreshServiceStatus();
       final bundle = {
@@ -509,15 +516,15 @@ class NodeService extends ChangeNotifier {
     String channelId = 'general',
     int namespace = 32,
   }) async {
-    if (_state.busy) return;
+    if (!_beginBusyOperation('Publish boost')) return;
     final targetRootBytes = _hexRootToBytes(targetRoot);
     if (targetRootBytes == null) {
       _setState(
         _state.copyWith(lastError: 'Boost failed: invalid target root'),
       );
+      _setState(_state.copyWith(busy: false));
       return;
     }
-    _setState(_state.copyWith(busy: true));
     try {
       await _refreshServiceStatus();
       final bundle = {
@@ -556,13 +563,13 @@ class NodeService extends ChangeNotifier {
     int namespace = 32,
     String? message,
   }) async {
-    if (_state.busy) return;
+    if (!_beginBusyOperation('Publish zap')) return;
     final targetRootBytes = _hexRootToBytes(targetRoot);
     if (targetRootBytes == null) {
       _setState(_state.copyWith(lastError: 'Zap failed: invalid target root'));
+      _setState(_state.copyWith(busy: false));
       return;
     }
-    _setState(_state.copyWith(busy: true));
     try {
       await _refreshServiceStatus();
       final bundle = {
@@ -604,28 +611,19 @@ class NodeService extends ChangeNotifier {
     String channelId = 'dm',
     int namespace = 32,
   }) async {
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Publish direct message')) return;
     try {
-      // For this simplified UI, we are sending the text to /direct_message.
-      // In production, the node would perform E2E encryption before broadcasting.
-      final bundle = {
-        'meta': {
-          'version': 1,
-          'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        },
-        'channel_id': channelId,
-        'author_pubkey_hex': _state.identityHex ?? '',
-        'recipient_pubkey_hex': recipientPubkey,
-        'ciphertext_root': _pseudoRootFromText(text),
-        'reply_to_root': _hexRootToBytes(replyToRoot),
-      };
-
       final response = await _client
           .post(
-            Uri.parse('$_baseUrl/direct_message'),
+            Uri.parse('$_baseUrl/direct_message_text'),
             headers: {'content-type': 'application/json', ..._authHeader},
-            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
+            body: jsonEncode({
+              'namespace': namespace,
+              'channel_id': channelId,
+              'recipient_pubkey_hex': recipientPubkey,
+              'text': text,
+              'reply_to_root': _hexRootToBytes(replyToRoot),
+            }),
           )
           .timeout(const Duration(seconds: 4));
 
@@ -645,30 +643,24 @@ class NodeService extends ChangeNotifier {
     required String groupId,
     required String text,
     String? replyToRoot,
+    List<String> memberPubkeys = const [],
     String channelId = 'group',
     int namespace = 32,
   }) async {
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Publish group message')) return;
     try {
-      await _refreshServiceStatus();
-      final bundle = {
-        'meta': {
-          'version': 1,
-          'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        },
-        'channel_id': channelId,
-        'author_pubkey_hex': _state.identityHex ?? '',
-        'group_id': groupId,
-        'ciphertext_root': _pseudoRootFromText(text),
-        'reply_to_root': _hexRootToBytes(replyToRoot),
-      };
-
       final response = await _client
           .post(
-            Uri.parse('$_baseUrl/group_message'),
+            Uri.parse('$_baseUrl/group_message_text'),
             headers: {'content-type': 'application/json', ..._authHeader},
-            body: jsonEncode({'namespace': namespace, 'bundle': bundle}),
+            body: jsonEncode({
+              'namespace': namespace,
+              'channel_id': channelId,
+              'group_id': groupId,
+              'text': text,
+              'reply_to_root': _hexRootToBytes(replyToRoot),
+              'member_pubkeys': memberPubkeys,
+            }),
           )
           .timeout(const Duration(seconds: 4));
 
@@ -686,6 +678,43 @@ class NodeService extends ChangeNotifier {
     }
   }
 
+  Future<void> shareGroupKey({
+    required String groupId,
+    required List<String> memberPubkeys,
+    String channelId = 'group',
+    bool rotateKey = false,
+    int namespace = 32,
+  }) async {
+    if (!_beginBusyOperation('Share group key')) return;
+    try {
+      final response = await _client
+          .post(
+            Uri.parse('$_baseUrl/group_key/share'),
+            headers: {'content-type': 'application/json', ..._authHeader},
+            body: jsonEncode({
+              'namespace': namespace,
+              'channel_id': channelId,
+              'group_id': groupId,
+              'member_pubkeys': memberPubkeys,
+              'rotate_key': rotateKey,
+            }),
+          )
+          .timeout(const Duration(seconds: 4));
+
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _setState(
+          _state.copyWith(
+            lastError: 'Group key share failed: ${response.statusCode}',
+          ),
+        );
+      }
+    } catch (err) {
+      _setState(_state.copyWith(lastError: 'Group key share failed: $err'));
+    } finally {
+      _setState(_state.copyWith(busy: false));
+    }
+  }
+
   Future<void> publishProfile({
     required String displayName,
     required String bio,
@@ -694,8 +723,7 @@ class NodeService extends ChangeNotifier {
     String channelId = 'general',
     int namespace = 32,
   }) async {
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Publish profile')) return;
     try {
       final bundle = {
         'meta': {
@@ -746,8 +774,7 @@ class NodeService extends ChangeNotifier {
   }
 
   Future<String?> uploadMedia(Uint8List bytes) async {
-    if (_state.busy) return null;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Upload media')) return null;
     try {
       final response = await _client
           .post(
@@ -778,12 +805,12 @@ class NodeService extends ChangeNotifier {
   }
 
   Future<void> updatePolicyAction(String action, String pubkeyHex) async {
-    if (_state.busy) return;
+    if (!_beginBusyOperation('Policy update')) return;
     if (pubkeyHex.trim().isEmpty) {
       _setState(_state.copyWith(lastError: 'Pubkey is empty'));
+      _setState(_state.copyWith(busy: false));
       return;
     }
-    _setState(_state.copyWith(busy: true));
     try {
       final response = await _client
           .post(
@@ -817,8 +844,7 @@ class NodeService extends ChangeNotifier {
       _setState(_state.copyWith(lastError: 'Follow failed: invalid pubkey'));
       return;
     }
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Follow')) return;
     try {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       final bundle = {
@@ -863,8 +889,7 @@ class NodeService extends ChangeNotifier {
       _setState(_state.copyWith(lastError: 'Mute failed: invalid pubkey'));
       return;
     }
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Mute')) return;
     try {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       final bundle = {
@@ -910,8 +935,7 @@ class NodeService extends ChangeNotifier {
       _setState(_state.copyWith(lastError: 'Block failed: invalid pubkey'));
       return;
     }
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Block')) return;
     try {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       final bundle = {
@@ -990,8 +1014,7 @@ class NodeService extends ChangeNotifier {
   }
 
   Future<void> importIdentity(String secretKeyHex) async {
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Import identity')) return;
     try {
       final response = await _client
           .post(
@@ -1031,8 +1054,7 @@ class NodeService extends ChangeNotifier {
       _setState(_state.copyWith(lastError: 'Contact failed: invalid pubkey'));
       return;
     }
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Save contact')) return;
     try {
       final response = await _client
           .post(
@@ -1077,8 +1099,7 @@ class NodeService extends ChangeNotifier {
       );
       return;
     }
-    if (_state.busy) return;
-    _setState(_state.copyWith(busy: true));
+    if (!_beginBusyOperation('Delete contact')) return;
     try {
       final response = await _client
           .post(
@@ -1184,10 +1205,8 @@ class NodeService extends ChangeNotifier {
           '[NodeService] Received event: ${event.event} (seq: ${event.seq})',
         );
 
-        // Add to main event log (newest first)
-        _events.insert(0, event);
-        if (_events.length > 100) {
-          _events.removeLast();
+        if (!_insertEvent(event)) {
+          return;
         }
 
         if (event.isFeedBundle) {
@@ -1267,7 +1286,9 @@ class NodeService extends ChangeNotifier {
   @visibleForTesting
   void testInjectEvent(Map<String, dynamic> json) {
     final event = NodeEvent.fromJson(json);
-    _events.insert(0, event);
+    if (!_insertEvent(event)) {
+      return;
+    }
     if (event.isFeedBundle) {
       _addFeedEvent(event);
     }
@@ -1330,18 +1351,34 @@ class NodeService extends ChangeNotifier {
         .toList();
   }
 
-  List<int> _pseudoRootFromText(String text) {
-    final out = List<int>.filled(32, 0);
-    final bytes = utf8.encode(text);
-    for (var i = 0; i < bytes.length; i++) {
-      final idx = i % 32;
-      out[idx] = (out[idx] + bytes[i] + i) & 0xFF;
-    }
-    return out;
-  }
-
   void clearError() {
     _setState(_state.copyWith(lastError: null));
+  }
+
+  bool _beginBusyOperation(String operation) {
+    if (_state.busy) {
+      _setState(
+        _state.copyWith(
+          lastError: '$operation skipped: another operation is in progress',
+        ),
+      );
+      return false;
+    }
+    _setState(_state.copyWith(busy: true, lastError: _state.lastError));
+    return true;
+  }
+
+  bool _insertEvent(NodeEvent event) {
+    if (_eventSeqs.contains(event.seq)) {
+      return false;
+    }
+    _events.insert(0, event);
+    _eventSeqs.add(event.seq);
+    if (_events.length > _maxEvents) {
+      final removed = _events.removeLast();
+      _eventSeqs.remove(removed.seq);
+    }
+    return true;
   }
 
   void _setState(NodeState next) {

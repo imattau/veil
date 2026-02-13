@@ -17,7 +17,20 @@ async fn main() {
     let filter = std::env::var("VEIL_NODE_LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let token = std::env::var("VEIL_NODE_TOKEN").unwrap_or_default();
+    let token = std::env::var("VEIL_NODE_TOKEN")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let token = if token.is_empty() {
+        let generated = uuid::Uuid::new_v4().to_string();
+        tracing::warn!(
+            "VEIL_NODE_TOKEN was not set; generated an ephemeral token for this process"
+        );
+        generated
+    } else {
+        token
+    };
+    let allow_identity_export = env_bool("VEIL_NODE_ALLOW_IDENTITY_EXPORT", false);
     let host = std::env::var("VEIL_NODE_HOST")
         .ok()
         .and_then(|value| value.parse::<IpAddr>().ok())
@@ -235,6 +248,7 @@ async fn main() {
         node,
         protocol,
         auth_token: token,
+        allow_identity_export,
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
 

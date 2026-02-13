@@ -125,7 +125,7 @@ impl NodeSim {
                 stats: &mut self.stats,
             },
             &XChaCha20Poly1305Cipher,
-            &Ed25519Verifier::default(),
+            &Ed25519Verifier,
         )
         .ok()?
         .and_then(|event| match event {
@@ -145,7 +145,7 @@ fn swarm_sim_multilane_in_memory() {
     let pubkey = [0x44; 32];
     let tag = derive_feed_tag(&pubkey, Namespace(32));
 
-    let mut nodes = vec![
+    let mut nodes = [
         NodeSim::new("node-a", encrypt_key),
         NodeSim::new("node-b", encrypt_key),
         NodeSim::new("node-c", encrypt_key),
@@ -163,9 +163,9 @@ fn swarm_sim_multilane_in_memory() {
     publisher.state.subscriptions.insert(tag);
     for step in 1..=20 {
         publisher.publish(payload.clone(), tag, step);
-        for i in 0..nodes.len() {
-            route_in_memory_outbound(&mut publisher.fast, &mut nodes[i].fast, "publisher");
-            route_in_memory_outbound(&mut publisher.fallback, &mut nodes[i].fallback, "publisher");
+        for node in nodes.iter_mut() {
+            route_in_memory_outbound(&mut publisher.fast, &mut node.fast, "publisher");
+            route_in_memory_outbound(&mut publisher.fallback, &mut node.fallback, "publisher");
         }
         for i in 0..nodes.len() {
             for j in 0..nodes.len() {
@@ -227,7 +227,7 @@ fn swarm_sim_multilane_ws_with_fallback() {
     let mut server = WebSocketServerAdapter::listen(WebSocketServerAdapterConfig::new(ws_bind))
         .expect("ws server");
 
-    let mut nodes = vec![
+    let mut nodes = [
         (
             "node-a",
             WebSocketAdapter::connect(WebSocketAdapterConfig::new(ws_url.clone(), "node-a"))
@@ -354,7 +354,34 @@ fn swarm_sim_multilane_ws_with_fallback() {
 
         for _ in 0..3 {
             for (_, fast, fallback, state, _, stats) in nodes.iter_mut() {
-                if let Ok(Some(event)) = pump_multi_lane_tick_with_config(
+                if let Ok(Some(veil_node::receive::ReceiveEvent::Delivered { payload, .. })) =
+                    pump_multi_lane_tick_with_config(
+                        state,
+                        fast,
+                        fallback,
+                        ConfigMultiLanePumpParams {
+                            fast_peers: &peers,
+                            fallback_peers: &peers,
+                            now_step: step,
+                            decrypt_key: &encrypt_key,
+                            config: &cfg,
+                            stats,
+                        },
+                        &XChaCha20Poly1305Cipher,
+                        &Ed25519Verifier,
+                    )
+                {
+                    delivered.insert("delivered".to_string(), payload);
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    for step in 51..=60 {
+        for (_, fast, fallback, state, _, stats) in nodes.iter_mut() {
+            if let Ok(Some(veil_node::receive::ReceiveEvent::Delivered { payload, .. })) =
+                pump_multi_lane_tick_with_config(
                     state,
                     fast,
                     fallback,
@@ -367,37 +394,10 @@ fn swarm_sim_multilane_ws_with_fallback() {
                         stats,
                     },
                     &XChaCha20Poly1305Cipher,
-                    &Ed25519Verifier::default(),
-                ) {
-                    if let veil_node::receive::ReceiveEvent::Delivered { payload, .. } = event {
-                        delivered.insert("delivered".to_string(), payload);
-                    }
-                }
-            }
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-
-    for step in 51..=60 {
-        for (_, fast, fallback, state, _, stats) in nodes.iter_mut() {
-            if let Ok(Some(event)) = pump_multi_lane_tick_with_config(
-                state,
-                fast,
-                fallback,
-                ConfigMultiLanePumpParams {
-                    fast_peers: &peers,
-                    fallback_peers: &peers,
-                    now_step: step,
-                    decrypt_key: &encrypt_key,
-                    config: &cfg,
-                    stats,
-                },
-                &XChaCha20Poly1305Cipher,
-                &Ed25519Verifier::default(),
-            ) {
-                if let veil_node::receive::ReceiveEvent::Delivered { payload, .. } = event {
-                    delivered.insert("delivered".to_string(), payload);
-                }
+                    &Ed25519Verifier,
+                )
+            {
+                delivered.insert("delivered".to_string(), payload);
             }
         }
     }
@@ -459,7 +459,7 @@ fn swarm_sim_delivered_payload_is_signed_with_identity() {
     assert_eq!(object.sender_pubkey, Some(identity_pubkey));
     let digest = object_signature_message_digest(&object).expect("digest");
     let signature = object.signature.expect("signature");
-    let ok = Ed25519Verifier::default()
+    let ok = Ed25519Verifier
         .verify(identity_pubkey, &digest, signature.0)
         .expect("verify");
     assert!(ok);
@@ -532,7 +532,7 @@ fn swarm_sim_multilane_emits_feed_bundle_event() {
     });
     let payload = serde_json::to_vec(&bundle).expect("encode feed bundle");
 
-    let mut nodes = vec![
+    let mut nodes = [
         NodeSim::new("node-a", encrypt_key),
         NodeSim::new("node-b", encrypt_key),
         NodeSim::new("node-c", encrypt_key),
@@ -549,9 +549,9 @@ fn swarm_sim_multilane_emits_feed_bundle_event() {
 
     for step in 1..=20 {
         publisher.publish(payload.clone(), tag, step);
-        for i in 0..nodes.len() {
-            route_in_memory_outbound(&mut publisher.fast, &mut nodes[i].fast, "publisher");
-            route_in_memory_outbound(&mut publisher.fallback, &mut nodes[i].fallback, "publisher");
+        for node in nodes.iter_mut() {
+            route_in_memory_outbound(&mut publisher.fast, &mut node.fast, "publisher");
+            route_in_memory_outbound(&mut publisher.fallback, &mut node.fallback, "publisher");
         }
         for i in 0..nodes.len() {
             for j in 0..nodes.len() {

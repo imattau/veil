@@ -1,8 +1,48 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:veil_social/logic/models/node_event.dart';
 import 'package:veil_social/logic/social_controller.dart';
+import 'package:veil_social/logic/node_contact_config.dart';
 import 'package:veil_social/logic/node_service.dart';
 import 'package:veil_social/logic/messaging_controller.dart';
+
+class _OptimisticNodeService extends NodeService {
+  final Completer<void> reactionCompleter = Completer<void>();
+  final Completer<void> repostCompleter = Completer<void>();
+  final Completer<void> postCompleter = Completer<void>();
+
+  @override
+  Future<void> publishReaction({
+    required String targetRoot,
+    String actionCode = 'like',
+    String channelId = 'general',
+    int namespace = 32,
+  }) {
+    return reactionCompleter.future;
+  }
+
+  @override
+  Future<void> publishRepost({
+    required String targetRoot,
+    String? comment,
+    String channelId = 'general',
+    int namespace = 32,
+  }) {
+    return repostCompleter.future;
+  }
+
+  @override
+  Future<void> publishPost({
+    required String text,
+    String? replyToRoot,
+    List<String> mediaRoots = const [],
+    String channelId = 'general',
+    int namespace = 32,
+  }) {
+    return postCompleter.future;
+  }
+}
 
 // Mock NodeService if needed, but since it's a ChangeNotifier we can use a real one
 // or a simplified subclass for testing.
@@ -70,7 +110,75 @@ void main() {
     });
   });
 
+  group('NodeContactConfig', () {
+    test('derives defaults from bare host', () {
+      final config = deriveNodeContactConfig('veilnode.3nostr.com');
+      expect(config, isNotNull);
+      expect(config!.peerId, 'veilnode.3nostr.com');
+      expect(config.wsUrl, 'wss://veilnode.3nostr.com/ws');
+      expect(config.quicAddr, 'veilnode.3nostr.com:5000');
+    });
+
+    test('derives from explicit websocket URL', () {
+      final config = deriveNodeContactConfig('wss://example.com:8443/socket');
+      expect(config, isNotNull);
+      expect(config!.peerId, 'example.com');
+      expect(config.wsUrl, 'wss://example.com:8443/socket');
+      expect(config.quicAddr, 'example.com:5000');
+    });
+
+    test('supports veil vps profile URI', () {
+      final config = deriveNodeContactConfig(
+        'veil://vps?ws=wss%3A%2F%2Frelay.example%2Fws&quic=quic%3A%2F%2Frelay.example%3A5001',
+      );
+      expect(config, isNotNull);
+      expect(config!.peerId, 'relay.example');
+      expect(config.wsUrl, 'wss://relay.example/ws');
+      expect(config.quicAddr, 'relay.example:5001');
+    });
+  });
+
+  group('NodeService', () {
+    test('deduplicates repeated event sequence numbers', () {
+      final service = NodeService();
+      final eventJson = {
+        'seq': 42,
+        'event': 'feed_bundle',
+        'data': {'kind': 'post', 'object_root': 'root42', 'text': 'hello'},
+      };
+
+      service.testInjectEvent(eventJson);
+      service.testInjectEvent(eventJson);
+
+      expect(service.events.length, 1);
+      expect(service.feedEvents.length, 1);
+    });
+  });
+
   group('SocialController', () {
+    test(
+      'optimistically updates reaction/repost/comment before publish finishes',
+      () async {
+        final service = _OptimisticNodeService();
+        final controller = SocialController(service);
+
+        final reactionFuture = controller.reactToPost('rootA');
+        final repostFuture = controller.repost('rootA');
+        final commentFuture = controller.submitReply('hello now', 'rootA');
+
+        expect(controller.getReactions('rootA').length, 1);
+        expect(controller.getReposts('rootA').length, 1);
+        expect(controller.getComments('rootA').length, 1);
+        expect(controller.getComments('rootA').first.postText, 'hello now');
+
+        service.reactionCompleter.complete();
+        service.repostCompleter.complete();
+        service.postCompleter.complete();
+
+        await Future.wait([reactionFuture, repostFuture, commentFuture]);
+      },
+    );
+
     test('aggregates reactions and boosts', () {
       final service = NodeService();
       final controller = SocialController(service);

@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::RngCore;
-use serde_json;
 use tokio::sync::Mutex;
 
 use veil_core::tags::derive_feed_tag;
@@ -545,53 +544,6 @@ fn derive_server_name(peer: &str) -> Option<String> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{default_protocol_config, erasure_mode_from_shards};
-    use veil_core::types::NAMESPACE_PUBLIC_FEED;
-    use veil_core::{Epoch, Namespace};
-    use veil_crypto::signing::NostrSigner;
-    use veil_fec::profile::ErasureCodingMode;
-    use veil_fec::sharder::{derive_object_root, object_to_shards_with_mode};
-
-    #[test]
-    fn default_protocol_config_enables_network_efficiency_policies() {
-        let cfg = default_protocol_config(
-            "ws://127.0.0.1:1/ws".to_string(),
-            "peer-a".to_string(),
-            32,
-            [0x11; 32],
-            NostrSigner::from_secret([0x22; 32]).expect("valid nostr test key"),
-        );
-
-        assert!(cfg.runtime_config.probabilistic_forwarding.enabled);
-        assert!(cfg.runtime_config.bloom_exchange.enabled);
-        assert_eq!(
-            cfg.runtime_config
-                .erasure_mode_for_namespace(NAMESPACE_PUBLIC_FEED),
-            ErasureCodingMode::Systematic
-        );
-    }
-
-    #[test]
-    fn reconstruct_mode_prefers_wire_header_mode() {
-        let object = b"public-feed-systematic".to_vec();
-        let root = derive_object_root(&object);
-        let shards = object_to_shards_with_mode(
-            &object,
-            Namespace(32),
-            Epoch(1),
-            [0x44; 32],
-            root,
-            ErasureCodingMode::Systematic,
-        )
-        .expect("systematic shards");
-
-        let mode = erasure_mode_from_shards(&shards, ErasureCodingMode::HardenedNonSystematic);
-        assert_eq!(mode, ErasureCodingMode::Systematic);
-    }
-}
-
 fn build_ws_fast(config: &ProtocolConfig) -> Result<LaneAdapter, String> {
     let ws_url = config
         .ws_url
@@ -614,8 +566,6 @@ fn build_lane_details(role: &str, snapshots: Vec<LaneSnapshot>) -> Vec<LaneDetai
             LaneDetail {
                 role: role.to_string(),
                 lane: snapshot.label.to_string(),
-                // "connected" should indicate observed traffic success, not merely
-                // that an adapter worker thread is running.
                 connected: snapshot.health.outbound_send_ok > 0
                     || snapshot.health.inbound_received > 0,
                 last_error,
@@ -684,4 +634,51 @@ fn build_fallback_adapter(config: &ProtocolConfig) -> Result<FallbackAdapter, St
     }
 
     Ok(MultiLaneAdapter::new(lanes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{default_protocol_config, erasure_mode_from_shards};
+    use veil_core::types::NAMESPACE_PUBLIC_FEED;
+    use veil_core::{Epoch, Namespace};
+    use veil_crypto::signing::NostrSigner;
+    use veil_fec::profile::ErasureCodingMode;
+    use veil_fec::sharder::{derive_object_root, object_to_shards_with_mode};
+
+    #[test]
+    fn default_protocol_config_enables_network_efficiency_policies() {
+        let cfg = default_protocol_config(
+            "ws://127.0.0.1:1/ws".to_string(),
+            "peer-a".to_string(),
+            32,
+            [0x11; 32],
+            NostrSigner::from_secret([0x22; 32]).expect("valid nostr test key"),
+        );
+
+        assert!(cfg.runtime_config.probabilistic_forwarding.enabled);
+        assert!(cfg.runtime_config.bloom_exchange.enabled);
+        assert_eq!(
+            cfg.runtime_config
+                .erasure_mode_for_namespace(NAMESPACE_PUBLIC_FEED),
+            ErasureCodingMode::Systematic
+        );
+    }
+
+    #[test]
+    fn reconstruct_mode_prefers_wire_header_mode() {
+        let object = b"public-feed-systematic".to_vec();
+        let root = derive_object_root(&object);
+        let shards = object_to_shards_with_mode(
+            &object,
+            Namespace(32),
+            Epoch(1),
+            [0x44; 32],
+            root,
+            ErasureCodingMode::Systematic,
+        )
+        .expect("systematic shards");
+
+        let mode = erasure_mode_from_shards(&shards, ErasureCodingMode::HardenedNonSystematic);
+        assert_eq!(mode, ErasureCodingMode::Systematic);
+    }
 }

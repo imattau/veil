@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../logic/node_service.dart';
 import '../../logic/social_controller.dart';
+import '../../logic/node_contact_config.dart';
 import '../theme/veil_theme.dart';
 import './profile_edit_view.dart';
 
@@ -607,18 +608,23 @@ Future<void> _showNodeContactDialog(
   NodeService service, {
   Map<String, dynamic>? existing,
 }) async {
-  final peerIdController = TextEditingController(
-    text: (existing?['peer_id'] as String?) ?? '',
-  );
-  final wsUrlController = TextEditingController(
-    text: (existing?['ws_url'] as String?) ?? '',
-  );
-  final quicController = TextEditingController(
-    text: (existing?['quic_addr'] as String?) ?? '',
-  );
-  final pubkeyController = TextEditingController(
-    text: (existing?['pubkey_hex'] as String?) ?? '',
-  );
+  final existingWsUrl = (existing?['ws_url'] as String?) ?? '';
+  final existingQuicAddr = (existing?['quic_addr'] as String?) ?? '';
+  final existingPeerId = (existing?['peer_id'] as String?) ?? '';
+  final initialAddress = (() {
+    final wsUri = Uri.tryParse(existingWsUrl);
+    if (wsUri != null && wsUri.host.isNotEmpty) {
+      return wsUri.hasPort ? '${wsUri.host}:${wsUri.port}' : wsUri.host;
+    }
+    if (existingPeerId.isNotEmpty) {
+      return existingPeerId;
+    }
+    if (existingQuicAddr.isNotEmpty) {
+      return existingQuicAddr;
+    }
+    return '';
+  })();
+  final addressController = TextEditingController(text: initialAddress);
 
   final saved = await showDialog<bool>(
     context: context,
@@ -629,34 +635,12 @@ Future<void> _showNodeContactDialog(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
-              controller: peerIdController,
+              controller: addressController,
               decoration: const InputDecoration(
-                labelText: 'Peer ID',
+                labelText: 'Node Address',
                 hintText: 'veilnode.3nostr.com',
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: wsUrlController,
-              decoration: const InputDecoration(
-                labelText: 'WebSocket URL',
-                hintText: 'wss://veilnode.3nostr.com/ws',
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: quicController,
-              decoration: const InputDecoration(
-                labelText: 'QUIC Address',
-                hintText: 'veilnode.3nostr.com:5000',
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: pubkeyController,
-              decoration: const InputDecoration(
-                labelText: 'Node Pubkey (hex)',
-                hintText: '64 hex chars',
+                helperText:
+                    'Just enter address. WS/QUIC settings are auto-configured.',
               ),
             ),
           ],
@@ -676,11 +660,18 @@ Future<void> _showNodeContactDialog(
   );
 
   if (saved == true) {
+    final derived = deriveNodeContactConfig(addressController.text);
+    if (derived == null) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Invalid node address')));
+      return;
+    }
     await service.saveContact(
-      peerId: peerIdController.text,
-      wsUrl: wsUrlController.text,
-      quicAddr: quicController.text,
-      pubkeyHex: pubkeyController.text,
+      peerId: derived.peerId,
+      wsUrl: derived.wsUrl,
+      quicAddr: derived.quicAddr,
     );
     if (!context.mounted) return;
     final err = service.state.lastError;
