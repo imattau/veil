@@ -1,16 +1,39 @@
-# veil_android_node_ui
+# VEIL Android UI
 
-A new Flutter project.
+Flutter-based social feed application designed as a thin client for the 
+[VEIL Android Node](../README.md).
+
+## Features
+
+- **Social Feed**: Chronological display of reconstructed posts with media support.
+- **Identity Management**: Automated key generation and profile publishing.
+- **Multi-Lane Connectivity**: Visual indicators for QUIC, WebSocket, and Tor lane health.
+- **Web-of-Trust**: Local trust tiering (Trusted, Known, Unknown, Muted, Blocked).
+- **Secure Messaging**: E2E encrypted direct and group messaging.
 
 ## Getting Started
 
-This project is a starting point for a Flutter application.
+This UI communicates with the local node process via localhost HTTP and WebSocket. 
+It **does not** use the VEIL SDK directly for protocol logic; it relies on the 
+node's RPC interface.
 
-A few resources to get you started if this is your first Flutter project:
+### Running
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+To run the UI in development mode against a connected device or emulator:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+cd apps/android-node/src/ui
+flutter run
+```
+
+*Note: Ensure the background node service is running, or start the node binary 
+manually if testing UI components in isolation.*
+
+## Architecture
+
+- **Logic Layer**: `lib/logic` contains controllers for social state, messaging, 
+  and node service communication.
+- **UI Layer**: `lib/ui` contains screens and widgets following the VEIL design 
+  system (Glassmorphism, high-contrast dark theme).
+- **Native Integration**: `android/` contains the Kotlin service wrapper that 
+  orchestrates the native Rust node.

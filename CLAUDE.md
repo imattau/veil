@@ -69,8 +69,7 @@ veil-schema-feed   App-level feed bundle schemas (posts, profiles, reactions, DM
 ### Applications
 
 - **`apps/veil-vps-node`** -- Production VPS edge forwarder with multi-transport, SQLite settings, Nostr identity, admin web dashboard, peer discovery. Configured via 100+ env vars (prefix `VEIL_VPS_`).
-- **`apps/android-node`** -- Android foreground service wrapping Rust node. Per-ABI binaries (arm64-v8a, armeabi-v7a, x86_64) + Kotlin service + Dart/Flutter UI. Build with `scripts/build_android_node.sh`.
-- **`apps/veil_android`** -- Flutter social feed app, thin client over local node RPC.
+- **`apps/android-node`** -- Android foreground service wrapping Rust node. Per-ABI binaries (arm64-v8a, armeabi-v7a, x86_64) + Kotlin service + Embedded Flutter social feed UI. Build with `scripts/build_android_node.sh`.
 - **`apps/veil-desktop`** -- Electron + React desktop app using veil-sdk-js.
 - **`apps/veil-desktop-relay`** -- Minimal WebSocket relay for desktop app.
 

@@ -99,6 +99,7 @@ Implemented lanes include QUIC, Tor SOCKS5, WebSocket, and BLE (btleplug backend
 - `crates/veil-node` — runtime, forwarding, cache, ACK handling
 - `crates/veil-transport-*` — transport adapters (QUIC, Tor, WebSocket, BLE)
 - `crates/veil-sim` — e2e, performance, stress, and memory tests
+- `apps/android-node` — Android foreground service wrapping Rust node + Flutter UI
 - `apps/veil-vps-node` — VPS edge forwarder + hot cache
 - `apps/veil-desktop` — Electron + React example
 - `apps/veil-flutter-example` — Flutter example app
