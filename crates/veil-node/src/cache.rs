@@ -1,6 +1,7 @@
 use crate::policy::{ShardMeta, TrustTier, WotPolicy};
 use crate::state::{CachedShard, NodeState};
-use veil_core::ShardId;
+use veil_codec::shard::decode_shard_cbor;
+use veil_core::{ObjectRoot, ShardId};
 
 /// Inserts/updates shard bytes in cache and updates basic metadata counters.
 pub fn cache_put(
@@ -10,6 +11,24 @@ pub fn cache_put(
     now_step: u64,
     ttl_steps: u64,
 ) {
+    let object_root = decode_shard_cbor(&shard_bytes)
+        .ok()
+        .map(|s| s.header.object_root);
+    cache_put_internal(node, shard_id, shard_bytes, now_step, ttl_steps, object_root);
+    *node.replica_estimate.entry(shard_id).or_insert(0) += 1;
+    node.shard_tier
+        .entry(shard_id)
+        .or_insert(TrustTier::Unknown);
+}
+
+fn cache_put_internal(
+    node: &mut NodeState,
+    shard_id: ShardId,
+    shard_bytes: Vec<u8>,
+    now_step: u64,
+    ttl_steps: u64,
+    object_root: Option<ObjectRoot>,
+) {
     node.cache.insert(
         shard_id,
         CachedShard {
@@ -18,10 +37,10 @@ pub fn cache_put(
             last_seen_step: now_step,
         },
     );
-    *node.replica_estimate.entry(shard_id).or_insert(0) += 1;
-    node.shard_tier
-        .entry(shard_id)
-        .or_insert(TrustTier::Unknown);
+    if let Some(root) = object_root {
+        node.shard_index.entry(root).or_default().insert(shard_id);
+        node.shard_to_root.insert(shard_id, root);
+    }
 }
 
 /// Inserts shard bytes with WoT-aware cache limits and eviction policy.
@@ -36,14 +55,10 @@ pub fn cache_put_with_policy(
     max_cache_shards: usize,
     policy: &(impl WotPolicy + ?Sized),
 ) {
-    node.cache.insert(
-        shard_id,
-        CachedShard {
-            bytes: shard_bytes,
-            expiry_step: now_step + ttl_steps,
-            last_seen_step: now_step,
-        },
-    );
+    let object_root = decode_shard_cbor(&shard_bytes)
+        .ok()
+        .map(|s| s.header.object_root);
+    cache_put_internal(node, shard_id, shard_bytes, now_step, ttl_steps, object_root);
     if matches!(tier, TrustTier::Trusted | TrustTier::Known) {
         *node.replica_estimate.entry(shard_id).or_insert(0) += 1;
     } else {
@@ -156,6 +171,14 @@ fn remove_shard(node: &mut NodeState, shard_id: ShardId) {
     node.replica_estimate.remove(&shard_id);
     node.shard_tier.remove(&shard_id);
     node.shard_requested.remove(&shard_id);
+    if let Some(root) = node.shard_to_root.remove(&shard_id) {
+        if let Some(shards) = node.shard_index.get_mut(&root) {
+            shards.remove(&shard_id);
+            if shards.is_empty() {
+                node.shard_index.remove(&root);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

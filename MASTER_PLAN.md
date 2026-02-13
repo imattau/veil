@@ -43,6 +43,12 @@ This document consolidates all feature-specific plans and roadmaps for the VEIL 
 - [x] Add end-to-end example (`object -> shards -> forward -> reconstruct -> ACK`).
 - [x] Ensure `cargo fmt`, `clippy`, and `cargo test --workspace` are all green.
 
+### M7 - Networking Stability & Optimization
+- [x] **Shard Indexing**: Index cached shards by `object_root` to avoid full cache scans during reconstruction.
+- [x] **Adaptive Ticking**: Implement adaptive sleep in `QueueWorker` (Android) to handle bursty traffic efficiently.
+- [x] **QUIC SNI Flex**: Support per-peer server names in QUIC adapter to allow connecting to multiple distinct VPS nodes.
+- [x] **Error Clarity**: Add granular error codes to `LaneDetail` for better remote diagnostics of transport failures.
+
 ---
 
 ## 2. Transport Adapters (`crates/veil-transport-*`)

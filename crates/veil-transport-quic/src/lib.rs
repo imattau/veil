@@ -115,6 +115,7 @@ pub enum QuicAdapterError {
 #[derive(Debug)]
 struct OutboundMessage {
     peer: SocketAddr,
+    server_name: String,
     bytes: Vec<u8>,
 }
 
@@ -244,9 +245,14 @@ impl TransportAdapter for QuicAdapter {
             }
         }
         let peer_addr = resolve_peer_addr(peer).map_err(|_| QuicAdapterError::InvalidPeer)?;
+        let server_name = derive_server_name(peer).unwrap_or_else(|| {
+            // Default to configured server_name if peer string doesn't look like a host
+            "veil-node".to_string()
+        });
         self.outbound_tx
             .try_send(OutboundMessage {
                 peer: peer_addr,
+                server_name,
                 bytes: bytes.to_vec(),
             })
             .map_err(|err| match err {
@@ -279,6 +285,8 @@ impl TransportAdapter for QuicAdapter {
             inbound_received: m.inbound_received,
             inbound_dropped: m.inbound_dropped,
             reconnect_attempts: 0,
+            last_error: None,
+            last_error_code: None,
         }
     }
 }
@@ -328,7 +336,7 @@ async fn run_quic_worker(
             Some(msg) = outbound_rx.recv() => {
                 let endpoint = endpoint.clone();
                 let metrics = Arc::clone(&metrics);
-                let server_name = config.server_name.clone();
+                let server_name = msg.server_name;
                 let connect_timeout = config.connect_timeout;
                 let send_timeout = config.send_timeout;
                 tokio::spawn(async move {
@@ -607,6 +615,24 @@ fn resolve_peer_addr(peer: &str) -> Result<SocketAddr, QuicAdapterError> {
         .to_socket_addrs()
         .map_err(|_| QuicAdapterError::InvalidPeer)?;
     addrs.next().ok_or(QuicAdapterError::InvalidPeer)
+}
+
+fn derive_server_name(peer: &str) -> Option<String> {
+    let trimmed = peer.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let without_scheme = trimmed
+        .strip_prefix("quic://")
+        .or_else(|| trimmed.strip_prefix("https://"))
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or(trimmed);
+    let host = without_scheme.split(':').next().unwrap_or(without_scheme);
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
 }
 
 #[cfg(test)]

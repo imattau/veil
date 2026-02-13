@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::hash::Hash;
 
 /// Coarse per-adapter transport health counters.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TransportHealthSnapshot {
     pub outbound_queued: u64,
     pub outbound_send_ok: u64,
@@ -10,6 +10,8 @@ pub struct TransportHealthSnapshot {
     pub inbound_received: u64,
     pub inbound_dropped: u64,
     pub reconnect_attempts: u64,
+    pub last_error: Option<String>,
+    pub last_error_code: Option<String>,
 }
 
 /// Byte-oriented transport contract used by the VEIL node runtime.
@@ -211,6 +213,8 @@ impl TransportAdapter for InMemoryAdapter {
             inbound_received: self.recv_ok,
             inbound_dropped: 0,
             reconnect_attempts: 0,
+            last_error: None,
+            last_error_code: None,
         }
     }
 }
@@ -264,6 +268,8 @@ impl TransportAdapter for CappedInMemoryAdapter {
             inbound_received: self.recv_ok,
             inbound_dropped: 0,
             reconnect_attempts: 0,
+            last_error: None,
+            last_error_code: None,
         }
     }
 }

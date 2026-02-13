@@ -280,10 +280,12 @@ impl ProtocolEngine {
     pub async fn reconstruct_object(&self, root: [u8; 32]) -> Option<Vec<u8>> {
         let runtime = self.inner.lock().await;
         let mut shards = Vec::new();
-        for cached in runtime.state.cache.values() {
-            if let Ok(shard) = decode_shard_cbor(&cached.bytes) {
-                if shard.header.object_root == root {
-                    shards.push(shard);
+        if let Some(sids) = runtime.state.shard_index.get(&root) {
+            for sid in sids {
+                if let Some(cached) = runtime.state.cache.get(sid) {
+                    if let Ok(shard) = decode_shard_cbor(&cached.bytes) {
+                        shards.push(shard);
+                    }
                 }
             }
         }
@@ -296,23 +298,45 @@ impl ProtocolEngine {
 
     pub async fn reconstruct_payload(&self, root: [u8; 32]) -> Option<Vec<u8>> {
         let runtime = self.inner.lock().await;
-        let mut roots = std::collections::HashSet::new();
-        for cached in runtime.state.cache.values() {
-            if let Ok(shard) = decode_shard_cbor(&cached.bytes) {
-                roots.insert(shard.header.object_root);
-            }
-        }
-
-        let cipher = XChaCha20Poly1305Cipher;
-        for wire_root in roots {
+        
+        // Try direct lookup by root first
+        if let Some(sids) = runtime.state.shard_index.get(&root) {
             let mut shards = Vec::new();
-            for cached in runtime.state.cache.values() {
-                if let Ok(shard) = decode_shard_cbor(&cached.bytes) {
-                    if shard.header.object_root == wire_root {
+            for sid in sids {
+                if let Some(cached) = runtime.state.cache.get(sid) {
+                    if let Ok(shard) = decode_shard_cbor(&cached.bytes) {
                         shards.push(shard);
                     }
                 }
             }
+            if !shards.is_empty() {
+                let mode = erasure_mode_from_shards(&shards, runtime.config.erasure_coding_mode);
+                if let Ok(reconstructed) = reconstruct_object_padded_with_mode(&shards, root, mode) {
+                    if let Ok((object, _)) = decode_object_cbor_prefix(&reconstructed) {
+                        let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
+                        if let Ok(payload) = XChaCha20Poly1305Cipher.decrypt(&runtime.encrypt_key, object.nonce, &aad, &object.ciphertext) {
+                            return Some(payload);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: search all roots in index (still better than scanning all shards)
+        let roots: Vec<_> = runtime.state.shard_index.keys().cloned().collect();
+        let cipher = XChaCha20Poly1305Cipher;
+        for wire_root in roots {
+            let mut shards = Vec::new();
+            if let Some(sids) = runtime.state.shard_index.get(&wire_root) {
+                for sid in sids {
+                    if let Some(cached) = runtime.state.cache.get(sid) {
+                        if let Ok(shard) = decode_shard_cbor(&cached.bytes) {
+                            shards.push(shard);
+                        }
+                    }
+                }
+            }
+            
             if shards.is_empty() {
                 continue;
             }
@@ -327,7 +351,9 @@ impl ProtocolEngine {
                 Ok(value) => value,
                 Err(_) => continue,
             };
-            if wire_root != root && object.object_root != root {
+            
+            // Check if this object contains the requested payload root
+            if object.object_root != root && wire_root != root {
                 continue;
             }
 
@@ -557,27 +583,20 @@ fn build_ws_fast(config: &ProtocolConfig) -> Result<LaneAdapter, String> {
 fn build_lane_details(role: &str, snapshots: Vec<LaneSnapshot>) -> Vec<LaneDetail> {
     snapshots
         .into_iter()
-        .map(|snapshot| {
-            let last_error = if snapshot.health.outbound_send_err > 0 {
-                Some("send_error".to_string())
-            } else {
-                None
-            };
-            LaneDetail {
-                role: role.to_string(),
-                lane: snapshot.label.to_string(),
-                connected: snapshot.health.outbound_send_ok > 0
-                    || snapshot.health.inbound_received > 0,
-                last_error,
-                stats: LaneStats {
-                    outbound_queued: snapshot.health.outbound_queued,
-                    outbound_send_ok: snapshot.health.outbound_send_ok,
-                    outbound_send_err: snapshot.health.outbound_send_err,
-                    inbound_received: snapshot.health.inbound_received,
-                    inbound_dropped: snapshot.health.inbound_dropped,
-                    reconnect_attempts: snapshot.health.reconnect_attempts,
-                },
-            }
+        .map(|snapshot| LaneDetail {
+            role: role.to_string(),
+            lane: snapshot.label.to_string(),
+            connected: snapshot.health.outbound_send_ok > 0 || snapshot.health.inbound_received > 0,
+            last_error: snapshot.health.last_error,
+            last_error_code: snapshot.health.last_error_code,
+            stats: LaneStats {
+                outbound_queued: snapshot.health.outbound_queued,
+                outbound_send_ok: snapshot.health.outbound_send_ok,
+                outbound_send_err: snapshot.health.outbound_send_err,
+                inbound_received: snapshot.health.inbound_received,
+                inbound_dropped: snapshot.health.inbound_dropped,
+                reconnect_attempts: snapshot.health.reconnect_attempts,
+            },
         })
         .collect()
 }

@@ -57,7 +57,7 @@ pub struct NodeRuntimeCallbacks<'a> {
 }
 
 /// Aggregated per-lane transport health snapshots for a node runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NodeRuntimeTransportHealth {
     pub fast_lane: TransportHealthSnapshot,
     pub fallback_lane: TransportHealthSnapshot,
@@ -71,7 +71,7 @@ pub struct AdaptiveLaneScoreSnapshot {
     pub effective_fallback_fanout: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct AdaptiveLaneScoringState {
     fast_score: f64,
     fallback_score: f64,
@@ -151,7 +151,7 @@ fn latency_to_score(p95_latency_ms: Option<u64>, scale_ms: u64) -> f64 {
     clamp01(1.0 - (p95 as f64 / scale))
 }
 
-fn send_delta(previous: TransportHealthSnapshot, current: TransportHealthSnapshot) -> (u64, u64) {
+fn send_delta(previous: &TransportHealthSnapshot, current: &TransportHealthSnapshot) -> (u64, u64) {
     let ok = current
         .outbound_send_ok
         .saturating_sub(previous.outbound_send_ok);
@@ -297,9 +297,9 @@ where
         let fallback_ack = self.fallback_adapter.ack_success_rate();
 
         let (fast_send_ok, fast_send_total) =
-            send_delta(self.adaptive_lane_state.last_fast_snapshot, fast);
+            send_delta(&self.adaptive_lane_state.last_fast_snapshot, &fast);
         let (fallback_send_ok, fallback_send_total) =
-            send_delta(self.adaptive_lane_state.last_fallback_snapshot, fallback);
+            send_delta(&self.adaptive_lane_state.last_fallback_snapshot, &fallback);
 
         self.adaptive_lane_state.fast_send_success_ewma = ewma_update(
             self.adaptive_lane_state.fast_send_success_ewma,

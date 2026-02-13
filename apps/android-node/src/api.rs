@@ -59,6 +59,7 @@ pub struct LaneStatus {
 pub struct LaneHealth {
     pub connected: bool,
     pub last_error: Option<String>,
+    pub last_error_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -77,6 +78,7 @@ pub struct LaneDetail {
     pub lane: String,
     pub connected: bool,
     pub last_error: Option<String>,
+    pub last_error_code: Option<String>,
     pub stats: LaneStats,
 }
 

@@ -38,8 +38,9 @@ impl QueueWorker {
 
     pub async fn run(self) {
         let mut worker = self;
-        let tick = Duration::from_millis(worker.config.tick_ms.max(50));
+        let base_tick = Duration::from_millis(worker.config.tick_ms.max(50));
         loop {
+            let mut busy = false;
             worker.step = worker.step.saturating_add(1);
             if let Ok(Some(ReceiveEvent::Delivered {
                 object_root,
@@ -50,6 +51,7 @@ impl QueueWorker {
                 flags,
             })) = worker.protocol.pump_inbound().await
             {
+                busy = true;
                 if namespace == worker.protocol.discovery_namespace() {
                     let _ =
                         handle_discovery_payload(&worker.state, &worker.protocol, &payload).await;
@@ -90,6 +92,7 @@ impl QueueWorker {
                 APP_MAX_BATCHABLE_ITEM_BYTES,
             );
             if !batch.is_empty() {
+                busy = true;
                 let mut executable = Vec::with_capacity(batch.len());
                 let mut namespace = None;
                 let mut payloads = Vec::with_capacity(batch.len());
@@ -122,7 +125,13 @@ impl QueueWorker {
                     }
                 }
             }
-            sleep(tick).await;
+            
+            if busy {
+                // Short sleep when busy to process backlogs quickly
+                sleep(Duration::from_millis(10)).await;
+            } else {
+                sleep(base_tick).await;
+            }
         }
     }
 }

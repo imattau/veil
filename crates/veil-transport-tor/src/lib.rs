@@ -195,6 +195,8 @@ impl TransportAdapter for TorSocksAdapter {
             inbound_received: 0,
             inbound_dropped: 0,
             reconnect_attempts: 0,
+            last_error: None,
+            last_error_code: None,
         }
     }
 }

@@ -191,6 +191,8 @@ impl TransportAdapter for WebSocketAdapter {
             inbound_received: m.inbound_received,
             inbound_dropped: m.inbound_dropped,
             reconnect_attempts: m.reconnect_attempts,
+            last_error: None,
+            last_error_code: None,
         }
     }
 }
@@ -442,6 +444,8 @@ impl TransportAdapter for WebSocketServerAdapter {
             inbound_received: m.inbound_received,
             inbound_dropped: m.inbound_dropped,
             reconnect_attempts: 0,
+            last_error: None,
+            last_error_code: None,
         }
     }
 }

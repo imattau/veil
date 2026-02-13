@@ -53,6 +53,12 @@ pub struct NodeState {
     pub seen_shards: HashMap<ShardId, u64>,
     /// Pending ACK entries for timeout escalation.
     pub pending_acks: HashMap<ObjectRoot, PendingAck>,
+    /// Index of object roots to their cached shard IDs.
+    #[serde(default)]
+    pub shard_index: HashMap<ObjectRoot, HashSet<ShardId>>,
+    /// Reverse index of shard IDs to their object roots.
+    #[serde(default)]
+    pub shard_to_root: HashMap<ShardId, ObjectRoot>,
 }
 
 #[cfg(test)]
