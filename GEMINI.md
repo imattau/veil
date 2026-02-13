@@ -47,6 +47,7 @@ VEIL is a transport-agnostic, shard-native overlay for censorship-resistant publ
 
 ## Key Files
 
+- `MASTER_PLAN.md`: Consolidated implementation plan and task status across all project features.
 - `SPEC.md`: Normative protocol and library specification (ObjectV1, ShardV1, Tags).
 - `ROADMAP.md`: Staged implementation plan and current milestone status.
 - `CLAUDE.md`: Detailed developer guide with common commands and architecture maps.
