@@ -49,7 +49,21 @@ impl QuicIdentity {
     pub fn generate_self_signed(server_name: &str) -> Result<Self, QuicAdapterError> {
         let mut params = rcgen::CertificateParams::new(vec![server_name.to_string()])
             .map_err(|_| QuicAdapterError::IdentityGenerationFailed)?;
+        
         params.is_ca = rcgen::IsCa::NoCa;
+        params.distinguished_name.push(rcgen::DnType::CommonName, server_name);
+        
+        // Explicitly set usages to ensure it's treated as an end-entity
+        use rcgen::{ExtendedKeyUsagePurpose, KeyUsagePurpose};
+        params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyEncipherment,
+        ];
+        params.extended_key_usages = vec![
+            ExtendedKeyUsagePurpose::ServerAuth,
+            ExtendedKeyUsagePurpose::ClientAuth,
+        ];
+
         let key_pair =
             rcgen::KeyPair::generate().map_err(|_| QuicAdapterError::IdentityGenerationFailed)?;
         let cert = params

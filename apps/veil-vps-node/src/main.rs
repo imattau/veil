@@ -437,6 +437,7 @@ fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIden
     if cert_path.exists() && key_path.exists() {
         let cert = fs::read(cert_path).map_err(|e| format!("read cert: {e}"))?;
         let key = fs::read(key_path).map_err(|e| format!("read key: {e}"))?;
+        info!("loaded existing QUIC identity from {}", cert_path.display());
         return Ok(QuicIdentity {
             cert_der: cert,
             key_der: key,
