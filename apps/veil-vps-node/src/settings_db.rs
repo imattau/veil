@@ -16,6 +16,26 @@ impl SettingsStore {
                     format!("failed to create directory {}: {}", parent.display(), e)
                 })?;
             }
+
+            // Check if the directory is writable by attempting to create a dummy file
+            let test_path = parent.join(".veil_write_test");
+            match fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&test_path)
+            {
+                Ok(_) => {
+                    let _ = fs::remove_file(test_path);
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "directory {} is not writable (permission check failed): {}",
+                        parent.display(),
+                        e
+                    ));
+                }
+            }
         }
         let conn = Connection::open(path).map_err(|e| {
             format!(

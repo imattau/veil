@@ -946,6 +946,19 @@ async fn main() {
 
     let cli = Cli::parse();
 
+    if let Some(config_path) = &cli.config {
+        if config_path.extension().and_then(|ext| ext.to_str()) == Some("env") {
+            match dotenvy::from_path(config_path) {
+                Ok(_) => info!("pre-loaded environment from {}", config_path.display()),
+                Err(err) => warn!(
+                    "failed to pre-load .env from {}: {}",
+                    config_path.display(),
+                    err
+                ),
+            }
+        }
+    }
+
     match &cli.command {
         Some(Commands::Settings { db, action }) => {
             let store = match SettingsStore::open(db) {
@@ -999,7 +1012,7 @@ async fn main() {
     let settings_db_path = settings_db_path_from_env();
     apply_settings_db_overrides(&settings_db_path);
 
-    let config = match VpsConfig::new(cli.config) {
+    let config = match VpsConfig::new(cli.config.clone()) {
         Ok(cfg) => cfg,
         Err(err) => {
             error!("failed to load config: {err}");
