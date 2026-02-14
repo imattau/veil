@@ -458,14 +458,33 @@ if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   
   # Allow reading external certificate directories if needed
   ALLOWED_PATHS="${PREFIX}"
+  SUPP_GROUPS=""
   if [[ "$FINAL_CERT_PATH" != "${PREFIX}"* ]]; then
     CERT_DIR=$(dirname "$FINAL_CERT_PATH")
     if [[ -d "$CERT_DIR" ]]; then
       ALLOWED_PATHS="${ALLOWED_PATHS} ${CERT_DIR}"
       echo "Adding certificate path to systemd allowed paths: ${CERT_DIR}"
+      
+      # Try to detect which group is needed
+      if [[ "$FINAL_CERT_PATH" == *"/caddy/"* ]]; then
+        SUPP_GROUPS="caddy"
+      elif [[ "$FINAL_CERT_PATH" == *"/letsencrypt/"* ]]; then
+        SUPP_GROUPS="certbot"
+      fi
+    fi
+    
+    # Check if the certificates are readable by root (installer) and warn if they might be a problem for the service user
+    if [[ ! -r "$FINAL_CERT_PATH" ]]; then
+      echo "WARNING: Selected certificate is not readable even by the installer: $FINAL_CERT_PATH"
     fi
   fi
   sed -i "s|ReadWritePaths=/opt/veil-vps-node|ReadWritePaths=${ALLOWED_PATHS}|g" "$TMP_SERVICE"
+  
+  if [[ -n "$SUPP_GROUPS" ]]; then
+    # Add SupplementaryGroups to the [Service] section
+    sed -i "/\[Service\]/a SupplementaryGroups=${SUPP_GROUPS}" "$TMP_SERVICE"
+    echo "Added supplementary group '${SUPP_GROUPS}' to service configuration."
+  fi
 
   install -m 0644 "$TMP_SERVICE" "$SERVICE_FILE" || true
   rm "$TMP_SERVICE"

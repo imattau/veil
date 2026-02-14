@@ -440,7 +440,10 @@ fn load_or_create_identity(
 ) -> Result<QuicIdentity, String> {
     let is_internal = cert_path.starts_with(prefix) && key_path.starts_with(prefix);
 
-    if cert_path.exists() && key_path.exists() {
+    let cert_meta = fs::metadata(cert_path);
+    let key_meta = fs::metadata(key_path);
+
+    if cert_meta.is_ok() && key_meta.is_ok() {
         let cert_bytes = fs::read(cert_path).map_err(|e| format!("read cert from {}: {}", cert_path.display(), e))?;
         let key_bytes = fs::read(key_path).map_err(|e| format!("read key from {}: {}", key_path.display(), e))?;
 
@@ -486,7 +489,9 @@ fn load_or_create_identity(
 
     if !is_internal {
         return Err(format!(
-            "external certificate files not found or unreadable at {} / {}. verify permissions and path.",
+            "external certificate files not found or unreadable. cert_error={:?}, key_error={:?}. Paths: {} / {}. verify permissions and group membership.",
+            cert_meta.err(),
+            key_meta.err(),
             cert_path.display(),
             key_path.display()
         ));
