@@ -285,17 +285,25 @@ if ! grep -q "^VEIL_VPS_CORE_TAGS=" "$ENV_FILE"; then
   echo "VEIL_VPS_CORE_TAGS=${DEFAULT_CORE_TAGS}" >> "$ENV_FILE"
 fi
 
-set_env_var() {
+set_config_var() {
   local key="$1"
   local value="$2"
   local force="${3:-0}"
+  
+  # 1. Update .env file (Bootstrap mirror)
   if grep -q "^${key}=" "$ENV_FILE"; then
     if [[ "$force" == "1" ]]; then
-      # Use @ as delimiter for sed to handle paths with /
       sed -i "s@^${key}=.*@${key}=${value}@" "$ENV_FILE"
     fi
   else
     echo "${key}=${value}" >> "$ENV_FILE"
+  fi
+
+  # 2. Update Database (Primary source)
+  if [[ -x "$BIN" ]]; then
+    # We use the db path from current environment or default
+    local db_path="${PREFIX}/data/settings.db"
+    sudo -u "$RUN_USER" "$BIN" --db "$db_path" settings set "$key" "$value" >/dev/null 2>&1 || true
   fi
 }
 
@@ -398,46 +406,46 @@ resolve_certificates() {
 
 HOSTNAME_FQDN=$(hostname -f 2>/dev/null || hostname)
 resolve_certificates
-set_env_var "VEIL_VPS_STATE_PATH" "${PREFIX}/data/node_state.cbor"
-set_env_var "VEIL_VPS_NODE_KEY_PATH" "${PREFIX}/data/node_identity.key"
-set_env_var "VEIL_VPS_QUIC_CERT_PATH" "${FINAL_CERT_PATH}" "$CERT_FORCE_UPDATE"
-set_env_var "VEIL_VPS_QUIC_KEY_PATH" "${FINAL_KEY_PATH}" "$CERT_FORCE_UPDATE"
-set_env_var "VEIL_VPS_QUIC_BIND" "${VEIL_VPS_QUIC_BIND:-0.0.0.0:5000}"
-set_env_var "VEIL_VPS_QUIC_ALPN" "veil-quic/1,veil/1,veil-node,veil,h3,hq-29"
-set_env_var "VEIL_VPS_FAST_PEERS" ""
-set_env_var "VEIL_VPS_CORE_TAGS" "${DEFAULT_CORE_TAGS}"
-set_env_var "VEIL_VPS_PEER_DB_PATH" "${PREFIX}/data/peers.db"
-set_env_var "VEIL_VPS_SETTINGS_DB_PATH" "${PREFIX}/data/settings.db"
-set_env_var "VEIL_VPS_ADMIN_SESSION_DB_PATH" "${PREFIX}/data/admin-sessions.db"
-set_env_var "VEIL_VPS_MAX_DYNAMIC_PEERS" "512"
-set_env_var "VEIL_VPS_WS_URL" ""
-set_env_var "VEIL_VPS_WS_PEER" "${HOSTNAME_FQDN:-veil-vps}"
-set_env_var "VEIL_VPS_WS_LISTEN" "127.0.0.1:${PROXY_WS_PORT}"
-set_env_var "VEIL_VPS_TOR_SOCKS_ADDR" ""
-set_env_var "VEIL_VPS_TOR_PEERS" ""
-set_env_var "VEIL_VPS_BLE_ENABLE" "0"
-set_env_var "VEIL_VPS_BLE_PEERS" ""
-set_env_var "VEIL_VPS_BLE_ALLOWLIST" ""
-set_env_var "VEIL_VPS_BLE_MTU" "180"
-set_env_var "VEIL_VPS_MAX_CACHE_SHARDS" "200000"
-set_env_var "VEIL_VPS_BUCKET_JITTER" "0"
-set_env_var "VEIL_VPS_REQUIRED_SIGNED_NAMESPACES" ""
-set_env_var "VEIL_VPS_ADAPTIVE_LANE_SCORING" "1"
-set_env_var "VEIL_VPS_SNAPSHOT_SECS" "60"
-set_env_var "VEIL_VPS_TICK_MS" "50"
-set_env_var "VEIL_VPS_HEALTH_BIND" "0.0.0.0"
-set_env_var "VEIL_VPS_HEALTH_PORT" "${PROXY_HEALTH_PORT}"
-set_env_var "PROXY_DOMAIN" "${PROXY_DOMAIN}"
-set_env_var "VEIL_VPS_OPEN_RELAY" "0"
-set_env_var "VEIL_VPS_BLOCKED_PEERS" ""
-set_env_var "VEIL_VPS_NOSTR_BRIDGE_ENABLE" "0"
-set_env_var "VEIL_VPS_NOSTR_RELAYS" "wss://relay.damus.io,wss://nos.lol,wss://relay.snort.social"
-set_env_var "VEIL_VPS_NOSTR_CHANNEL_ID" "nostr-bridge"
-set_env_var "VEIL_VPS_NOSTR_NAMESPACE" "32"
-set_env_var "VEIL_VPS_NOSTR_SINCE_SECS" "3600"
-set_env_var "VEIL_VPS_NOSTR_BRIDGE_STATE_PATH" "${PREFIX}/data/nostr-bridge-state.json"
-set_env_var "VEIL_VPS_NOSTR_MAX_SEEN_IDS" "20000"
-set_env_var "VEIL_VPS_NOSTR_PERSIST_EVERY_UPDATES" "32"
+set_config_var "VEIL_VPS_STATE_PATH" "${PREFIX}/data/node_state.cbor"
+set_config_var "VEIL_VPS_NODE_KEY_PATH" "${PREFIX}/data/node_identity.key"
+set_config_var "VEIL_VPS_QUIC_CERT_PATH" "${FINAL_CERT_PATH}" "$CERT_FORCE_UPDATE"
+set_config_var "VEIL_VPS_QUIC_KEY_PATH" "${FINAL_KEY_PATH}" "$CERT_FORCE_UPDATE"
+set_config_var "VEIL_VPS_QUIC_BIND" "${VEIL_VPS_QUIC_BIND:-0.0.0.0:5000}"
+set_config_var "VEIL_VPS_QUIC_ALPN" "veil-quic/1,veil/1,veil-node,veil,h3,hq-29"
+set_config_var "VEIL_VPS_FAST_PEERS" ""
+set_config_var "VEIL_VPS_CORE_TAGS" "${DEFAULT_CORE_TAGS}"
+set_config_var "VEIL_VPS_PEER_DB_PATH" "${PREFIX}/data/peers.db"
+set_config_var "VEIL_VPS_SETTINGS_DB_PATH" "${PREFIX}/data/settings.db"
+set_config_var "VEIL_VPS_ADMIN_SESSION_DB_PATH" "${PREFIX}/data/admin-sessions.db"
+set_config_var "VEIL_VPS_MAX_DYNAMIC_PEERS" "512"
+set_config_var "VEIL_VPS_WS_URL" ""
+set_config_var "VEIL_VPS_WS_PEER" "${HOSTNAME_FQDN:-veil-vps}"
+set_config_var "VEIL_VPS_WS_LISTEN" "127.0.0.1:${PROXY_WS_PORT}"
+set_config_var "VEIL_VPS_TOR_SOCKS_ADDR" ""
+set_config_var "VEIL_VPS_TOR_PEERS" ""
+set_config_var "VEIL_VPS_BLE_ENABLE" "0"
+set_config_var "VEIL_VPS_BLE_PEERS" ""
+set_config_var "VEIL_VPS_BLE_ALLOWLIST" ""
+set_config_var "VEIL_VPS_BLE_MTU" "180"
+set_config_var "VEIL_VPS_MAX_CACHE_SHARDS" "200000"
+set_config_var "VEIL_VPS_BUCKET_JITTER" "0"
+set_config_var "VEIL_VPS_REQUIRED_SIGNED_NAMESPACES" ""
+set_config_var "VEIL_VPS_ADAPTIVE_LANE_SCORING" "1"
+set_config_var "VEIL_VPS_SNAPSHOT_SECS" "60"
+set_config_var "VEIL_VPS_TICK_MS" "50"
+set_config_var "VEIL_VPS_HEALTH_BIND" "0.0.0.0"
+set_config_var "VEIL_VPS_HEALTH_PORT" "${PROXY_HEALTH_PORT}"
+set_config_var "PROXY_DOMAIN" "${PROXY_DOMAIN}"
+set_config_var "VEIL_VPS_OPEN_RELAY" "0"
+set_config_var "VEIL_VPS_BLOCKED_PEERS" ""
+set_config_var "VEIL_VPS_NOSTR_BRIDGE_ENABLE" "0"
+set_config_var "VEIL_VPS_NOSTR_RELAYS" "wss://relay.damus.io,wss://nos.lol,wss://relay.snort.social"
+set_config_var "VEIL_VPS_NOSTR_CHANNEL_ID" "nostr-bridge"
+set_config_var "VEIL_VPS_NOSTR_NAMESPACE" "32"
+set_config_var "VEIL_VPS_NOSTR_SINCE_SECS" "3600"
+set_config_var "VEIL_VPS_NOSTR_BRIDGE_STATE_PATH" "${PREFIX}/data/nostr-bridge-state.json"
+set_config_var "VEIL_VPS_NOSTR_MAX_SEEN_IDS" "20000"
+set_config_var "VEIL_VPS_NOSTR_PERSIST_EVERY_UPDATES" "32"
 
 if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   # Create a temporary service file with correct paths
@@ -757,8 +765,8 @@ configure_tor() {
     systemctl enable tor || true
     systemctl restart tor || true
   fi
-  set_env_var "VEIL_VPS_TOR_SOCKS_ADDR" "127.0.0.1:9050"
-  set_env_var "VEIL_VPS_TOR_PEERS" ""
+  set_config_var "VEIL_VPS_TOR_SOCKS_ADDR" "127.0.0.1:9050"
+  set_config_var "VEIL_VPS_TOR_PEERS" ""
   echo "Tor configured: VEIL_VPS_TOR_SOCKS_ADDR=127.0.0.1:9050"
 }
 

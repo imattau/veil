@@ -374,7 +374,10 @@ async fn admin_settings_set(
     match SettingsStore::open(&state.admin_auth.settings_db_path)
         .and_then(|store| store.set(&key, payload.value.trim()))
     {
-        Ok(()) => (StatusCode::OK, Json(json!({"ok": true, "key": key}))),
+        Ok(()) => {
+            tracing::info!("admin config: set setting '{}' to '{}'", key, payload.value.trim());
+            (StatusCode::OK, Json(json!({"ok": true, "key": key})))
+        },
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"ok": false, "error": err})),
@@ -402,10 +405,13 @@ async fn admin_settings_delete(
     match SettingsStore::open(&state.admin_auth.settings_db_path)
         .and_then(|store| store.delete(&key))
     {
-        Ok(true) => (
-            StatusCode::OK,
-            Json(json!({"ok": true, "deleted": true, "key": key})),
-        ),
+        Ok(true) => {
+            tracing::info!("admin config: deleted setting '{}'", key);
+            (
+                StatusCode::OK,
+                Json(json!({"ok": true, "deleted": true, "key": key})),
+            )
+        },
         Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(json!({"ok": false, "error": "setting not found"})),
