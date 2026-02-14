@@ -61,9 +61,11 @@ fn admin_authenticated(headers: &HeaderMap, admin: &AdminAuthState) -> bool {
         return false;
     };
     let Some(token) = auth.strip_prefix("Bearer ") else {
+        tracing::warn!("admin auth: missing Bearer prefix in authorization header");
         return false;
     };
     if token.is_empty() {
+        tracing::warn!("admin auth: empty token in authorization header");
         return false;
     }
     let now = now_unix_secs();
@@ -87,7 +89,11 @@ fn admin_authenticated(headers: &HeaderMap, admin: &AdminAuthState) -> bool {
         admin.persist_expired_prune(now);
     }
     let sessions = admin.sessions.lock().unwrap_or_else(|e| e.into_inner());
-    sessions.get(token).is_some_and(|expires| *expires > now)
+    let authed = sessions.get(token).is_some_and(|expires| *expires > now);
+    if !authed {
+        tracing::warn!("admin auth: session token not found or expired");
+    }
+    authed
 }
 
 async fn health() -> &'static str {

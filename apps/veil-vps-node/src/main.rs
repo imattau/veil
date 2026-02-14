@@ -721,13 +721,9 @@ pub struct AdminSettingUpsertRequest {
 }
 
 impl AdminAuthState {
-    fn bootstrap_session_db(path: &Path) {
+    fn bootstrap_session_db(path: &Path) -> Result<(), String> {
         if let Err(err) = ensure_parent(path) {
-            eprintln!(
-                "admin auth: failed to create session db parent {}: {err}",
-                path.display()
-            );
-            return;
+            return Err(format!("failed to create session db parent {}: {err}", path.display()));
         }
         match Connection::open(path) {
             Ok(conn) => {
@@ -738,31 +734,29 @@ impl AdminAuthState {
                     )",
                     params![],
                 ) {
-                    eprintln!(
-                        "admin auth: failed to initialize session table {}: {err}",
-                        path.display()
-                    );
-                    return;
+                    return Err(format!("failed to initialize session table {}: {err}", path.display()));
                 }
                 let now = now_unix_secs() as i64;
                 let _ = conn.execute(
                     "DELETE FROM admin_sessions WHERE expires_at <= ?1",
                     params![now],
                 );
+                Ok(())
             }
             Err(err) => {
-                eprintln!(
-                    "admin auth: failed to open session db {}: {err}",
-                    path.display()
-                );
+                Err(format!("failed to open session db {}: {err}", path.display()))
             }
         }
     }
 
     fn load_sessions_from_db(path: &Path) -> HashMap<String, u64> {
         let mut out = HashMap::new();
-        let Ok(conn) = Connection::open(path) else {
-            return out;
+        let conn = match Connection::open(path) {
+            Ok(conn) => conn,
+            Err(err) => {
+                warn!("admin auth: could not open session db for loading: {err}");
+                return out;
+            }
         };
         let now = now_unix_secs() as i64;
         let _ = conn.execute(
@@ -1433,7 +1427,10 @@ async fn main() {
     let _ = flag::register(SIGTERM, Arc::clone(&shutdown));
     let _ = flag::register(SIGINT, Arc::clone(&shutdown));
     let peer_snapshot: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    AdminAuthState::bootstrap_session_db(&admin_session_db_path);
+    if let Err(err) = AdminAuthState::bootstrap_session_db(&admin_session_db_path) {
+        error!("fatal: admin auth bootstrap failed: {err}");
+        std::process::exit(1);
+    }
     let restored_sessions = AdminAuthState::load_sessions_from_db(&admin_session_db_path);
     if !restored_sessions.is_empty() {
         info!(
