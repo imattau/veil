@@ -123,12 +123,12 @@ class NodeForegroundService : Service() {
             env["VEIL_NODE_QUIC_BIND"] = "0.0.0.0:9000"
             env["VEIL_NODE_QUIC_SERVER_NAME"] = "localhost"
             env["VEIL_NODE_QUIC_PUBLIC"] = "127.0.0.1:9000"
-            env["VEIL_NODE_WS"] = "ws://relay.veil-network.io:9001/ws"
-            env["VEIL_NODE_WS_PEERS"] = "ws://relay.veil-network.io:9001/ws,ws://veilnode.3nostr.com:9001/ws"
-            env["VEIL_NODE_FAST_PEERS"] = "quic://bootstrap.veil-network.io:9000,quic://veilnode.3nostr.com:9000"
+            env["VEIL_NODE_WS"] = "wss://veilnode.3nostr.com/ws"
+            env["VEIL_NODE_WS_PEERS"] = "wss://veilnode.3nostr.com/ws,ws://veilnode.3nostr.com/ws"
+            env["VEIL_NODE_FAST_PEERS"] = "quic://veilnode.3nostr.com:5000"
             env["VEIL_NODE_TOKEN"] = token
             env["VEIL_NODE_STATE_KEY_HEX"] = stateKeyHex
-            env["VEIL_DISCOVERY_BOOTSTRAP"] = "quic://bootstrap.veil-network.io:9000,ws://relay.veil-network.io:9001/ws,quic://veilnode.3nostr.com:9000,ws://veilnode.3nostr.com:9001/ws"
+            env["VEIL_DISCOVERY_BOOTSTRAP"] = "quic://veilnode.3nostr.com:5000,wss://veilnode.3nostr.com/ws"
             env["VEIL_LAN_DISCOVERY"] = "1"
             process = builder.start()
             running = true
