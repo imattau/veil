@@ -24,7 +24,7 @@ class LiveStatusBanner extends StatelessWidget {
           final displayName = controller.getDisplayName(pubkey);
           final emoji = status.statusEmoji ?? '💭';
           final profile = controller.nodeService.profiles[pubkey];
-          final avatarRoot = profile?.data['avatar_media_root'] as String?;
+          final avatarRoot = profile?.avatarMediaRoot;
           final avatarBytes = avatarRoot != null ? controller.imageCache[avatarRoot] : null;
 
           return Container(
@@ -36,7 +36,7 @@ class LiveStatusBanner extends StatelessWidget {
                   children: [
                     CircleAvatar(
                       radius: 24,
-                      backgroundColor: VeilTheme.accent.withOpacity(0.1),
+                      backgroundColor: VeilTheme.accentSubtle,
                       backgroundImage: avatarBytes != null ? MemoryImage(avatarBytes) : null,
                       child: avatarBytes == null 
                         ? Text(displayName.substring(0, 1).toUpperCase())

@@ -26,8 +26,8 @@ void main() {
 
       final profile = service.profiles['my_pubkey'];
       expect(profile, isNotNull);
-      expect(profile!.data['display_name'], 'New Name');
-      expect(profile.data['bio'], 'My Bio');
+      expect(profile!.displayName, 'New Name');
+      expect(profile.bio, 'My Bio');
     });
 
     test('NodeService respects higher sequence numbers for profiles', () {
@@ -55,7 +55,7 @@ void main() {
         }
       });
 
-      expect(service.profiles['user1']!.data['display_name'], 'New Name');
+      expect(service.profiles['user1']!.displayName, 'New Name');
 
       // Inject an older one (should be ignored)
       service.testInjectEvent({
@@ -68,7 +68,7 @@ void main() {
         }
       });
 
-      expect(service.profiles['user1']!.data['display_name'], 'New Name');
+      expect(service.profiles['user1']!.displayName, 'New Name');
     });
   });
 }
