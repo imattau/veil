@@ -139,8 +139,11 @@ async fn admin_login(
 ) -> impl IntoResponse {
     tracing::info!("admin login: attempt received");
     let input = payload.secret.trim();
-    tracing::info!("admin login: input prefix: {}", if input.len() > 5 { &input[..5] } else { "***" });
-    
+    tracing::info!(
+        "admin login: input prefix: {}",
+        if input.len() > 5 { &input[..5] } else { "***" }
+    );
+
     let Some(secret) = decode_nostr_secret_input(&payload.secret) else {
         tracing::warn!("admin login: failed to decode secret input (tried hex and nsec)");
         return (
@@ -172,7 +175,10 @@ async fn admin_login(
     let token = hex::encode(raw);
     let expires = now_unix_secs() + state.admin_auth.session_ttl_secs;
     state.admin_auth.add_session(token.clone(), expires);
-    tracing::info!("admin login: successful for {}", state.admin_auth.server_pubkey_hex);
+    tracing::info!(
+        "admin login: successful for {}",
+        state.admin_auth.server_pubkey_hex
+    );
     (
         StatusCode::OK,
         Json(json!({

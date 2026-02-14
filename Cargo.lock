@@ -3640,6 +3640,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "veil-android-node",
  "veil-codec",
  "veil-core",
  "veil-crypto",

@@ -43,3 +43,4 @@ ble-btleplug = ["ble", "veil-transport-ble/btleplug"]
 
 [dev-dependencies]
 tempfile = "3"
+veil-android-node = { path = "../android-node" }

@@ -236,7 +236,7 @@
       const copyHexBtn = document.getElementById("copyHexBtn");
       const TOGGLE_SETTINGS = [
         { key: "VEIL_VPS_OPEN_RELAY", label: "Open Relay", group: "Network", description: "Accept/follow non-blocked peers and tags.", defaultValue: false, restartRequired: true },
-        { key: "VEIL_VPS_NOSTR_BRIDGE_ENABLE", label: "Nostr Bridge", group: "Nostr", description: "Ingest Nostr relay events into VEIL.", defaultValue: false, restartRequired: true },
+        { key: "VEIL_VPS_NOSTR_BRIDGE_ENABLED", label: "Nostr Bridge", group: "Nostr", description: "Ingest Nostr relay events into VEIL.", defaultValue: false, restartRequired: true },
         { key: "VEIL_VPS_ADAPTIVE_LANE_SCORING", label: "Adaptive Lane Scoring", group: "Network", description: "Auto-tune transport lane preference.", defaultValue: true, restartRequired: true },
         { key: "VEIL_VPS_PROBABILISTIC_FORWARDING", label: "Probabilistic Forwarding", group: "Network", description: "Reduce forwarding of over-replicated shards.", defaultValue: true, restartRequired: true },
         { key: "VEIL_VPS_BLOOM_EXCHANGE", label: "Bloom Exchange", group: "Transport", description: "Exchange Bloom filters for shard dedupe.", defaultValue: true, restartRequired: true },

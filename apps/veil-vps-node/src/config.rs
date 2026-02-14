@@ -159,22 +159,16 @@ impl VpsConfig {
                 // This allows the Environment::with_prefix source to pick them up.
                 match dotenvy::from_path(&path) {
                     Ok(_) => tracing::info!("loaded environment from {}", path.display()),
-                    Err(err) => tracing::warn!("failed to load .env from {}: {}", path.display(), err),
+                    Err(err) => {
+                        tracing::warn!("failed to load .env from {}: {}", path.display(), err)
+                    }
                 }
             } else {
                 builder = builder.add_source(File::from(path));
             }
         }
 
-                builder = builder.add_source(
-
-                    Environment::with_prefix("VEIL_VPS")
-
-                        .try_parsing(true)
-
-                );
-
-        
+        builder = builder.add_source(Environment::with_prefix("VEIL_VPS").try_parsing(true));
 
         builder.build()?.try_deserialize()
     }

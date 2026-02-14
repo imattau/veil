@@ -837,6 +837,70 @@ enum SettingsCommands {
     Delete { key: String },
 }
 
+fn settings_db_path_from_env() -> PathBuf {
+    std::env::var("VEIL_VPS_SETTINGS_DB_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("data/settings.db"))
+}
+
+fn normalize_settings_key(key: &str) -> Option<&'static str> {
+    match key {
+        // Backward compatibility for older admin UI typo.
+        "VEIL_VPS_NOSTR_BRIDGE_ENABLE" => Some("VEIL_VPS_NOSTR_BRIDGE_ENABLED"),
+        "VEIL_VPS_OPEN_RELAY" => Some("VEIL_VPS_OPEN_RELAY"),
+        "VEIL_VPS_NOSTR_BRIDGE_ENABLED" => Some("VEIL_VPS_NOSTR_BRIDGE_ENABLED"),
+        "VEIL_VPS_NOSTR_BRIDGE_RELAYS" => Some("VEIL_VPS_NOSTR_BRIDGE_RELAYS"),
+        "VEIL_VPS_NOSTR_BRIDGE_CHANNEL_ID" => Some("VEIL_VPS_NOSTR_BRIDGE_CHANNEL_ID"),
+        "VEIL_VPS_NOSTR_BRIDGE_NAMESPACE" => Some("VEIL_VPS_NOSTR_BRIDGE_NAMESPACE"),
+        "VEIL_VPS_NOSTR_BRIDGE_SINCE" => Some("VEIL_VPS_NOSTR_BRIDGE_SINCE"),
+        "VEIL_VPS_NOSTR_BRIDGE_STATE_PATH" => Some("VEIL_VPS_NOSTR_BRIDGE_STATE_PATH"),
+        "VEIL_VPS_NOSTR_BRIDGE_MAX_SEEN_IDS" => Some("VEIL_VPS_NOSTR_BRIDGE_MAX_SEEN_IDS"),
+        "VEIL_VPS_NOSTR_BRIDGE_PERSIST_EVERY_UPDATES" => {
+            Some("VEIL_VPS_NOSTR_BRIDGE_PERSIST_EVERY_UPDATES")
+        }
+        "VEIL_VPS_ADAPTIVE_LANE_SCORING" => Some("VEIL_VPS_ADAPTIVE_LANE_SCORING"),
+        "VEIL_VPS_PROBABILISTIC_FORWARDING" => Some("VEIL_VPS_PROBABILISTIC_FORWARDING"),
+        "VEIL_VPS_BLOOM_EXCHANGE" => Some("VEIL_VPS_BLOOM_EXCHANGE"),
+        _ => None,
+    }
+}
+
+fn apply_settings_db_overrides(path: &Path) {
+    let store = match SettingsStore::open(path) {
+        Ok(store) => store,
+        Err(err) => {
+            warn!("settings db unavailable at {}: {}", path.display(), err);
+            return;
+        }
+    };
+
+    let entries = match store.list() {
+        Ok(entries) => entries,
+        Err(err) => {
+            warn!("settings db list failed at {}: {}", path.display(), err);
+            return;
+        }
+    };
+
+    let mut applied = 0usize;
+    for (raw_key, raw_value) in entries {
+        let Some(key) = normalize_settings_key(&raw_key) else {
+            continue;
+        };
+        let value = raw_value.trim();
+        std::env::set_var(key, value);
+        applied = applied.saturating_add(1);
+    }
+
+    if applied > 0 {
+        info!(
+            "applied {} runtime setting overrides from {}",
+            applied,
+            path.display()
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let filter = std::env::var("VEIL_LOG").unwrap_or_else(|_| "info".to_string());
@@ -894,6 +958,9 @@ async fn main() {
         _ => {}
     }
 
+    let settings_db_path = settings_db_path_from_env();
+    apply_settings_db_overrides(&settings_db_path);
+
     let config = match VpsConfig::new(cli.config) {
         Ok(cfg) => cfg,
         Err(err) => {
@@ -901,8 +968,6 @@ async fn main() {
             std::process::exit(1);
         }
     };
-
-    let settings_db_path = PathBuf::from("data/settings.db");
 
     let raw_alpn = &config.quic_alpn;
     if !raw_alpn.trim().is_empty() {
@@ -960,6 +1025,16 @@ async fn main() {
     let nostr_bridge_max_seen = config.nostr_bridge_max_seen_ids;
     let nostr_bridge_persist_every = config.nostr_bridge_persist_every_updates;
     let required_signed = parse_required_signed_namespaces(&config.required_signed_namespaces);
+
+    info!(
+        "nostr bridge config: enabled={}, relays={}, channel={}, namespace={}, since={:?}, state={}",
+        nostr_bridge_enabled,
+        nostr_bridge_relays.len(),
+        nostr_bridge_channel,
+        nostr_bridge_namespace,
+        nostr_bridge_since,
+        nostr_bridge_state_path.display(),
+    );
 
     let node_key = if let Some(key_input) = &config.node_key {
         match decode_nostr_secret_input(key_input) {
@@ -1215,7 +1290,7 @@ async fn main() {
     let mut bridge_batcher = FeedBatcher::default();
     let mut nostr_bridge_rx = if nostr_bridge_enabled {
         if nostr_bridge_relays.is_empty() {
-            warn!("nostr bridge enabled but VEIL_VPS_NOSTR_RELAYS is empty; bridge not started");
+            warn!("nostr bridge enabled but VEIL_VPS_NOSTR_BRIDGE_RELAYS is empty; bridge not started");
             None
         } else {
             info!(
@@ -1441,8 +1516,8 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_fallback_peers, merge_peers, parse_fallback_peer_strings, Cli, Commands,
-        FallbackPeer, SettingsCommands,
+        encode_fallback_peers, merge_peers, normalize_settings_key, parse_fallback_peer_strings,
+        Cli, Commands, FallbackPeer, SettingsCommands,
     };
 
     #[test]
@@ -1480,6 +1555,191 @@ mod tests {
         let encoded = encode_fallback_peers(&peers);
         let decoded = parse_fallback_peer_strings(&encoded);
         assert_eq!(decoded, peers);
+    }
+
+    #[test]
+    fn normalize_settings_key_supports_legacy_nostr_toggle_name() {
+        assert_eq!(
+            normalize_settings_key("VEIL_VPS_NOSTR_BRIDGE_ENABLE"),
+            Some("VEIL_VPS_NOSTR_BRIDGE_ENABLED")
+        );
+        assert_eq!(
+            normalize_settings_key("VEIL_VPS_NOSTR_BRIDGE_ENABLED"),
+            Some("VEIL_VPS_NOSTR_BRIDGE_ENABLED")
+        );
+        assert_eq!(normalize_settings_key("VEIL_VPS_UNKNOWN"), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn nostr_bridge_payload_publishes_and_android_receives_feed_bundle() {
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::Duration;
+        use tokio::time::timeout;
+        use tokio_tungstenite::tungstenite::{accept, Message};
+        use veil_android_node::NodeState as AndroidNodeState;
+        use veil_codec::object::OBJECT_FLAG_SIGNED;
+        use veil_core::tags::derive_channel_feed_tag;
+        use veil_core::{Epoch, Namespace};
+        use veil_crypto::aead::XChaCha20Poly1305Cipher;
+        use veil_crypto::signing::{NostrSigner, NostrVerifier, Signer};
+        use veil_node::batch::FeedBatcher;
+        use veil_node::config::NodeRuntimeConfig;
+        use veil_node::publish::{publish_queue_tick_multi_lane, PublishQueueTickParams};
+        use veil_node::runtime::{
+            pump_multi_lane_tick_with_config, ConfigMultiLanePumpParams, RuntimeStats,
+        };
+        use veil_transport::adapter::{route_in_memory_outbound, InMemoryAdapter};
+
+        let relay_listener = TcpListener::bind("127.0.0.1:0").expect("bind relay");
+        let relay_addr = relay_listener.local_addr().expect("relay addr");
+        let relay_url = format!("ws://{relay_addr}");
+        let event_message = serde_json::json!([
+            "EVENT",
+            "veil-bridge",
+            {
+                "id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "pubkey": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "kind": 1,
+                "created_at": 1_700_000_123u64,
+                "content": "bridge e2e hello"
+            }
+        ])
+        .to_string();
+
+        let relay_thread = thread::spawn(move || {
+            let (stream, _) = relay_listener.accept().expect("accept relay connection");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("set read timeout");
+            stream
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .expect("set write timeout");
+            let mut ws = accept(stream).expect("ws handshake");
+            let req = ws.read().expect("read nostr req");
+            let req_text = match req {
+                Message::Text(text) => text,
+                other => panic!("expected text req, got {other:?}"),
+            };
+            assert!(req_text.contains("\"REQ\""), "expected nostr REQ frame");
+            ws.send(Message::Text(event_message))
+                .expect("write nostr event");
+        });
+
+        let mut bridge_rx =
+            crate::nostr_bridge::start_nostr_bridge(crate::nostr_bridge::NostrBridgeConfig {
+                relays: vec![relay_url.clone()],
+                channel_id: "nostr-bridge".to_string(),
+                namespace: 32,
+                since: Duration::from_secs(600),
+                state_path: None,
+                max_seen_ids: 128,
+                persist_every_updates: 1,
+            });
+
+        let bridged = timeout(Duration::from_secs(10), bridge_rx.recv())
+            .await
+            .expect("bridge recv timeout")
+            .expect("bridge should emit item");
+        assert_eq!(bridged.source_relay, relay_url);
+
+        relay_thread.join().expect("relay thread join");
+
+        let signer = NostrSigner::from_secret([0x33; 32]).expect("valid signer");
+        let publisher_pubkey = signer.public_key();
+        let decrypt_key = [0x42; 32];
+        let namespace = Namespace(32);
+        let tag = derive_channel_feed_tag(&publisher_pubkey, namespace, "nostr-bridge");
+        let cfg = NodeRuntimeConfig::builder()
+            .base_fast_fanout(1)
+            .base_fallback_fanout(1)
+            .fallback_redundancy_fanout(1)
+            .build();
+
+        let mut sender_state = veil_node::state::NodeState::default();
+        let mut sender_fast = InMemoryAdapter::default();
+        let mut sender_fallback = InMemoryAdapter::default();
+        let mut sender_batcher = FeedBatcher::default();
+        let mut receiver_state = veil_node::state::NodeState::default();
+        receiver_state.subscriptions.insert(tag);
+        let mut receiver_fast = InMemoryAdapter::default();
+        let mut receiver_fallback = InMemoryAdapter::default();
+        let mut receiver_stats = RuntimeStats::default();
+        let peers = vec!["receiver".to_string()];
+
+        sender_batcher.enqueue(bridged.payload.clone());
+        let _ = publish_queue_tick_multi_lane(
+            &mut sender_state,
+            &mut sender_fast,
+            &mut sender_fallback,
+            &mut sender_batcher,
+            PublishQueueTickParams {
+                namespace,
+                epoch: Epoch(1),
+                tag,
+                encrypt_key: &decrypt_key,
+                now_step: 1,
+                flags: OBJECT_FLAG_SIGNED,
+                interactive_flush: false,
+                fast_peers: &peers,
+                fallback_peers: &peers,
+            },
+            &cfg,
+            &XChaCha20Poly1305Cipher,
+            Some(&signer),
+        );
+
+        route_in_memory_outbound(&mut sender_fast, &mut receiver_fast, "vps");
+        route_in_memory_outbound(&mut sender_fallback, &mut receiver_fallback, "vps");
+
+        let mut delivered_payload = None;
+        for step in 1..=12 {
+            let event = pump_multi_lane_tick_with_config(
+                &mut receiver_state,
+                &mut receiver_fast,
+                &mut receiver_fallback,
+                ConfigMultiLanePumpParams {
+                    fast_peers: &peers,
+                    fallback_peers: &peers,
+                    now_step: step,
+                    decrypt_key: &decrypt_key,
+                    config: &cfg,
+                    stats: &mut receiver_stats,
+                },
+                &XChaCha20Poly1305Cipher,
+                &NostrVerifier,
+            )
+            .expect("pump ok");
+            if let Some(veil_node::receive::ReceiveEvent::Delivered {
+                payload,
+                tag: delivered_tag,
+                ..
+            }) = event
+            {
+                if delivered_tag == tag {
+                    delivered_payload = Some(payload);
+                    break;
+                }
+            }
+        }
+        let delivered_payload = delivered_payload.expect("expected delivered bridged payload");
+
+        let android_state = AndroidNodeState::new("0.1-test");
+        android_state.emit_payload(&[0xAB; 32], &delivered_payload, 32, 1, &tag, 0);
+        let (events, _) = android_state.subscribe_events_since(Some(0));
+
+        assert!(
+            events.iter().any(|event| event.event == "payload"),
+            "android node should emit payload event"
+        );
+        let feed_event = events
+            .iter()
+            .find(|event| event.event == "feed_bundle")
+            .expect("android node should emit feed_bundle event");
+        assert!(
+            feed_event.data.to_string().contains("bridge e2e hello"),
+            "feed bundle should carry bridged nostr text"
+        );
     }
 
     #[test]
