@@ -13,7 +13,7 @@ use tower_http::cors::CorsLayer;
 
 use crate::settings_db::SettingsStore;
 use crate::{
-    decode_nostr_secret_input, now_unix_secs, AdminAuthState, AdminLoginRequest,
+    decode_nostr_secret_input, logger::LogBuffer, now_unix_secs, AdminAuthState, AdminLoginRequest,
     AdminSettingUpsertRequest, MetricsState,
 };
 use veil_crypto::signing::{NostrSigner, Signer};
@@ -24,6 +24,7 @@ pub struct VpsAppState {
     pub peer_snapshot: Arc<Mutex<Vec<String>>>,
     pub admin_auth: Arc<AdminAuthState>,
     pub shutdown: Arc<AtomicBool>,
+    pub log_buffer: Arc<LogBuffer>,
 }
 
 pub fn build_router(state: VpsAppState) -> Router {
@@ -42,6 +43,7 @@ pub fn build_router(state: VpsAppState) -> Router {
         .route("/admin-api/settings", get(admin_settings_get))
         .route("/admin-api/settings", post(admin_settings_set))
         .route("/admin-api/settings", delete(admin_settings_delete))
+        .route("/admin-api/logs", get(admin_logs))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -399,4 +401,15 @@ async fn admin_settings_delete(
             Json(json!({"ok": false, "error": err})),
         ),
     }
+}
+
+async fn admin_logs(State(state): State<VpsAppState>, headers: HeaderMap) -> impl IntoResponse {
+    if !admin_authenticated(&headers, &state.admin_auth) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"ok": false, "error": "admin auth required"})),
+        );
+    }
+    let entries = state.log_buffer.get_all();
+    (StatusCode::OK, Json(json!({ "ok": true, "logs": entries })))
 }

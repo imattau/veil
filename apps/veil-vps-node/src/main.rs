@@ -12,10 +12,12 @@ use tracing::{error, info, warn};
 
 mod config;
 mod http_server;
+mod logger;
 mod nostr_bridge;
 mod settings_db;
-
-use bech32::{Bech32, Hrp};
+ 
+ use bech32::{Bech32, Hrp};
+use logger::{AdminLoggerLayer, LogBuffer};
 use nostr_bridge::{start_nostr_bridge, NostrBridgeConfig};
 use rand::RngCore;
 use rusqlite::{params, Connection};
@@ -23,6 +25,8 @@ use serde::Deserialize;
 use settings_db::SettingsStore;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::flag;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use veil_core::hash::blake3_32;
 use veil_core::tags::derive_channel_feed_tag;
 use veil_core::{Epoch, Namespace};
@@ -903,8 +907,16 @@ fn apply_settings_db_overrides(path: &Path) {
 
 #[tokio::main]
 async fn main() {
+    let log_buffer = Arc::new(LogBuffer::new(1000));
     let filter = std::env::var("VEIL_LOG").unwrap_or_else(|_| "info".to_string());
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(filter))
+        .with(tracing_subscriber::fmt::layer())
+        .with(AdminLoggerLayer {
+            buffer: Arc::clone(&log_buffer),
+        })
+        .init();
 
     let cli = Cli::parse();
 
@@ -1356,6 +1368,7 @@ async fn main() {
             peer_snapshot: Arc::clone(&peer_snapshot),
             admin_auth: Arc::clone(&admin_auth),
             shutdown: Arc::clone(&shutdown),
+            log_buffer: Arc::clone(&log_buffer),
         };
         let router = http_server::build_router(app_state);
         let bind_addr: std::net::SocketAddr =

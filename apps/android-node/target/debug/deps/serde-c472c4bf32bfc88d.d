@@ -1,0 +1,14 @@
+/home/mattthomson/workspace/veil/apps/android-node/target/debug/deps/serde-c472c4bf32bfc88d.d: /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/mattthomson/workspace/veil/apps/android-node/target/debug/build/serde-acd5b2669130c5a6/out/private.rs
+
+/home/mattthomson/workspace/veil/apps/android-node/target/debug/deps/libserde-c472c4bf32bfc88d.rlib: /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/mattthomson/workspace/veil/apps/android-node/target/debug/build/serde-acd5b2669130c5a6/out/private.rs
+
+/home/mattthomson/workspace/veil/apps/android-node/target/debug/deps/libserde-c472c4bf32bfc88d.rmeta: /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/mattthomson/workspace/veil/apps/android-node/target/debug/build/serde-acd5b2669130c5a6/out/private.rs
+
+/home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/mattthomson/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/mattthomson/workspace/veil/apps/android-node/target/debug/build/serde-acd5b2669130c5a6/out/private.rs:
+
+# env-dep:OUT_DIR=/home/mattthomson/workspace/veil/apps/android-node/target/debug/build/serde-acd5b2669130c5a6/out

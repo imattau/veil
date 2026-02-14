@@ -124,6 +124,14 @@
         border-radius: 999px;
         padding: 2px 8px;
       }
+      .log-entry { margin-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 2px; }
+      .log-time { color: var(--muted); margin-right: 8px; font-size: 0.75rem; }
+      .log-level { font-weight: 700; margin-right: 8px; width: 50px; display: inline-block; }
+      .log-level-ERROR { color: #f87171; }
+      .log-level-WARN { color: #fbbf24; }
+      .log-level-INFO { color: #34d399; }
+      .log-level-DEBUG { color: #60a5fa; }
+      .log-target { color: var(--accent); margin-right: 8px; opacity: 0.8; font-size: 0.75rem; }
     </style>
   </head>
   <body>
@@ -192,6 +200,15 @@
         <div id="toggleSettingsList" class="toggle-grid" style="margin-top: 10px;"></div>
       </div>
 
+      <div class="card" id="logsPanel" style="display: none;">
+        <div class="toggle-header">
+          <h2>Server Logs</h2>
+          <button id="refreshLogsBtn" type="button">Refresh Logs</button>
+        </div>
+        <div id="logsStatus" class="muted" style="margin-top: 8px;">Idle.</div>
+        <div id="logsList" style="margin-top: 10px; max-height: 400px; overflow: auto; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; font-family: ui-monospace, monospace; font-size: 0.8rem; white-space: pre-wrap;"></div>
+      </div>
+
       <div class="card" id="identityPanel" style="display: none;">
         <h2>Server Identity Export</h2>
         <div class="muted">Keep this secret offline. Anyone with this key can control node identity.</div>
@@ -228,6 +245,10 @@
       const toggleSettingsPanelEl = document.getElementById("toggleSettingsPanel");
       const toggleSettingsStatusEl = document.getElementById("toggleSettingsStatus");
       const toggleSettingsListEl = document.getElementById("toggleSettingsList");
+      const logsPanelEl = document.getElementById("logsPanel");
+      const logsStatusEl = document.getElementById("logsStatus");
+      const logsListEl = document.getElementById("logsList");
+      const refreshLogsBtn = document.getElementById("refreshLogsBtn");
       const identityPanelEl = document.getElementById("identityPanel");
       const serverNsecEl = document.getElementById("serverNsec");
       const serverHexEl = document.getElementById("serverHex");
@@ -269,6 +290,7 @@
         adminPanelEl.style.display = isLoggedIn ? "block" : "none";
         settingsPanelEl.style.display = isLoggedIn ? "block" : "none";
         toggleSettingsPanelEl.style.display = isLoggedIn ? "block" : "none";
+        logsPanelEl.style.display = isLoggedIn ? "block" : "none";
         identityPanelEl.style.display = isLoggedIn ? "block" : "none";
       }
 
@@ -284,6 +306,7 @@
             await refreshAdminStats();
             await refreshSettingsList();
             await refreshIdentityExport();
+            await refreshLogs();
           }
         } catch (_) {
           statusEl.textContent = "Status check failed.";
@@ -459,6 +482,56 @@
         document.getElementById("peers").textContent = String(peersCount);
       }
 
+      async function refreshLogs() {
+        logsStatusEl.textContent = "Loading logs…";
+        try {
+          const res = await fetchAdmin("/admin-api/logs");
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || !body.ok || !Array.isArray(body.logs)) {
+            logsStatusEl.textContent = body.error || "Failed to load logs.";
+            return;
+          }
+          renderLogs(body.logs);
+          logsStatusEl.textContent = `Loaded ${body.logs.length} entries.`;
+        } catch (err) {
+          logsStatusEl.textContent = "Failed to fetch logs.";
+        }
+      }
+
+      function renderLogs(logs) {
+        logsListEl.innerHTML = "";
+        for (const entry of logs) {
+          const div = document.createElement("div");
+          div.className = "log-entry";
+          
+          const timeStr = new Date(entry.timestamp).toISOString().split('T')[1].split('Z')[0];
+          
+          const timeSpan = document.createElement("span");
+          timeSpan.className = "log-time";
+          timeSpan.textContent = timeStr;
+          
+          const levelSpan = document.createElement("span");
+          levelSpan.className = `log-level log-level-${entry.level}`;
+          levelSpan.textContent = entry.level.padEnd(5);
+          
+          const targetSpan = document.createElement("span");
+          targetSpan.className = "log-target";
+          targetSpan.textContent = entry.target;
+
+          const msgSpan = document.createElement("span");
+          msgSpan.textContent = entry.message;
+          
+          div.appendChild(timeSpan);
+          div.appendChild(levelSpan);
+          div.appendChild(targetSpan);
+          div.appendChild(msgSpan);
+          
+          logsListEl.appendChild(div);
+        }
+        // Auto-scroll to bottom
+        logsListEl.scrollTop = logsListEl.scrollHeight;
+      }
+
       loginBtn.addEventListener("click", async () => {
         const secret = secretInput.value.trim();
         if (!secret) {
@@ -538,6 +611,10 @@
 
       refreshSettingsBtn.addEventListener("click", async () => {
         await refreshSettingsList();
+      });
+
+      refreshLogsBtn.addEventListener("click", async () => {
+        await refreshLogs();
       });
 
       copyNsecBtn.addEventListener("click", async () => {
