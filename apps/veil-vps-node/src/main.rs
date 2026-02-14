@@ -916,6 +916,13 @@ fn normalize_settings_key(key: &str) -> Option<&'static str> {
         "VEIL_VPS_ADAPTIVE_LANE_SCORING" => Some("VEIL_VPS_ADAPTIVE_LANE_SCORING"),
         "VEIL_VPS_PROBABILISTIC_FORWARDING" => Some("VEIL_VPS_PROBABILISTIC_FORWARDING"),
         "VEIL_VPS_BLOOM_EXCHANGE" => Some("VEIL_VPS_BLOOM_EXCHANGE"),
+        "VEIL_VPS_QUIC_CERT_PATH" => Some("VEIL_VPS_QUIC_CERT_PATH"),
+        "VEIL_VPS_QUIC_KEY_PATH" => Some("VEIL_VPS_QUIC_KEY_PATH"),
+        "VEIL_VPS_QUIC_BIND" => Some("VEIL_VPS_QUIC_BIND"),
+        "VEIL_VPS_WS_URL" => Some("VEIL_VPS_WS_URL"),
+        "VEIL_VPS_WS_LISTEN" => Some("VEIL_VPS_WS_LISTEN"),
+        "VEIL_VPS_WS_PEER" => Some("VEIL_VPS_WS_PEER"),
+        "VEIL_VPS_TOR_SOCKS_ADDR" => Some("VEIL_VPS_TOR_SOCKS_ADDR"),
         _ => None,
     }
 }
