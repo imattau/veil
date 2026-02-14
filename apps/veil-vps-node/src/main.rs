@@ -863,10 +863,15 @@ fn encode_nostr_nsec(secret: [u8; 32]) -> Option<String> {
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Path to configuration file
-    #[arg(long, short)]
-    config: Option<PathBuf>,
-    #[command(subcommand)]
-    command: Option<Commands>,
+        #[arg(long, short)]
+        config: Option<PathBuf>,
+    
+        /// Ignore all settings in the database and use only config file/defaults
+        #[arg(long)]
+        safe_mode: bool,
+    
+        #[command(subcommand)]
+        command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -1056,7 +1061,11 @@ async fn main() {
     }
 
     let settings_db_path = settings_db_path_from_env();
-    apply_settings_db_overrides(&settings_db_path);
+    if cli.safe_mode {
+        warn!("SAFE MODE ENABLED: Ignoring all settings overrides from {}", settings_db_path.display());
+    } else {
+        apply_settings_db_overrides(&settings_db_path);
+    }
 
     let config = match VpsConfig::new(cli.config.clone()) {
         Ok(cfg) => cfg,
