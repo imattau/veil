@@ -18,7 +18,12 @@ impl SettingsStore {
             }
 
             // Check if the directory is writable by attempting to create a dummy file
+            let abs_parent = std::env::current_dir()
+                .map(|c| c.join(parent))
+                .unwrap_or_else(|_| parent.to_path_buf());
             let test_path = parent.join(".veil_write_test");
+            let user = std::env::var("USER").unwrap_or_else(|_| "unknown".to_string());
+
             match fs::OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -30,8 +35,10 @@ impl SettingsStore {
                 }
                 Err(e) => {
                     return Err(format!(
-                        "directory {} is not writable (permission check failed): {}",
+                        "directory {} (absolute: {}) is not writable for user '{}': {}",
                         parent.display(),
+                        abs_parent.display(),
+                        user,
                         e
                     ));
                 }
