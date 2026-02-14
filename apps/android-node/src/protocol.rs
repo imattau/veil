@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rand::RngCore;
 use tokio::sync::Mutex;
 
 use veil_core::tags::derive_feed_tag;
@@ -501,10 +500,9 @@ pub fn default_protocol_config(
     peer_id: String,
     namespace: u16,
     identity_pubkey: [u8; 32],
+    encrypt_key: [u8; 32],
     signer: NostrSigner,
 ) -> ProtocolConfig {
-    let mut key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key);
     let mut cfg = NodeRuntimeConfig::default();
     cfg.probabilistic_forwarding = ProbabilisticForwardingConfig {
         enabled: true,
@@ -525,7 +523,7 @@ pub fn default_protocol_config(
         peer_id,
         namespace: Namespace(namespace),
         discovery_namespace: Namespace(4096),
-        encrypt_key: key,
+        encrypt_key,
         identity_pubkey,
         signer,
         fast_peers: Vec::new(),

@@ -42,36 +42,42 @@ impl QueueWorker {
         loop {
             let mut busy = false;
             worker.step = worker.step.saturating_add(1);
-            if let Ok(Some(ReceiveEvent::Delivered {
-                object_root,
-                payload,
-                namespace,
-                epoch,
-                tag,
-                flags,
-            })) = worker.protocol.pump_inbound().await
-            {
-                busy = true;
-                if namespace == worker.protocol.discovery_namespace() {
-                    let _ =
-                        handle_discovery_payload(&worker.state, &worker.protocol, &payload).await;
-                }
-                worker.state.emit_payload(
-                    &object_root,
-                    &payload,
-                    namespace.0,
-                    epoch.0,
-                    &tag,
+            match worker.protocol.pump_inbound().await {
+                Ok(Some(ReceiveEvent::Delivered {
+                    object_root,
+                    payload,
+                    namespace,
+                    epoch,
+                    tag,
                     flags,
-                );
-                if worker
-                    .state
-                    .ingest_endorsement_payload(&payload, worker.step)
-                {
-                    worker
-                        .protocol
-                        .update_wot_policy(worker.state.wot_policy())
-                        .await;
+                })) => {
+                    busy = true;
+                    if namespace == worker.protocol.discovery_namespace() {
+                        let _ = handle_discovery_payload(&worker.state, &worker.protocol, &payload)
+                            .await;
+                    }
+                    worker.state.emit_payload(
+                        &object_root,
+                        &payload,
+                        namespace.0,
+                        epoch.0,
+                        &tag,
+                        flags,
+                    );
+                    if worker
+                        .state
+                        .ingest_endorsement_payload(&payload, worker.step)
+                    {
+                        worker
+                            .protocol
+                            .update_wot_policy(worker.state.wot_policy())
+                            .await;
+                    }
+                }
+                Ok(Some(_)) => {} // Ignored variants (malformed, duplicate, etc.)
+                Ok(None) => {} // Nothing delivered this tick
+                Err(e) => {
+                    tracing::error!("Inbound pump error: {}", e);
                 }
             }
             if worker.step.is_multiple_of(50) {

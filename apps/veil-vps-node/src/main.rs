@@ -581,6 +581,13 @@ fn merge_peers<T: Clone + Eq + Hash>(
 }
 
 fn load_or_create_node_key(path: &Path) -> Result<[u8; 32], String> {
+    if let Ok(env_key) = std::env::var("VEIL_VPS_NODE_KEY") {
+        if let Some(key) = decode_nostr_secret_input(&env_key) {
+            info!("using node key from VEIL_VPS_NODE_KEY environment variable");
+            return Ok(key);
+        }
+    }
+
     if path.exists() {
         let bytes = fs::read(path).map_err(|e| format!("read node key: {e}"))?;
         if bytes.len() == 32 {
@@ -589,7 +596,12 @@ fn load_or_create_node_key(path: &Path) -> Result<[u8; 32], String> {
             if NostrSigner::from_secret(out).is_ok() {
                 return Ok(out);
             }
-            return Err("existing node key is not a valid Nostr secp256k1 secret".to_string());
+        }
+
+        if let Ok(content) = String::from_utf8(bytes) {
+            if let Some(key) = decode_nostr_secret_input(&content) {
+                return Ok(key);
+            }
         }
     }
 
@@ -779,22 +791,44 @@ pub fn decode_nostr_secret_input(value: &str) -> Option<[u8; 32]> {
             return Some(key);
         }
     }
-    let hrp = Hrp::parse("nsec").ok()?;
     let (decoded_hrp, data) = bech32::decode(trimmed).ok()?;
-    if decoded_hrp != hrp {
+    if decoded_hrp.as_str() != "nsec" {
         return None;
     }
-    if data.len() != 32 {
-        return None;
+    let data8 = convert_bits(&data, 5, 8, false)?;
+    if let Ok(key) = <[u8; 32]>::try_from(data8.as_slice()) {
+        return Some(key);
     }
-    let mut out = [0_u8; 32];
-    out.copy_from_slice(&data);
-    Some(out)
+    None
 }
 
 fn encode_nostr_nsec(secret: [u8; 32]) -> Option<String> {
     let hrp = Hrp::parse("nsec").ok()?;
-    bech32::encode::<Bech32>(hrp, &secret).ok()
+    let data5 = convert_bits(&secret, 8, 5, true)?;
+    bech32::encode::<Bech32>(hrp, &data5).ok()
+}
+
+fn convert_bits(data: &[u8], from: u32, to: u32, pad: bool) -> Option<Vec<u8>> {
+    let mut acc = 0u32;
+    let mut bits = 0u32;
+    let mut res = Vec::new();
+    let maxv = (1u32 << to) - 1;
+    for &value in data {
+        acc = (acc << from) | (value as u32);
+        bits += from;
+        while bits >= to {
+            bits -= to;
+            res.push(((acc >> bits) & maxv) as u8);
+        }
+    }
+    if pad {
+        if bits > 0 {
+            res.push(((acc << (to - bits)) & maxv) as u8);
+        }
+    } else if bits >= from || ((acc << (to - bits)) & maxv) != 0 {
+        return None;
+    }
+    Some(res)
 }
 
 #[derive(Parser)]

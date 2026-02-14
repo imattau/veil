@@ -144,6 +144,13 @@ This document consolidates all feature-specific plans and roadmaps for the VEIL 
 - [x] Implement `LinkPreviewCard`.
 - [x] Add `MediaGrid` support.
 - [x] Enhance `ComposerView` with social parsing.
+- [x] **Networking Stability**:
+    - [x] Sync persisted contacts to `ProtocolEngine` on startup (#21).
+    - [x] Persist `encrypt_key` instead of random generation (#22).
+    - [x] Log `pump_inbound` errors instead of silently swallowing (#23).
+    - [x] Fix non-routable self-contact in discovery gossip (#24).
+    - [x] Prioritize HTTP gossip for initial peer bootstrap (#25).
+    - [x] Add WebSocket adapter auto-reconnection (#26).
 - [ ] Implement unit tests for rich content.
 
 ### VPS Node (`apps/veil-vps-node`)

@@ -60,6 +60,7 @@ struct StateInner {
 pub struct NodeIdentity {
     pub public_key: [u8; 32],
     pub secret_key: [u8; 32],
+    pub encrypt_key: [u8; 32],
 }
 
 impl NodeIdentity {
@@ -77,6 +78,9 @@ impl NodeIdentity {
             secret_key_hex: hex::encode(self.secret_key),
             secret_key_enc_nonce_b64: None,
             secret_key_enc_b64: None,
+            encrypt_key_hex: hex::encode(self.encrypt_key),
+            encrypt_key_enc_nonce_b64: None,
+            encrypt_key_enc_b64: None,
         }
     }
 }
@@ -396,9 +400,12 @@ impl NodeState {
         let signer = NostrSigner::from_secret(secret_key)
             .map_err(|_| "secret key is not a valid Nostr secp256k1 secret".to_string())?;
         let public_key = signer.public_key();
+        let mut encrypt_key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut encrypt_key);
         let identity = NodeIdentity {
             public_key,
             secret_key,
+            encrypt_key,
         };
 
         let mut inner = self.inner.lock().expect("state lock");
@@ -943,9 +950,28 @@ fn parse_identity(record: &IdentityRecord) -> Option<NodeIdentity> {
     if derived != public_key {
         return None;
     }
+
+    let encrypt_key = if record.encrypt_key_hex.len() == 64 {
+        let bytes = hex::decode(&record.encrypt_key_hex).ok()?;
+        if bytes.len() == 32 {
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes);
+            key
+        } else {
+            let mut key = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut key);
+            key
+        }
+    } else {
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        key
+    };
+
     Some(NodeIdentity {
         public_key,
         secret_key,
+        encrypt_key,
     })
 }
 
@@ -1004,9 +1030,12 @@ fn generate_identity() -> NodeIdentity {
         }
     };
     let public_key = signer.public_key();
+    let mut encrypt_key = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut encrypt_key);
     NodeIdentity {
         public_key,
         secret_key,
+        encrypt_key,
     }
 }
 

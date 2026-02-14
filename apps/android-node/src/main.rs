@@ -56,6 +56,7 @@ async fn main() {
         peer_id,
         namespace,
         identity.public_key,
+        identity.encrypt_key,
         identity.signer(),
     );
     if ws_url.is_none() {
@@ -189,6 +190,16 @@ async fn main() {
         .clamp(0.001, 0.5),
     };
     let protocol = Arc::new(ProtocolEngine::new(protocol_config).expect("protocol engine init"));
+
+    // Sync persisted contacts to ProtocolEngine
+    let contacts = node.contacts();
+    if !contacts.is_empty() {
+        let p = protocol.clone();
+        tokio::spawn(async move {
+            p.sync_contacts(&contacts).await;
+            tracing::info!("Synced {} persisted contacts to protocol engine", contacts.len());
+        });
+    }
 
     let discovery_config = DiscoveryConfig {
         bootstrap_urls: std::env::var("VEIL_DISCOVERY_BOOTSTRAP")

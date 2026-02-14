@@ -123,10 +123,21 @@ impl DiscoveryWorker {
 
     pub async fn run(self) {
         let mut worker = self;
-        let mut tick = tokio::time::interval(worker.config.gossip_interval);
+        let mut next_gossip = tokio::time::Instant::now();
+        
         loop {
-            tick.tick().await;
+            tokio::time::sleep_until(next_gossip).await;
             worker.gossip_once().await;
+            
+            let contact_count = worker.state.contacts().len();
+            let interval = if contact_count == 0 {
+                // Gossip more frequently when bootstrapping
+                Duration::from_secs(2)
+            } else {
+                worker.config.gossip_interval
+            };
+            
+            next_gossip = tokio::time::Instant::now() + interval;
         }
     }
 
@@ -140,40 +151,68 @@ impl DiscoveryWorker {
         }
         targets.sort();
         targets.dedup();
-        let payload = DiscoveryGossipRequest {
-            contacts: self.state.discovery_sample(self.config.max_gossip_contacts),
-        };
+
+        let target_count = targets.len();
+        let contact_count = contacts.len();
+
+        if target_count > 0 {
+            let payload = DiscoveryGossipRequest {
+                contacts: self.state.discovery_sample(self.config.max_gossip_contacts),
+            };
+            tracing::info!(
+                "Starting HTTP discovery gossip with {} targets (known contacts: {})",
+                target_count,
+                contact_count
+            );
+
+            let mut handles = Vec::new();
+            for target in targets {
+                let payload = payload.clone();
+                let state = Arc::clone(&self.state);
+                let protocol = Arc::clone(&self.protocol);
+                let http = self.http.clone();
+                handles.push(tokio::spawn(async move {
+                    let url = join_discovery_endpoint(&target, "discovery/gossip");
+                    match http.post(&url).json(&payload).send().await {
+                        Ok(resp) => {
+                            if let Ok(parsed) = resp.json::<DiscoveryGossipResponse>().await {
+                                let mut new_contacts = 0;
+                                for contact in parsed.contacts {
+                                    state.add_contact(contact.clone());
+                                    let _ = protocol.add_contact(&contact).await;
+                                    new_contacts += 1;
+                                }
+                                if new_contacts > 0 {
+                                    tracing::info!("HTTP gossip with {} yielded {} contacts", target, new_contacts);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("HTTP gossip failed with {}: {}", target, e);
+                        }
+                    }
+                }));
+            }
+            for handle in handles {
+                let _ = handle.await;
+            }
+        } else {
+            tracing::warn!("No discovery targets available (bootstrap_urls empty and no known RPC peers)");
+        }
+
         if self.config.transport_enabled {
             let self_contact = build_self_contact(&self.state, &self.protocol);
             let announce = DiscoveryMessage::announce(self_contact);
-            let gossip = DiscoveryMessage::gossip(payload.contacts.clone());
-            let _ = self.protocol.publish_discovery(announce).await;
-            let _ = self.protocol.publish_discovery(gossip).await;
-        }
-        if targets.is_empty() {
-            return;
-        }
-        let mut handles = Vec::new();
-        for target in targets {
-            let payload = payload.clone();
-            let state = Arc::clone(&self.state);
-            let protocol = Arc::clone(&self.protocol);
-            let http = self.http.clone();
-            handles.push(tokio::spawn(async move {
-                let url = join_discovery_endpoint(&target, "discovery/gossip");
-                let resp = http.post(&url).json(&payload).send().await;
-                if let Ok(resp) = resp {
-                    if let Ok(parsed) = resp.json::<DiscoveryGossipResponse>().await {
-                        for contact in parsed.contacts {
-                            state.add_contact(contact.clone());
-                            let _ = protocol.add_contact(&contact).await;
-                        }
-                    }
-                }
-            }));
-        }
-        for handle in handles {
-            let _ = handle.await;
+            let gossip = DiscoveryMessage::gossip(
+                self.state.discovery_sample(self.config.max_gossip_contacts),
+            );
+            
+            if let Err(e) = self.protocol.publish_discovery(announce).await {
+                tracing::debug!("Transport discovery announce failed: {}", e);
+            }
+            if let Err(e) = self.protocol.publish_discovery(gossip).await {
+                tracing::debug!("Transport discovery gossip failed: {}", e);
+            }
         }
     }
 }
@@ -482,11 +521,22 @@ pub fn build_self_contact(node: &NodeState, protocol: &ProtocolEngine) -> Contac
     let ws_url = std::env::var("VEIL_NODE_WS_PUBLIC")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| protocol.ws_url());
+        .or_else(|| {
+            protocol.ws_url().filter(|url| {
+                !url.contains("127.0.0.1") && !url.contains("localhost") && !url.contains("0.0.0.0")
+            })
+        });
     let quic_addr = std::env::var("VEIL_NODE_QUIC_PUBLIC")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| Some(protocol.quic_bind_addr()));
+        .or_else(|| {
+            let addr = protocol.quic_bind_addr();
+            if addr.starts_with("0.0.0.0") || addr.starts_with("127.0.0.1") || addr.contains("localhost") {
+                None
+            } else {
+                Some(addr)
+            }
+        });
     ContactBundle {
         peer_id: protocol.peer_id(),
         ws_url,

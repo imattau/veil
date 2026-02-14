@@ -211,64 +211,98 @@ async fn run_websocket_worker(
     'outer: loop {
         tokio::select! {
             _ = &mut shutdown_rx => break 'outer,
-            connect_result = connect_async(&config.url) => {
+            connect_result = tokio::time::timeout(Duration::from_secs(10), connect_async(&config.url)) => {
                 metrics.reconnect_attempts.fetch_add(1, Ordering::Relaxed);
-                match connect_result {
-                    Ok((stream, _)) => {
-                        connected.store(true, Ordering::Relaxed);
-                        backoff = config.reconnect_initial;
-                        let (mut write, mut read) = stream.split();
+                let stream = match connect_result {
+                    Ok(Ok((stream, _))) => {
+                        info!("WebSocket connected to {}", config.url);
+                        stream
+                    }
+                    Ok(Err(e)) => {
+                        error!("WebSocket connect failed to {}: {}", config.url, e);
+                        connected.store(false, Ordering::Relaxed);
+                        if !config.reconnect {
+                            break 'outer;
+                        }
+                        tokio::select! {
+                            _ = &mut shutdown_rx => break 'outer,
+                            _ = tokio::time::sleep(backoff) => {}
+                        }
+                        backoff = std::cmp::min(backoff.saturating_mul(2), config.reconnect_max);
+                        continue 'outer;
+                    }
+                    Err(_) => {
+                        error!("WebSocket connect timeout to {}", config.url);
+                        connected.store(false, Ordering::Relaxed);
+                        if !config.reconnect {
+                            break 'outer;
+                        }
+                        tokio::select! {
+                            _ = &mut shutdown_rx => break 'outer,
+                            _ = tokio::time::sleep(backoff) => {}
+                        }
+                        backoff = std::cmp::min(backoff.saturating_mul(2), config.reconnect_max);
+                        continue 'outer;
+                    }
+                };
 
-                        loop {
-                            tokio::select! {
-                                _ = &mut shutdown_rx => {
+                connected.store(true, Ordering::Relaxed);
+                backoff = config.reconnect_initial;
+                let (mut write, mut read) = stream.split();
+
+                loop {
+                    tokio::select! {
+                        _ = &mut shutdown_rx => {
+                            connected.store(false, Ordering::Relaxed);
+                            break 'outer;
+                        }
+                        maybe_out = outbound_rx.recv() => {
+                            match maybe_out {
+                                Some(bytes) => {
+                                    if write.send(Message::Binary(bytes)).await.is_err() {
+                                        metrics.outbound_send_err.fetch_add(1, Ordering::Relaxed);
+                                        error!("WebSocket write error to {}", config.url);
+                                        connected.store(false, Ordering::Relaxed);
+                                        break;
+                                    }
+                                    metrics.outbound_send_ok.fetch_add(1, Ordering::Relaxed);
+                                }
+                                None => {
                                     connected.store(false, Ordering::Relaxed);
                                     break 'outer;
                                 }
-                                maybe_out = outbound_rx.recv() => {
-                                    match maybe_out {
-                                        Some(bytes) => {
-                                            if write.send(Message::Binary(bytes)).await.is_err() {
-                                                metrics.outbound_send_err.fetch_add(1, Ordering::Relaxed);
-                                                connected.store(false, Ordering::Relaxed);
-                                                break;
-                                            }
-                                            metrics.outbound_send_ok.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        maybe_in = read.next() => {
+                            match maybe_in {
+                                Some(Ok(Message::Binary(bytes))) => {
+                                    match inbound_tx.try_send((config.peer_id.clone(), bytes.to_vec())) {
+                                        Ok(_) => {
+                                            metrics.inbound_received.fetch_add(1, Ordering::Relaxed);
                                         }
-                                        None => {
-                                            connected.store(false, Ordering::Relaxed);
-                                            break 'outer;
+                                        Err(_) => {
+                                            metrics.inbound_dropped.fetch_add(1, Ordering::Relaxed);
                                         }
                                     }
                                 }
-                                maybe_in = read.next() => {
-                                    match maybe_in {
-                                        Some(Ok(Message::Binary(bytes))) => {
-                                            match inbound_tx.try_send((config.peer_id.clone(), bytes.to_vec())) {
-                                                Ok(_) => {
-                                                    metrics.inbound_received.fetch_add(1, Ordering::Relaxed);
-                                                }
-                                                Err(_) => {
-                                                    metrics.inbound_dropped.fetch_add(1, Ordering::Relaxed);
-                                                }
-                                            }
-                                        }
-                                        Some(Ok(Message::Close(_))) => {
-                                            connected.store(false, Ordering::Relaxed);
-                                            break;
-                                        }
-                                        Some(Ok(_)) => {}
-                                        Some(Err(_)) | None => {
-                                            connected.store(false, Ordering::Relaxed);
-                                            break;
-                                        }
-                                    }
+                                Some(Ok(Message::Close(_))) => {
+                                    info!("WebSocket connection closed by {}", config.url);
+                                    connected.store(false, Ordering::Relaxed);
+                                    break;
+                                }
+                                Some(Ok(_)) => {}
+                                Some(Err(e)) => {
+                                    error!("WebSocket read error from {}: {}", config.url, e);
+                                    connected.store(false, Ordering::Relaxed);
+                                    break;
+                                }
+                                None => {
+                                    error!("WebSocket stream ended from {}", config.url);
+                                    connected.store(false, Ordering::Relaxed);
+                                    break;
                                 }
                             }
                         }
-                    }
-                    Err(_) => {
-                        connected.store(false, Ordering::Relaxed);
                     }
                 }
 

@@ -39,6 +39,12 @@ pub struct IdentityRecord {
     pub secret_key_enc_nonce_b64: Option<String>,
     #[serde(default)]
     pub secret_key_enc_b64: Option<String>,
+    #[serde(default)]
+    pub encrypt_key_hex: String,
+    #[serde(default)]
+    pub encrypt_key_enc_nonce_b64: Option<String>,
+    #[serde(default)]
+    pub encrypt_key_enc_b64: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +96,15 @@ impl StateStore {
                     identity.secret_key_hex = value;
                 }
             }
+            if identity.encrypt_key_hex.is_empty() {
+                if let Some(value) = decrypt_secret_hex(
+                    key,
+                    identity.encrypt_key_enc_nonce_b64.as_deref(),
+                    identity.encrypt_key_enc_b64.as_deref(),
+                ) {
+                    identity.encrypt_key_hex = value;
+                }
+            }
         }
         if let Some(key) = self.state_key {
             for record in &mut snapshot.group_keys {
@@ -117,6 +132,15 @@ impl StateStore {
                     identity.secret_key_enc_nonce_b64 = Some(nonce_b64);
                     identity.secret_key_enc_b64 = Some(ciphertext_b64);
                     identity.secret_key_hex.clear();
+                }
+            }
+            if identity.encrypt_key_hex.len() == 64 {
+                if let Some((nonce_b64, ciphertext_b64)) =
+                    encrypt_secret_hex(key, identity.encrypt_key_hex.as_bytes())
+                {
+                    identity.encrypt_key_enc_nonce_b64 = Some(nonce_b64);
+                    identity.encrypt_key_enc_b64 = Some(ciphertext_b64);
+                    identity.encrypt_key_hex.clear();
                 }
             }
         }
