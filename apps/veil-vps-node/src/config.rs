@@ -52,8 +52,8 @@ pub struct VpsConfig {
     #[serde(deserialize_with = "deserialize_list")]
     pub blocked_peers: Vec<String>,
     pub nostr_bridge_enabled: bool,
-    #[serde(deserialize_with = "deserialize_list", alias = "nostr_relays")]
-    pub nostr_bridge_relays: Vec<String>,
+    #[serde(deserialize_with = "deserialize_list", alias = "nostr_relays", alias = "nostr_bridge_relays")]
+    pub nostr_relays_internal: Vec<String>,
     pub nostr_bridge_channel_id: String,
     pub nostr_bridge_namespace: u64,
     #[serde(with = "humantime_serde")]
@@ -149,7 +149,7 @@ impl VpsConfig {
             .set_default("ble_peers", Vec::<String>::new())?
             .set_default("ble_allowlist", Vec::<String>::new())?
             .set_default("blocked_peers", Vec::<String>::new())?
-            .set_default("nostr_bridge_relays", Vec::<String>::new())?
+            .set_default("nostr_relays_internal", Vec::<String>::new())?
             .set_default("required_signed_namespaces", Vec::<String>::new())?
             .set_default("quic_trusted_certs", Vec::<String>::new())?;
 
@@ -308,7 +308,7 @@ mod tests {
                     vec!["bad1".to_string(), "bad2".to_string()]
                 );
                 assert_eq!(
-                    cfg.nostr_bridge_relays,
+                    cfg.nostr_relays_internal,
                     vec![
                         "wss://relay1.example".to_string(),
                         "wss://relay2.example".to_string()

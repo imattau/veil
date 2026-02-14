@@ -1054,7 +1054,7 @@ async fn main() {
     let open_relay = config.open_relay;
     let blocked_peers = config.blocked_peers.clone();
     let nostr_bridge_enabled = config.nostr_bridge_enabled;
-    let nostr_bridge_relays = config.nostr_bridge_relays.clone();
+    let nostr_bridge_relays = config.nostr_relays_internal.clone();
     let nostr_bridge_channel = config.nostr_bridge_channel_id.clone();
     let nostr_bridge_namespace = config.nostr_bridge_namespace as u16;
     let nostr_bridge_since = config.nostr_bridge_since;
