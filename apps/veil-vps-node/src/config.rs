@@ -10,6 +10,7 @@ pub struct VpsConfig {
     pub quic_alpn: String,
     pub state_path: PathBuf,
     pub node_key_path: PathBuf,
+    pub node_key: Option<String>,
     pub quic_cert_path: PathBuf,
     pub quic_key_path: PathBuf,
     #[serde(with = "humantime_serde")]
@@ -111,6 +112,7 @@ impl VpsConfig {
             .set_default("quic_alpn", "veil-quic/1,veil/1,veil-node,veil,h3,hq-29")?
             .set_default("state_path", "data/veil-vps-node-state.cbor")?
             .set_default("node_key_path", "data/node_identity.key")?
+            .set_default("node_key", None::<String>)?
             .set_default("quic_cert_path", "data/quic_cert.der")?
             .set_default("quic_key_path", "data/quic_key.der")?
             .set_default("snapshot_interval", "60s")?

@@ -491,6 +491,33 @@ fi
 echo "Installed veil-vps-node. Edit $ENV_FILE then:"
 echo "  systemctl start veil-vps-node.service"
 
+# Display node identity for admin login
+if [[ -x "$BIN" ]]; then
+  echo ""
+  echo "--- NODE IDENTITY (Admin Login) ---"
+  # Run as root but use the config from env file if available
+  # Note: the binary might need to run as RUN_USER to access data dir if it already exists
+  # but here we just want to export the identity.
+  # We use the env file to find the key path.
+  NODE_KEY_PATH=$(grep "^VEIL_VPS_NODE_KEY_PATH=" "$ENV_FILE" | cut -d= -f2- || echo "${PREFIX}/data/node_identity.key")
+  
+  # Ensure the data directory exists and is owned by the run user for when the service starts
+  mkdir -p "$(dirname "$NODE_KEY_PATH")"
+  chown -R "$RUN_USER:$RUN_GROUP" "$PREFIX"
+  
+  # Export identity
+  if [[ -f "$NODE_KEY_PATH" ]]; then
+    # Key already exists, just show it
+    sudo -u "$RUN_USER" "$BIN" --config "$ENV_FILE" identity || true
+  else
+    # First time generation
+    sudo -u "$RUN_USER" "$BIN" --config "$ENV_FILE" identity || true
+  fi
+  echo "-----------------------------------"
+  echo "Use the 'nsec' or 'hex' secret above to log in to the admin dashboard."
+  echo ""
+fi
+
 check_service() {
   local health_url="http://127.0.0.1:${PROXY_HEALTH_PORT}/health"
   if has_systemd && systemctl is-active --quiet veil-vps-node.service; then

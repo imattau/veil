@@ -137,19 +137,28 @@ async fn admin_login(
     State(state): State<VpsAppState>,
     Json(payload): Json<AdminLoginRequest>,
 ) -> impl IntoResponse {
+    tracing::debug!("admin login: attempt received");
     let Some(secret) = decode_nostr_secret_input(&payload.secret) else {
+        tracing::warn!("admin login: failed to decode secret input");
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"ok": false, "error": "secret must be hex or nsec"})),
         );
     };
     let Ok(signer) = NostrSigner::from_secret(secret) else {
+        tracing::warn!("admin login: invalid nostr secret");
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"ok": false, "error": "invalid nostr secret"})),
         );
     };
-    if signer.public_key() != state.admin_auth.server_pubkey {
+    let login_pubkey = signer.public_key();
+    if login_pubkey != state.admin_auth.server_pubkey {
+        tracing::warn!(
+            "admin login: wrong identity key. expected={}, provided={}",
+            state.admin_auth.server_pubkey_hex,
+            hex::encode(login_pubkey)
+        );
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({"ok": false, "error": "wrong identity key"})),
@@ -160,6 +169,7 @@ async fn admin_login(
     let token = hex::encode(raw);
     let expires = now_unix_secs() + state.admin_auth.session_ttl_secs;
     state.admin_auth.add_session(token.clone(), expires);
+    tracing::info!("admin login: successful for {}", state.admin_auth.server_pubkey_hex);
     (
         StatusCode::OK,
         Json(json!({

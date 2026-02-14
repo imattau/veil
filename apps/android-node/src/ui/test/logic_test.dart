@@ -13,34 +13,37 @@ class _OptimisticNodeService extends NodeService {
   final Completer<void> postCompleter = Completer<void>();
 
   @override
-  Future<void> publishReaction({
+  Future<bool> publishReaction({
     required String targetRoot,
     String actionCode = 'like',
     String channelId = 'general',
     int namespace = 32,
-  }) {
-    return reactionCompleter.future;
+  }) async {
+    await reactionCompleter.future;
+    return true;
   }
 
   @override
-  Future<void> publishRepost({
+  Future<bool> publishRepost({
     required String targetRoot,
     String? comment,
     String channelId = 'general',
     int namespace = 32,
-  }) {
-    return repostCompleter.future;
+  }) async {
+    await repostCompleter.future;
+    return true;
   }
 
   @override
-  Future<void> publishPost({
+  Future<bool> publishPost({
     required String text,
     String? replyToRoot,
     List<String> mediaRoots = const [],
     String channelId = 'general',
     int namespace = 32,
-  }) {
-    return postCompleter.future;
+  }) async {
+    await postCompleter.future;
+    return true;
   }
 }
 

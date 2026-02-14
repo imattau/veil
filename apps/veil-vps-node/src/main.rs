@@ -581,13 +581,6 @@ fn merge_peers<T: Clone + Eq + Hash>(
 }
 
 fn load_or_create_node_key(path: &Path) -> Result<[u8; 32], String> {
-    if let Ok(env_key) = std::env::var("VEIL_VPS_NODE_KEY") {
-        if let Some(key) = decode_nostr_secret_input(&env_key) {
-            info!("using node key from VEIL_VPS_NODE_KEY environment variable");
-            return Ok(key);
-        }
-    }
-
     if path.exists() {
         let bytes = fs::read(path).map_err(|e| format!("read node key: {e}"))?;
         if bytes.len() == 32 {
@@ -993,11 +986,24 @@ async fn main() {
     let nostr_bridge_persist_every = config.nostr_bridge_persist_every_updates;
     let required_signed = parse_required_signed_namespaces(&config.required_signed_namespaces);
 
-    let node_key = match load_or_create_node_key(&node_key_path) {
-        Ok(key) => key,
-        Err(err) => {
-            error!("fatal: {err}");
-            return;
+    let node_key = if let Some(key_input) = &config.node_key {
+        match decode_nostr_secret_input(key_input) {
+            Some(key) => {
+                info!("using node key from configuration/environment");
+                key
+            }
+            None => {
+                error!("fatal: invalid node_key provided in configuration/environment");
+                return;
+            }
+        }
+    } else {
+        match load_or_create_node_key(&node_key_path) {
+            Ok(key) => key,
+            Err(err) => {
+                error!("fatal: {err}");
+                return;
+            }
         }
     };
     let node_signer = NostrSigner::from_secret(node_key).expect("node key validated");

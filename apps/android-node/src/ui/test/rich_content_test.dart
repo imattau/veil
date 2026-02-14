@@ -10,11 +10,13 @@ void main() {
   group('RichTextView', () {
     testWidgets('renders hashtags, mentions, and links', (WidgetTester tester) async {
       const text = 'Hello #veil and @alice check https://veil.io';
+      final service = NodeService();
+      final controller = SocialController(service);
       
       await tester.pumpWidget(
-        const MaterialApp(
+        MaterialApp(
           home: Scaffold(
-            body: RichTextView(text: text),
+            body: RichTextView(text: text, controller: controller),
           ),
         ),
       );

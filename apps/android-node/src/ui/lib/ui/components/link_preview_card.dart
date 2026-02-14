@@ -60,7 +60,7 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
   String? _extractMeta(String html, String property) {
     // Look for <meta property="..." content="..."> or <meta name="..." content="...">
     final RegExp exp = RegExp(
-      '<meta\s+(?:property|name)=["']$property["']\s+content=["'](.*?)["']',
+      '<meta\\s+(?:property|name)=["\']$property["\']\\s+content=["\'](.*?)["\']',
       caseSensitive: false,
     );
     final match = exp.firstMatch(html);

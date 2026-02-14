@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../logic/node_service.dart';
+import '../../logic/social_controller.dart';
 import '../theme/veil_theme.dart';
 
 class ProfileEditView extends StatefulWidget {

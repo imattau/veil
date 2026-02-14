@@ -15,7 +15,7 @@ class _FakeNodeService extends NodeService {
   final List<Map<String, dynamic>> publishedVotes = [];
 
   @override
-  Future<void> publishPoll({
+  Future<bool> publishPoll({
     required String question,
     required List<String> options,
     int? endsAtUnixSeconds,
@@ -29,10 +29,11 @@ class _FakeNodeService extends NodeService {
       'channel_id': channelId,
       'namespace': namespace,
     });
+    return true;
   }
 
   @override
-  Future<void> publishPollVote({
+  Future<bool> publishPollVote({
     required String pollRoot,
     required int optionIndex,
     String channelId = 'general',
@@ -44,6 +45,7 @@ class _FakeNodeService extends NodeService {
       'channel_id': channelId,
       'namespace': namespace,
     });
+    return true;
   }
 }
 
