@@ -52,8 +52,8 @@ pub struct VpsConfig {
     #[serde(deserialize_with = "deserialize_list")]
     pub blocked_peers: Vec<String>,
     pub nostr_bridge_enabled: bool,
-    #[serde(deserialize_with = "deserialize_list", alias = "nostr_relays", alias = "nostr_bridge_relays")]
-    pub nostr_relays_internal: Vec<String>,
+    #[serde(deserialize_with = "deserialize_list")]
+    pub nostr_bridge_relays: Vec<String>,
     pub nostr_bridge_channel_id: String,
     pub nostr_bridge_namespace: u64,
     #[serde(with = "humantime_serde")]
@@ -149,7 +149,7 @@ impl VpsConfig {
             .set_default("ble_peers", Vec::<String>::new())?
             .set_default("ble_allowlist", Vec::<String>::new())?
             .set_default("blocked_peers", Vec::<String>::new())?
-            .set_default("nostr_relays_internal", Vec::<String>::new())?
+            .set_default("nostr_bridge_relays", Vec::<String>::new())?
             .set_default("required_signed_namespaces", Vec::<String>::new())?
             .set_default("quic_trusted_certs", Vec::<String>::new())?;
 
@@ -169,6 +169,12 @@ impl VpsConfig {
         }
 
         builder = builder.add_source(Environment::with_prefix("VEIL_VPS").try_parsing(true));
+
+        if let Ok(legacy) = std::env::var("VEIL_VPS_NOSTR_RELAYS") {
+            if !legacy.trim().is_empty() {
+                builder = builder.set_override("nostr_bridge_relays", legacy)?;
+            }
+        }
 
         builder.build()?.try_deserialize()
     }
@@ -308,7 +314,7 @@ mod tests {
                     vec!["bad1".to_string(), "bad2".to_string()]
                 );
                 assert_eq!(
-                    cfg.nostr_relays_internal,
+                    cfg.nostr_bridge_relays,
                     vec![
                         "wss://relay1.example".to_string(),
                         "wss://relay2.example".to_string()
