@@ -96,11 +96,12 @@ You can tail systemd logs or stdout for:
 - snapshot write failures
 - adapter startup errors
 
-Health check, metrics, peers:
+Health check, metrics, peers, admin:
 - Local HTTP health endpoint: `http://127.0.0.1:9090/health` (bind configurable via `VEIL_VPS_HEALTH_BIND`)
 - Metrics endpoint: `http://127.0.0.1:9090/metrics`
 - Peers endpoint: `http://127.0.0.1:9090/peers`
   - Optional query params: `limit` (max 1000), `prefix` (e.g., `ws:`, `wssrv:`, `tor:`, `ble:`)
+- Admin API: `http://127.0.0.1:9090/admin-api/status`, `/login`, `/settings`, etc.
 
 ## 5) Recovery
 

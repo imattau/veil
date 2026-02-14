@@ -137,9 +137,9 @@ async fn admin_login(
     State(state): State<VpsAppState>,
     Json(payload): Json<AdminLoginRequest>,
 ) -> impl IntoResponse {
-    tracing::debug!("admin login: attempt received");
+    tracing::info!("admin login: attempt received");
     let input = payload.secret.trim();
-    tracing::debug!("admin login: input prefix: {}", if input.len() > 5 { &input[..5] } else { input });
+    tracing::info!("admin login: input prefix: {}", if input.len() > 5 { &input[..5] } else { "***" });
     
     let Some(secret) = decode_nostr_secret_input(&payload.secret) else {
         tracing::warn!("admin login: failed to decode secret input (tried hex and nsec)");

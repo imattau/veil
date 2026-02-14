@@ -415,6 +415,11 @@ server {
         proxy_set_header Host $host;
         limit_req zone=veil_health burst=10 nodelay;
     }
+    location /admin-api {
+        proxy_pass http://127.0.0.1:${PROXY_HEALTH_PORT};
+        proxy_set_header Host $host;
+        limit_req zone=veil_health burst=10 nodelay;
+    }
 }
 NGINXCONF
   if [[ ! -e "$NGINX_SITE_LINK" ]]; then
@@ -441,6 +446,7 @@ ${PROXY_DOMAIN} {
   reverse_proxy /health 127.0.0.1:${PROXY_HEALTH_PORT}
   reverse_proxy /metrics 127.0.0.1:${PROXY_HEALTH_PORT}
   reverse_proxy /peers 127.0.0.1:${PROXY_HEALTH_PORT}
+  reverse_proxy /admin-api* 127.0.0.1:${PROXY_HEALTH_PORT}
 }
 CADDYCONF
   if [[ -f "$CADDYFILE" ]] && ! grep -q "conf.d" "$CADDYFILE"; then
