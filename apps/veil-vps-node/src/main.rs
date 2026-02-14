@@ -873,6 +873,7 @@ fn normalize_settings_key(key: &str) -> Option<&'static str> {
         "VEIL_VPS_NOSTR_BRIDGE_ENABLE" => Some("VEIL_VPS_NOSTR_BRIDGE_ENABLED"),
         "VEIL_VPS_OPEN_RELAY" => Some("VEIL_VPS_OPEN_RELAY"),
         "VEIL_VPS_NOSTR_BRIDGE_ENABLED" => Some("VEIL_VPS_NOSTR_BRIDGE_ENABLED"),
+        "VEIL_VPS_NOSTR_RELAYS" => Some("VEIL_VPS_NOSTR_BRIDGE_RELAYS"),
         "VEIL_VPS_NOSTR_BRIDGE_RELAYS" => Some("VEIL_VPS_NOSTR_BRIDGE_RELAYS"),
         "VEIL_VPS_NOSTR_BRIDGE_CHANNEL_ID" => Some("VEIL_VPS_NOSTR_BRIDGE_CHANNEL_ID"),
         "VEIL_VPS_NOSTR_BRIDGE_NAMESPACE" => Some("VEIL_VPS_NOSTR_BRIDGE_NAMESPACE"),
@@ -927,6 +928,7 @@ fn apply_settings_db_overrides(path: &Path) {
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
     let log_buffer = Arc::new(LogBuffer::new(1000));
     let filter = std::env::var("VEIL_LOG").unwrap_or_else(|_| "info".to_string());
 
@@ -1059,9 +1061,9 @@ async fn main() {
     let required_signed = parse_required_signed_namespaces(&config.required_signed_namespaces);
 
     info!(
-        "nostr bridge config: enabled={}, relays={}, channel={}, namespace={}, since={:?}, state={}",
+        "nostr bridge config: enabled={}, relays={:?}, channel={}, namespace={}, since={:?}, state={}",
         nostr_bridge_enabled,
-        nostr_bridge_relays.len(),
+        nostr_bridge_relays,
         nostr_bridge_channel,
         nostr_bridge_namespace,
         nostr_bridge_since,
@@ -1326,8 +1328,9 @@ async fn main() {
             None
         } else {
             info!(
-                "nostr bridge enabled with {} relays, channel={}, namespace={}",
+                "nostr bridge enabled with {} relays ({:?}), channel={}, namespace={}",
                 nostr_bridge_relays.len(),
+                nostr_bridge_relays,
                 nostr_bridge_channel,
                 nostr_bridge_namespace
             );

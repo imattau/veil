@@ -52,7 +52,7 @@ pub struct VpsConfig {
     #[serde(deserialize_with = "deserialize_list")]
     pub blocked_peers: Vec<String>,
     pub nostr_bridge_enabled: bool,
-    #[serde(deserialize_with = "deserialize_list")]
+    #[serde(deserialize_with = "deserialize_list", alias = "nostr_relays")]
     pub nostr_bridge_relays: Vec<String>,
     pub nostr_bridge_channel_id: String,
     pub nostr_bridge_namespace: u64,
