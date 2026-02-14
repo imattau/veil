@@ -418,8 +418,10 @@ if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   ALLOWED_PATHS="${PREFIX}"
   if [[ "$FINAL_CERT_PATH" != "${PREFIX}"* ]]; then
     CERT_DIR=$(dirname "$FINAL_CERT_PATH")
-    ALLOWED_PATHS="${ALLOWED_PATHS}:${CERT_DIR}"
-    echo "Adding certificate path to systemd allowed paths: ${CERT_DIR}"
+    if [[ -d "$CERT_DIR" ]]; then
+      ALLOWED_PATHS="${ALLOWED_PATHS} ${CERT_DIR}"
+      echo "Adding certificate path to systemd allowed paths: ${CERT_DIR}"
+    fi
   fi
   sed -i "s|ReadWritePaths=/opt/veil-vps-node|ReadWritePaths=${ALLOWED_PATHS}|g" "$TMP_SERVICE"
 
