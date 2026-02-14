@@ -288,16 +288,66 @@ fi
 set_env_var() {
   local key="$1"
   local value="$2"
-  if ! grep -q "^${key}=" "$ENV_FILE"; then
+  local force="${3:-0}"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    if [[ "$force" == "1" ]]; then
+      # Use @ as delimiter for sed to handle paths with /
+      sed -i "s@^${key}=.*@${key}=${value}@" "$ENV_FILE"
+    fi
+  else
     echo "${key}=${value}" >> "$ENV_FILE"
   fi
 }
 
+resolve_certificates() {
+  local cert_path="${PREFIX}/data/quic_cert.der"
+  local key_path="${PREFIX}/data/quic_key.der"
+  local force_update=0
+
+  # 1. Try to find Let's Encrypt certificates if a domain is set
+  if [[ -n "$PROXY_DOMAIN" ]]; then
+    local le_cert="/etc/letsencrypt/live/${PROXY_DOMAIN}/fullchain.pem"
+    local le_key="/etc/letsencrypt/live/${PROXY_DOMAIN}/privkey.pem"
+    
+    if [[ -f "$le_cert" && -f "$le_key" ]]; then
+      echo "Detected Let's Encrypt certificates for $PROXY_DOMAIN."
+      read -r -p "Use these certificates for QUIC? [Y/n] " use_le
+      if [[ -z "$use_le" || "$use_le" =~ ^[Yy]$ ]]; then
+        cert_path="$le_cert"
+        key_path="$le_key"
+        force_update=1
+      fi
+    fi
+  fi
+
+  # 2. Prompt for custom paths if not using LE or if user wants to change
+  if [[ "$force_update" == "0" ]]; then
+    echo "Current QUIC certificate path: $cert_path"
+    read -r -p "Enter custom certificate path (leave blank to keep current): " input_cert
+    if [[ -n "$input_cert" ]]; then
+      cert_path="$input_cert"
+      force_update=1
+    fi
+    
+    echo "Current QUIC private key path: $key_path"
+    read -r -p "Enter custom private key path (leave blank to keep current): " input_key
+    if [[ -n "$input_key" ]]; then
+      key_path="$input_key"
+      force_update=1
+    fi
+  fi
+
+  export FINAL_CERT_PATH="$cert_path"
+  export FINAL_KEY_PATH="$key_path"
+  export CERT_FORCE_UPDATE="$force_update"
+}
+
 HOSTNAME_FQDN=$(hostname -f 2>/dev/null || hostname)
+resolve_certificates
 set_env_var "VEIL_VPS_STATE_PATH" "${PREFIX}/data/node_state.cbor"
 set_env_var "VEIL_VPS_NODE_KEY_PATH" "${PREFIX}/data/node_identity.key"
-set_env_var "VEIL_VPS_QUIC_CERT_PATH" "${PREFIX}/data/quic_cert.der"
-set_env_var "VEIL_VPS_QUIC_KEY_PATH" "${PREFIX}/data/quic_key.der"
+set_env_var "VEIL_VPS_QUIC_CERT_PATH" "${FINAL_CERT_PATH}" "$CERT_FORCE_UPDATE"
+set_env_var "VEIL_VPS_QUIC_KEY_PATH" "${FINAL_KEY_PATH}" "$CERT_FORCE_UPDATE"
 set_env_var "VEIL_VPS_QUIC_BIND" "${VEIL_VPS_QUIC_BIND:-0.0.0.0:5000}"
 set_env_var "VEIL_VPS_QUIC_ALPN" "veil-quic/1,veil/1,veil-node,veil,h3,hq-29"
 set_env_var "VEIL_VPS_FAST_PEERS" ""
