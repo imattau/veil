@@ -53,6 +53,8 @@ pub enum WebSocketAdapterError {
     PayloadTooLarge { hint: usize },
     #[error("server bind failed: {0}")]
     BindFailed(String),
+    #[error("invalid URL: {0}")]
+    UrlInvalid(String),
 }
 
 pub struct WebSocketAdapter {
@@ -88,6 +90,10 @@ struct WebSocketAdapterMetricsInner {
 
 impl WebSocketAdapter {
     pub fn connect(config: WebSocketAdapterConfig) -> Result<Self, WebSocketAdapterError> {
+        if config.url.trim().is_empty() {
+            return Err(WebSocketAdapterError::UrlInvalid("empty url".to_string()));
+        }
+
         let (outbound_tx, outbound_rx) =
             tokio_mpsc::channel::<Vec<u8>>(config.outbound_queue_capacity);
         let (inbound_tx, inbound_rx) =

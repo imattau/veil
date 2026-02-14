@@ -520,15 +520,35 @@ fn parse_fallback_peer_strings(values: &[String]) -> Vec<FallbackPeer> {
         .iter()
         .filter_map(|value| {
             if let Some(rest) = value.strip_prefix("ws:") {
-                Some(FallbackPeer::WebSocket(rest.to_string()))
+                let url = rest.trim();
+                if url.is_empty() {
+                    None
+                } else {
+                    Some(FallbackPeer::WebSocket(url.to_string()))
+                }
             } else if let Some(rest) = value.strip_prefix("wssrv:") {
-                Some(FallbackPeer::WebSocketServer(rest.to_string()))
+                let addr = rest.trim();
+                if addr.is_empty() {
+                    None
+                } else {
+                    Some(FallbackPeer::WebSocketServer(addr.to_string()))
+                }
             } else if let Some(rest) = value.strip_prefix("tor:") {
-                Some(FallbackPeer::Tor(rest.to_string()))
+                let addr = rest.trim();
+                if addr.is_empty() {
+                    None
+                } else {
+                    Some(FallbackPeer::Tor(addr.to_string()))
+                }
             } else if let Some(_rest) = value.strip_prefix("ble:") {
                 #[cfg(feature = "ble")]
                 {
-                    Some(FallbackPeer::Ble(BlePeer::new(_rest.to_string())))
+                    let addr = _rest.trim();
+                    if addr.is_empty() {
+                        None
+                    } else {
+                        Some(FallbackPeer::Ble(BlePeer::new(addr.to_string())))
+                    }
                 }
                 #[cfg(not(feature = "ble"))]
                 {
@@ -1011,11 +1031,11 @@ async fn main() {
     let max_dynamic_peers = config.max_dynamic_peers;
 
     let quic_bind = config.quic_bind.clone();
-    let ws_url = config.ws_url.clone();
-    let ws_listen = config.ws_listen.clone();
-    let ws_peer = config.ws_peer.clone();
+    let ws_url = config.ws_url.clone().filter(|s| !s.trim().is_empty());
+    let ws_listen = config.ws_listen.clone().filter(|s| !s.trim().is_empty());
+    let ws_peer = config.ws_peer.clone().filter(|s| !s.trim().is_empty());
     let ws_peer_id = ws_peer.clone().unwrap_or_else(|| "ws-peer".to_string());
-    let tor_socks_addr = config.tor_socks_addr.clone();
+    let tor_socks_addr = config.tor_socks_addr.clone().filter(|s| !s.trim().is_empty());
 
     let adaptive_scoring = config.adaptive_lane_scoring;
     let probabilistic_forwarding = config.probabilistic_forwarding;
