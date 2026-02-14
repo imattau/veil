@@ -197,7 +197,10 @@ async fn main() {
         let p = protocol.clone();
         tokio::spawn(async move {
             p.sync_contacts(&contacts).await;
-            tracing::info!("Synced {} persisted contacts to protocol engine", contacts.len());
+            tracing::info!(
+                "Synced {} persisted contacts to protocol engine",
+                contacts.len()
+            );
         });
     }
 
@@ -207,13 +210,12 @@ async fn main() {
             .split(',')
             .map(|value| value.trim().to_string())
             .filter(|value| {
-                !value.is_empty() && (
-                    value.starts_with("http://") || 
-                    value.starts_with("https://") ||
-                    value.starts_with("ws://") ||
-                    value.starts_with("wss://") ||
-                    value.starts_with("quic://")
-                )
+                !value.is_empty()
+                    && (value.starts_with("http://")
+                        || value.starts_with("https://")
+                        || value.starts_with("ws://")
+                        || value.starts_with("wss://")
+                        || value.starts_with("quic://"))
             })
             .collect(),
         gossip_interval: std::env::var("VEIL_DISCOVERY_INTERVAL_MS")

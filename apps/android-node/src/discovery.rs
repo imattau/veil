@@ -124,11 +124,11 @@ impl DiscoveryWorker {
     pub async fn run(self) {
         let mut worker = self;
         let mut next_gossip = tokio::time::Instant::now();
-        
+
         loop {
             tokio::time::sleep_until(next_gossip).await;
             worker.gossip_once().await;
-            
+
             let contact_count = worker.state.contacts().len();
             let interval = if contact_count == 0 {
                 // Gossip more frequently when bootstrapping
@@ -136,7 +136,7 @@ impl DiscoveryWorker {
             } else {
                 worker.config.gossip_interval
             };
-            
+
             next_gossip = tokio::time::Instant::now() + interval;
         }
     }
@@ -187,7 +187,11 @@ impl DiscoveryWorker {
                                     new_contacts += 1;
                                 }
                                 if new_contacts > 0 {
-                                    tracing::info!("HTTP gossip with {} yielded {} contacts", target, new_contacts);
+                                    tracing::info!(
+                                        "HTTP gossip with {} yielded {} contacts",
+                                        target,
+                                        new_contacts
+                                    );
                                 }
                             }
                         }
@@ -201,7 +205,9 @@ impl DiscoveryWorker {
                 let _ = handle.await;
             }
         } else {
-            tracing::warn!("No discovery targets available (bootstrap_urls empty and no known RPC peers)");
+            tracing::warn!(
+                "No discovery targets available (bootstrap_urls empty and no known RPC peers)"
+            );
         }
 
         if self.config.transport_enabled {
@@ -210,7 +216,7 @@ impl DiscoveryWorker {
             let gossip = DiscoveryMessage::gossip(
                 self.state.discovery_sample(self.config.max_gossip_contacts),
             );
-            
+
             if let Err(e) = self.protocol.publish_discovery(announce).await {
                 tracing::debug!("Transport discovery announce failed: {}", e);
             }
@@ -535,7 +541,10 @@ pub fn build_self_contact(node: &NodeState, protocol: &ProtocolEngine) -> Contac
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
             let addr = protocol.quic_bind_addr();
-            if addr.starts_with("0.0.0.0") || addr.starts_with("127.0.0.1") || addr.contains("localhost") {
+            if addr.starts_with("0.0.0.0")
+                || addr.starts_with("127.0.0.1")
+                || addr.contains("localhost")
+            {
                 None
             } else {
                 Some(addr)

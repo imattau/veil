@@ -75,7 +75,7 @@ impl QueueWorker {
                     }
                 }
                 Ok(Some(_)) => {} // Ignored variants (malformed, duplicate, etc.)
-                Ok(None) => {} // Nothing delivered this tick
+                Ok(None) => {}    // Nothing delivered this tick
                 Err(e) => {
                     tracing::error!("Inbound pump error: {}", e);
                 }

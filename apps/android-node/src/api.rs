@@ -42,7 +42,10 @@ pub struct ObjectPublishRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectPublishResponse {
+    /// Root of the original uploaded payload bytes; use this with `/object/{root}`.
     pub object_root: String,
+    /// Root of the encoded wire object envelope.
+    pub wire_root: String,
     pub message_id: Uuid,
     pub queued: bool,
 }

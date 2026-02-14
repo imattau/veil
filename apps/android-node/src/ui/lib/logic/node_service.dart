@@ -1159,8 +1159,15 @@ class NodeService extends ChangeNotifier {
     return result;
   }
 
-  Future<Map<String, dynamic>?> fetchObject(String root) async {
-    return await _getJson('/object/$root');
+  Future<Map<String, dynamic>?> fetchObject(
+    String root, {
+    bool reportErrors = false,
+  }) async {
+    return await _getJson(
+      '/object/$root',
+      reportErrors: reportErrors,
+      suppressStatusCodes: const <int>{404},
+    );
   }
 
   Future<void> importIdentity(String secretKeyHex) async {
@@ -1279,7 +1286,11 @@ class NodeService extends ChangeNotifier {
     return false;
   }
 
-  Future<Map<String, dynamic>?> _getJson(String path) async {
+  Future<Map<String, dynamic>?> _getJson(
+    String path, {
+    bool reportErrors = true,
+    Set<int> suppressStatusCodes = const <int>{},
+  }) async {
     await _refreshServiceStatus();
     final uri = Uri.parse('$_baseUrl$path');
     try {
@@ -1293,9 +1304,11 @@ class NodeService extends ChangeNotifier {
             .timeout(const Duration(seconds: 4));
       }
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        _setState(
-          _state.copyWith(lastError: 'HTTP ${response.statusCode} on $path'),
-        );
+        if (reportErrors && !suppressStatusCodes.contains(response.statusCode)) {
+          _setState(
+            _state.copyWith(lastError: 'HTTP ${response.statusCode} on $path'),
+          );
+        }
         return null;
       }
       final payload = jsonDecode(response.body);
@@ -1304,7 +1317,9 @@ class NodeService extends ChangeNotifier {
       }
       return null;
     } catch (err) {
-      _setState(_state.copyWith(lastError: 'Request failed: $err'));
+      if (reportErrors) {
+        _setState(_state.copyWith(lastError: 'Request failed: $err'));
+      }
       return null;
     }
   }

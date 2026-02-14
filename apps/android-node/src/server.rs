@@ -200,9 +200,14 @@ async fn publish_object(
     if payload.len() > MAX_RAW_PAYLOAD_BYTES {
         return bad_request("payload_too_large", "payload exceeds max size");
     }
+    let content_root = veil_fec::sharder::derive_object_root(&payload);
 
     // Build the object immediately to get the wire_root
-    let (encoded_object, wire_root): (Vec<u8>, ObjectRoot) = match state.protocol.build_object(payload, request.namespace, 0).await {
+    let (encoded_object, wire_root): (Vec<u8>, ObjectRoot) = match state
+        .protocol
+        .build_object(payload, request.namespace, 0)
+        .await
+    {
         Ok(res) => res,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     };
@@ -222,16 +227,25 @@ async fn publish_object(
     });
 
     Json(ObjectPublishResponse {
-        object_root: hex::encode(wire_root),
+        object_root: hex::encode(content_root),
+        wire_root: hex::encode(wire_root),
         message_id,
         queued: true,
     })
     .into_response()
 }
 
-async fn queue_raw_object_payload(state: &AppState, namespace: u16, payload: &[u8]) -> (Uuid, [u8; 32]) {
+async fn queue_raw_object_payload(
+    state: &AppState,
+    namespace: u16,
+    payload: &[u8],
+) -> (Uuid, [u8; 32]) {
     // Build the object immediately to get the wire_root
-    let (encoded_object, wire_root): (Vec<u8>, ObjectRoot) = state.protocol.build_object(payload.to_vec(), namespace, 0).await.unwrap_or_default();
+    let (encoded_object, wire_root): (Vec<u8>, ObjectRoot) = state
+        .protocol
+        .build_object(payload.to_vec(), namespace, 0)
+        .await
+        .unwrap_or_default();
 
     // Inject into local cache so it's immediately fetchable
     let _ = state.protocol.inject_object(encoded_object.clone()).await;
@@ -539,7 +553,8 @@ async fn publish_direct_message_text(
         Ok(value) => value,
         Err(err) => return bad_request("encrypt_failed", &err),
     };
-    let (_object_msg, object_root) = queue_raw_object_payload(&state, request.namespace, &encrypted_payload).await;
+    let (_object_msg, object_root) =
+        queue_raw_object_payload(&state, request.namespace, &encrypted_payload).await;
     let bundle = DirectMessageBundle {
         meta: BundleMeta {
             version: 1,
@@ -671,7 +686,8 @@ async fn publish_group_message_text(
         Ok(value) => value,
         Err(err) => return bad_request("encrypt_failed", &err),
     };
-    let (_object_msg, object_root) = queue_raw_object_payload(&state, request.namespace, &encrypted_payload).await;
+    let (_object_msg, object_root) =
+        queue_raw_object_payload(&state, request.namespace, &encrypted_payload).await;
     let bundle = GroupMessageBundle {
         meta: BundleMeta {
             version: 1,
@@ -1807,6 +1823,7 @@ mod tests {
     use crate::api::ContactBundle;
     use crate::api::DiscoveryAnnounceResponse;
     use axum::body::{Body, Bytes};
+    use base64::Engine;
     use http::{Request, StatusCode};
     use tower::ServiceExt;
     use veil_crypto::signing::Signer;
@@ -1900,6 +1917,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn publish_object_returns_fetchable_content_root() {
+        let app = build_router(test_state());
+        let payload = b"mock-image-bytes".to_vec();
+        let body = serde_json::to_string(&ObjectPublishRequest {
+            namespace: 32,
+            payload_b64: base64::engine::general_purpose::STANDARD.encode(&payload),
+        })
+        .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/publish_object")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: ObjectPublishResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.object_root.len(), 64);
+        assert_eq!(parsed.wire_root.len(), 64);
+        assert_ne!(parsed.object_root, parsed.wire_root);
+
+        let object_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/object/{}", parsed.object_root))
+                    .header("x-veil-token", "secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(object_response.status(), StatusCode::OK);
+
+        let object_bytes = axum::body::to_bytes(object_response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let object_payload: ObjectFetchResponse = serde_json::from_slice(&object_bytes).unwrap();
+        let fetched = base64::engine::general_purpose::STANDARD
+            .decode(object_payload.object_b64)
+            .unwrap();
+        assert_eq!(fetched, payload);
     }
 
     #[tokio::test]

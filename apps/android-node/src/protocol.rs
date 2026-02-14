@@ -202,8 +202,9 @@ impl ProtocolEngine {
     pub async fn inject_object(&self, encoded_object: Vec<u8>) -> Result<ObjectRoot, String> {
         let mut runtime = self.inner.lock().await;
         let wire_root = veil_fec::sharder::derive_object_root(&encoded_object);
-        let object = veil_codec::object::decode_object_cbor(&encoded_object).map_err(|e| e.to_string())?;
-        
+        let object =
+            veil_codec::object::decode_object_cbor(&encoded_object).map_err(|e| e.to_string())?;
+
         let erasure_mode = runtime.config.erasure_mode_for_namespace(object.namespace);
         let shards = veil_fec::sharder::object_to_shards_with_mode_and_padding(
             &encoded_object,
@@ -213,7 +214,8 @@ impl ProtocolEngine {
             wire_root,
             erasure_mode,
             runtime.config.bucket_jitter_extra_levels,
-        ).map_err(|e| e.to_string())?;
+        )
+        .map_err(|e| e.to_string())?;
 
         for shard in shards {
             let sid = veil_fec::sharder::shard_id(&shard).map_err(|e| e.to_string())?;
@@ -405,7 +407,8 @@ impl ProtocolEngine {
                     }
                 }
                 if !shards.is_empty() {
-                    let mode = erasure_mode_from_shards(&shards, runtime.config.erasure_coding_mode);
+                    let mode =
+                        erasure_mode_from_shards(&shards, runtime.config.erasure_coding_mode);
                     if let Ok(reconstructed) =
                         reconstruct_object_padded_with_mode(&shards, target_root, mode)
                     {
@@ -809,7 +812,8 @@ fn build_fallback_adapter(config: &ProtocolConfig) -> Result<FallbackAdapter, St
 
         // 2. Add any WebSocket URLs from fallback_peers (from WS_PEERS env var)
         for peer in &config.fallback_peers {
-            if (peer.starts_with("ws://") || peer.starts_with("wss://")) && !seen_ws.contains(peer) {
+            if (peer.starts_with("ws://") || peer.starts_with("wss://")) && !seen_ws.contains(peer)
+            {
                 let ws = crate::adapters::build_ws_adapter(peer.clone(), config.peer_id.clone())
                     .map_err(|e| e.to_string())?;
                 lanes.push(LaneAdapter::WebSocket(ws));
