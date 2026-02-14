@@ -942,6 +942,9 @@ async fn main() {
     dotenvy::dotenv().ok();
     if let Ok(cwd) = std::env::current_dir() {
         info!("starting veil-vps-node in {}", cwd.display());
+        if cwd.to_string_lossy().starts_with("/home/") && !cwd.to_string_lossy().contains("workspace") {
+            warn!("Node is running from a home directory. Ensure this is intentional and that absolute paths are set for 'data/' directories if running as a service user.");
+        }
     }
 
     let cli = Cli::parse();
