@@ -26,7 +26,8 @@ use crate::api::{LaneDetail, LaneStats};
 use crate::discovery::discovery_tag;
 use veil_codec::object::decode_object_cbor_prefix;
 use veil_codec::shard::decode_shard_cbor;
-use veil_fec::sharder::reconstruct_object_padded_with_mode;
+use veil_core::ObjectRoot;
+use veil_fec::sharder::{derive_object_root, reconstruct_object_padded_with_mode};
 use veil_node::persistence::load_state_or_default;
 
 #[derive(Debug, Clone)]
@@ -172,6 +173,57 @@ impl ProtocolEngine {
             .map_err(|e| e.to_string())
     }
 
+    pub async fn publish_encoded_object(&self, encoded_object: Vec<u8>) -> Result<(), String> {
+        let step = self.steps.fetch_add(1, Ordering::Relaxed) + 1;
+        let (fast_peers, fallback_peers) = self.publish_peer_lists().await?;
+        let mut runtime = self.inner.lock().await;
+        let PublisherRuntime {
+            state,
+            fast_adapter,
+            fallback_adapter,
+            config,
+            ..
+        } = &mut *runtime;
+
+        veil_node::publish::publish_encoded_object_multi_lane(
+            state,
+            fast_adapter,
+            fallback_adapter,
+            &encoded_object,
+            &fast_peers,
+            &fallback_peers,
+            step,
+            config,
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+
+    pub async fn inject_object(&self, encoded_object: Vec<u8>) -> Result<ObjectRoot, String> {
+        let mut runtime = self.inner.lock().await;
+        let wire_root = veil_fec::sharder::derive_object_root(&encoded_object);
+        let object = veil_codec::object::decode_object_cbor(&encoded_object).map_err(|e| e.to_string())?;
+        
+        let erasure_mode = runtime.config.erasure_mode_for_namespace(object.namespace);
+        let shards = veil_fec::sharder::object_to_shards_with_mode_and_padding(
+            &encoded_object,
+            object.namespace,
+            object.epoch,
+            object.tag,
+            wire_root,
+            erasure_mode,
+            runtime.config.bucket_jitter_extra_levels,
+        ).map_err(|e| e.to_string())?;
+
+        for shard in shards {
+            let sid = veil_fec::sharder::shard_id(&shard).map_err(|e| e.to_string())?;
+            let bytes = veil_codec::shard::encode_shard_cbor(&shard).map_err(|e| e.to_string())?;
+            veil_node::cache::cache_put(&mut runtime.state, sid, bytes, 0, 1000);
+        }
+
+        Ok(wire_root)
+    }
+
     pub async fn publish_discovery(
         &self,
         msg: crate::discovery::DiscoveryMessage,
@@ -208,6 +260,39 @@ impl ProtocolEngine {
     pub async fn update_wot_policy(&self, policy: LocalWotPolicy) {
         let mut runtime = self.inner.lock().await;
         runtime.config.wot_policy = policy;
+    }
+
+    pub async fn build_object(
+        &self,
+        item: Vec<u8>,
+        namespace: u16,
+        flags: u16,
+    ) -> Result<(Vec<u8>, ObjectRoot), String> {
+        let runtime = self.inner.lock().await;
+        let items = vec![item];
+        let mut payload = Vec::new();
+        ciborium::ser::into_writer(&items, &mut payload).map_err(|e| e.to_string())?;
+
+        let now_step = self.steps.load(Ordering::Relaxed);
+        let epoch = current_epoch();
+        let pubkey = *self.identity_pubkey.lock().await;
+        let tag = derive_feed_tag(&pubkey, Namespace(namespace));
+
+        let encoded_object = veil_node::publish::build_encoded_object(
+            &payload,
+            Namespace(namespace),
+            epoch,
+            tag,
+            &runtime.encrypt_key,
+            now_step,
+            flags | veil_codec::object::OBJECT_FLAG_BATCHED,
+            &XChaCha20Poly1305Cipher,
+            runtime.signer.as_ref(),
+        )
+        .map_err(|e| e.to_string())?;
+
+        let wire_root = veil_fec::sharder::derive_object_root(&encoded_object);
+        Ok((encoded_object, wire_root))
     }
 
     pub async fn add_contact(&self, contact: &crate::api::ContactBundle) {
@@ -297,40 +382,84 @@ impl ProtocolEngine {
 
     pub async fn reconstruct_payload(&self, root: [u8; 32]) -> Option<Vec<u8>> {
         let runtime = self.inner.lock().await;
+        let cipher = XChaCha20Poly1305Cipher;
 
-        // Try direct lookup by root first
-        if let Some(sids) = runtime.state.shard_index.get(&root) {
-            let mut shards = Vec::new();
-            for sid in sids {
-                if let Some(cached) = runtime.state.cache.get(sid) {
-                    if let Ok(shard) = decode_shard_cbor(&cached.bytes) {
-                        shards.push(shard);
+        // 1. Try direct lookup by root (assume it's a wire_root or indexed content_root)
+        let target_wire_roots = {
+            let mut set = std::collections::HashSet::new();
+            set.insert(root);
+            if let Some(wire_root) = runtime.state.content_index.get(&root) {
+                set.insert(*wire_root);
+            }
+            set
+        };
+
+        for target_root in target_wire_roots {
+            if let Some(sids) = runtime.state.shard_index.get(&target_root) {
+                let mut shards = Vec::new();
+                for sid in sids {
+                    if let Some(cached) = runtime.state.cache.get(sid) {
+                        if let Ok(shard) = decode_shard_cbor(&cached.bytes) {
+                            shards.push(shard);
+                        }
                     }
                 }
-            }
-            if !shards.is_empty() {
-                let mode = erasure_mode_from_shards(&shards, runtime.config.erasure_coding_mode);
-                if let Ok(reconstructed) = reconstruct_object_padded_with_mode(&shards, root, mode)
-                {
-                    if let Ok((object, _)) = decode_object_cbor_prefix(&reconstructed) {
-                        let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
-                        if let Ok(payload) = XChaCha20Poly1305Cipher.decrypt(
-                            &runtime.encrypt_key,
-                            object.nonce,
-                            &aad,
-                            &object.ciphertext,
-                        ) {
-                            return Some(payload);
+                if !shards.is_empty() {
+                    let mode = erasure_mode_from_shards(&shards, runtime.config.erasure_coding_mode);
+                    if let Ok(reconstructed) =
+                        reconstruct_object_padded_with_mode(&shards, target_root, mode)
+                    {
+                        if let Ok((object, _)) = decode_object_cbor_prefix(&reconstructed) {
+                            let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
+                            if let Ok(decrypted_payload) = cipher.decrypt(
+                                &runtime.encrypt_key,
+                                object.nonce,
+                                &aad,
+                                &object.ciphertext,
+                            ) {
+                                // Direct match on wire_root?
+                                if target_root == root {
+                                    return Some(decrypted_payload);
+                                }
+
+                                // Match on ObjectV1.object_root (the payload hash)
+                                if object.object_root == root {
+                                    if let Ok(batch) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(
+                                        decrypted_payload.as_slice(),
+                                    ) {
+                                        for item in batch {
+                                            if derive_object_root(&item) == root {
+                                                return Some(item);
+                                            }
+                                        }
+                                    }
+                                    return Some(decrypted_payload);
+                                }
+
+                                // Match on individual item inside a batch
+                                if let Ok(batch) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(
+                                    decrypted_payload.as_slice(),
+                                ) {
+                                    for item in batch {
+                                        if derive_object_root(&item) == root {
+                                            return Some(item);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Fallback: search all roots in index (still better than scanning all shards)
+        // 2. Fallback scan for content hash match (searching inside objects)
         let roots: Vec<_> = runtime.state.shard_index.keys().cloned().collect();
-        let cipher = XChaCha20Poly1305Cipher;
         for wire_root in roots {
+            if wire_root == root {
+                continue; // Already tried direct lookup
+            }
+
             let mut shards = Vec::new();
             if let Some(sids) = runtime.state.shard_index.get(&wire_root) {
                 for sid in sids {
@@ -357,16 +486,35 @@ impl ProtocolEngine {
                 Err(_) => continue,
             };
 
-            // Check if this object contains the requested payload root
-            if object.object_root != root && wire_root != root {
-                continue;
-            }
-
             let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
-            if let Ok(payload) =
+            if let Ok(decrypted_payload) =
                 cipher.decrypt(&runtime.encrypt_key, object.nonce, &aad, &object.ciphertext)
             {
-                return Some(payload);
+                // 2a. Match on ObjectV1.object_root (the payload hash)
+                if object.object_root == root {
+                    // It might still be a batch! If so, we need to check items.
+                    if let Ok(batch) =
+                        ciborium::de::from_reader::<Vec<Vec<u8>>, _>(decrypted_payload.as_slice())
+                    {
+                        for item in batch {
+                            if derive_object_root(&item) == root {
+                                return Some(item);
+                            }
+                        }
+                    }
+                    return Some(decrypted_payload);
+                }
+
+                // 2b. Fallback: match on individual item inside a batch
+                if let Ok(batch) =
+                    ciborium::de::from_reader::<Vec<Vec<u8>>, _>(decrypted_payload.as_slice())
+                {
+                    for item in batch {
+                        if derive_object_root(&item) == root {
+                            return Some(item);
+                        }
+                    }
+                }
             }
         }
 
@@ -565,6 +713,8 @@ fn derive_server_name(peer: &str) -> Option<String> {
         .strip_prefix("quic://")
         .or_else(|| trimmed.strip_prefix("https://"))
         .or_else(|| trimmed.strip_prefix("http://"))
+        .or_else(|| trimmed.strip_prefix("wss://"))
+        .or_else(|| trimmed.strip_prefix("ws://"))
         .unwrap_or(trimmed);
     let host = without_scheme.split(':').next().unwrap_or(without_scheme);
     if host.is_empty() {
@@ -590,7 +740,7 @@ fn build_lane_details(role: &str, snapshots: Vec<LaneSnapshot>) -> Vec<LaneDetai
         .map(|snapshot| LaneDetail {
             role: role.to_string(),
             lane: snapshot.label.to_string(),
-            connected: snapshot.health.outbound_send_ok > 0 || snapshot.health.inbound_received > 0,
+            connected: snapshot.connected,
             last_error: snapshot.health.last_error,
             last_error_code: snapshot.health.last_error_code,
             stats: LaneStats {
@@ -625,7 +775,8 @@ fn build_fast_adapter(config: &ProtocolConfig) -> Result<FastAdapter, String> {
         lanes.push(LaneAdapter::Quic(quic));
     }
 
-    if config.ws_url.is_some() {
+    // Fast lane only uses WebSocket if QUIC is not available
+    if lanes.is_empty() && config.ws_url.is_some() {
         lanes.push(build_ws_fast(config)?);
     }
 
@@ -638,11 +789,33 @@ fn build_fast_adapter(config: &ProtocolConfig) -> Result<FastAdapter, String> {
 
 fn build_fallback_adapter(config: &ProtocolConfig) -> Result<FallbackAdapter, String> {
     let mut lanes: Vec<LaneAdapter> = Vec::new();
+    let mut seen_ws = std::collections::HashSet::new();
 
-    if let Some(ws_url) = &config.ws_url {
-        let ws = crate::adapters::build_ws_adapter(ws_url.clone(), config.peer_id.clone())
-            .map_err(|e| e.to_string())?;
-        lanes.push(LaneAdapter::WebSocket(ws));
+    // Fallback only uses WebSocket if it's NOT already in the fast lane
+    let has_ws_in_fast = config.quic_server_name.is_none()
+        && config.fast_peers.is_empty()
+        && config.ws_url.is_some();
+
+    if !has_ws_in_fast {
+        // 1. Add explicitly configured primary ws_url
+        if let Some(ws_url) = &config.ws_url {
+            if !ws_url.trim().is_empty() {
+                let ws = crate::adapters::build_ws_adapter(ws_url.clone(), config.peer_id.clone())
+                    .map_err(|e| e.to_string())?;
+                lanes.push(LaneAdapter::WebSocket(ws));
+                seen_ws.insert(ws_url.clone());
+            }
+        }
+
+        // 2. Add any WebSocket URLs from fallback_peers (from WS_PEERS env var)
+        for peer in &config.fallback_peers {
+            if (peer.starts_with("ws://") || peer.starts_with("wss://")) && !seen_ws.contains(peer) {
+                let ws = crate::adapters::build_ws_adapter(peer.clone(), config.peer_id.clone())
+                    .map_err(|e| e.to_string())?;
+                lanes.push(LaneAdapter::WebSocket(ws));
+                seen_ws.insert(peer.clone());
+            }
+        }
     }
 
     if let Some(socks) = &config.tor_socks {
@@ -661,10 +834,10 @@ fn build_fallback_adapter(config: &ProtocolConfig) -> Result<FallbackAdapter, St
 
 #[cfg(test)]
 mod tests {
-    use super::{default_protocol_config, erasure_mode_from_shards};
+    use super::{default_protocol_config, erasure_mode_from_shards, ProtocolEngine};
     use veil_core::types::NAMESPACE_PUBLIC_FEED;
-    use veil_core::{Epoch, Namespace};
-    use veil_crypto::signing::NostrSigner;
+    use veil_core::{Epoch, Namespace, ObjectRoot};
+    use veil_crypto::signing::{NostrSigner, Signer};
     use veil_fec::profile::ErasureCodingMode;
     use veil_fec::sharder::{derive_object_root, object_to_shards_with_mode};
 
@@ -675,6 +848,7 @@ mod tests {
             "peer-a".to_string(),
             32,
             [0x11; 32],
+            [0xAA; 32],
             NostrSigner::from_secret([0x22; 32]).expect("valid nostr test key"),
         );
 
@@ -703,5 +877,55 @@ mod tests {
 
         let mode = erasure_mode_from_shards(&shards, ErasureCodingMode::HardenedNonSystematic);
         assert_eq!(mode, ErasureCodingMode::Systematic);
+    }
+
+    #[tokio::test]
+    async fn media_round_trip_integration() {
+        let signer = NostrSigner::from_secret([0x42; 32]).unwrap();
+        let pubkey = signer.public_key();
+        let key = [0xAA; 32];
+
+        let cfg = default_protocol_config(
+            "ws://127.0.0.1:1/ws".to_string(),
+            "node-a".to_string(),
+            32,
+            pubkey,
+            key,
+            signer,
+        );
+
+        let protocol = ProtocolEngine::new(cfg).expect("protocol init");
+
+        // 1. Build a mock media object (e.g. image bytes)
+        let media_payload = b"this is a mock image payload".to_vec();
+        let (encoded_object, wire_root): (Vec<u8>, ObjectRoot) = protocol
+            .build_object(media_payload.clone(), 32, 0)
+            .await
+            .expect("build object");
+
+        // 2. Inject it into local cache (simulating it being available after publish)
+        let injected_root: ObjectRoot = protocol
+            .inject_object(encoded_object)
+            .await
+            .expect("inject object");
+        assert_eq!(injected_root, wire_root);
+
+        // 3. Try to reconstruct by wire_root (fast path)
+        let reconstructed_wire: Vec<u8> = protocol
+            .reconstruct_payload(wire_root)
+            .await
+            .expect("reconstruct by wire_root");
+        // Note: when matched by wire_root, it returns the whole payload (CBOR batch)
+        assert!(reconstructed_wire.len() > media_payload.len());
+
+        // 4. Try to reconstruct by media_payload hash (slow path / content match)
+        let content_hash = veil_fec::sharder::derive_object_root(&media_payload);
+        let reconstructed_content: Vec<u8> = protocol
+            .reconstruct_payload(content_hash)
+            .await
+            .expect("reconstruct by content_hash");
+
+        // Should return the UNWRAPPED media bytes
+        assert_eq!(reconstructed_content, media_payload);
     }
 }

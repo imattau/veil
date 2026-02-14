@@ -105,6 +105,7 @@ async fn real_node_quic_send() {
         "android-node-real-test".to_string(),
         32,
         identity.public_key,
+        identity.encrypt_key,
         identity.signer(),
     );
     cfg.ws_url = None;

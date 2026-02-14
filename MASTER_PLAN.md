@@ -151,6 +151,11 @@ This document consolidates all feature-specific plans and roadmaps for the VEIL 
     - [x] Fix non-routable self-contact in discovery gossip (#24).
     - [x] Prioritize HTTP gossip for initial peer bootstrap (#25).
     - [x] Add WebSocket adapter auto-reconnection (#26).
+- [x] **Media Fixes**:
+    - [x] Fix `reconstruct_payload` to CBOR-unwrap batch and match individual item hashes.
+    - [x] Update `publish_object` to return the pipeline-consistent root hash.
+    - [x] Verify `emit_payload` root consistency for media.
+    - [x] Add round-trip integration test for media upload/fetch.
 - [ ] Implement unit tests for rich content.
 
 ### VPS Node (`apps/veil-vps-node`)

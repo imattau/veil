@@ -272,7 +272,7 @@ fn swarm_sim_multilane_ws_with_fallback() {
         .fallback_redundancy_fanout(1)
         .build();
     let signer = Ed25519Signer::from_secret([0x11; 32]);
-    let peers = vec!["peer".to_string()];
+    let peers = vec![ws_url.clone()];
 
     let mut connected: HashSet<String> = HashSet::new();
     let mut delivered: HashMap<String, Vec<u8>> = HashMap::new();

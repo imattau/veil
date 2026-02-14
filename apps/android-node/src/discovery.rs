@@ -142,19 +142,21 @@ impl DiscoveryWorker {
     }
 
     async fn gossip_once(&mut self) {
-        let mut targets = self.config.bootstrap_urls.clone();
+        let mut all_targets = self.config.bootstrap_urls.clone();
         let contacts = self.state.contacts();
         for contact in &contacts {
             if let Some(rpc_url) = &contact.rpc_url {
-                if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
-                    targets.push(rpc_url.clone());
-                }
+                all_targets.push(rpc_url.clone());
             }
         }
-        targets.sort();
-        targets.dedup();
+        all_targets.sort();
+        all_targets.dedup();
 
-        let target_count = targets.len();
+        // Only use http/https targets for reqwest
+        let mut http_targets = all_targets.clone();
+        http_targets.retain(|url| url.starts_with("http://") || url.starts_with("https://"));
+
+        let target_count = http_targets.len();
         let contact_count = contacts.len();
 
         if target_count > 0 {
@@ -168,7 +170,7 @@ impl DiscoveryWorker {
             );
 
             let mut handles = Vec::new();
-            for target in targets {
+            for target in http_targets {
                 let payload = payload.clone();
                 let state = Arc::clone(&self.state);
                 let protocol = Arc::clone(&self.protocol);

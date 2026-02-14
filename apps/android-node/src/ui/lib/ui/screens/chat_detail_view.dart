@@ -70,11 +70,12 @@ class _ChatDetailViewState extends State<ChatDetailView> {
                     ? widget.controller.getMessagesForContact(widget.pubkey!)
                     : widget.controller.getMessagesForGroup(widget.groupId!);
 
-                // Sort by seq ascending for chat flow
+                // Sort by seq descending for reversed chat flow
                 final sorted = messages.toList()
-                  ..sort((a, b) => a.seq.compareTo(b.seq));
+                  ..sort((a, b) => b.seq.compareTo(a.seq));
 
                 return ListView.builder(
+                  reverse: true,
                   padding: const EdgeInsets.fromLTRB(12, 16, 12, 8),
                   itemCount: sorted.length,
                   itemBuilder: (context, index) {

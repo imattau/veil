@@ -136,6 +136,7 @@ pub struct QuicAdapterMetrics {
     pub send_attempts: u64,
     pub send_success: u64,
     pub send_errors: u64,
+    pub prequeue_errors: u64,
     pub inbound_received: u64,
     pub inbound_dropped: u64,
 }
@@ -146,6 +147,7 @@ struct QuicAdapterMetricsInner {
     send_attempts: AtomicU64,
     send_success: AtomicU64,
     send_errors: AtomicU64,
+    prequeue_errors: AtomicU64,
     inbound_received: AtomicU64,
     inbound_dropped: AtomicU64,
 }
@@ -217,6 +219,7 @@ impl QuicAdapter {
             send_attempts: self.metrics.send_attempts.load(Ordering::Relaxed),
             send_success: self.metrics.send_success.load(Ordering::Relaxed),
             send_errors: self.metrics.send_errors.load(Ordering::Relaxed),
+            prequeue_errors: self.metrics.prequeue_errors.load(Ordering::Relaxed),
             inbound_received: self.metrics.inbound_received.load(Ordering::Relaxed),
             inbound_dropped: self.metrics.inbound_dropped.load(Ordering::Relaxed),
         }
@@ -241,10 +244,14 @@ impl TransportAdapter for QuicAdapter {
     fn send(&mut self, peer: &Self::Peer, bytes: &[u8]) -> Result<(), Self::Error> {
         if let Some(hint) = self.max_payload_hint {
             if bytes.len() > hint {
+                self.metrics.prequeue_errors.fetch_add(1, Ordering::Relaxed);
                 return Err(QuicAdapterError::PayloadTooLarge { hint });
             }
         }
-        let peer_addr = resolve_peer_addr(peer).map_err(|_| QuicAdapterError::InvalidPeer)?;
+        let peer_addr = resolve_peer_addr(peer).map_err(|_| {
+            self.metrics.prequeue_errors.fetch_add(1, Ordering::Relaxed);
+            QuicAdapterError::InvalidPeer
+        })?;
         let server_name = derive_server_name(peer).unwrap_or_else(|| {
             // Default to configured server_name if peer string doesn't look like a host
             "veil-node".to_string()
@@ -255,9 +262,12 @@ impl TransportAdapter for QuicAdapter {
                 server_name,
                 bytes: bytes.to_vec(),
             })
-            .map_err(|err| match err {
-                tokio_mpsc::error::TrySendError::Full(_) => QuicAdapterError::QueueFull,
-                tokio_mpsc::error::TrySendError::Closed(_) => QuicAdapterError::Closed,
+            .map_err(|err| {
+                self.metrics.prequeue_errors.fetch_add(1, Ordering::Relaxed);
+                match err {
+                    tokio_mpsc::error::TrySendError::Full(_) => QuicAdapterError::QueueFull,
+                    tokio_mpsc::error::TrySendError::Closed(_) => QuicAdapterError::Closed,
+                }
             })
             .map(|_| {
                 self.metrics.outbound_queued.fetch_add(1, Ordering::Relaxed);
@@ -281,7 +291,7 @@ impl TransportAdapter for QuicAdapter {
         TransportHealthSnapshot {
             outbound_queued: m.outbound_queued,
             outbound_send_ok: m.send_success,
-            outbound_send_err: m.send_errors,
+            outbound_send_err: m.send_errors.saturating_add(m.prequeue_errors),
             inbound_received: m.inbound_received,
             inbound_dropped: m.inbound_dropped,
             reconnect_attempts: 0,
@@ -611,7 +621,17 @@ fn resolve_peer_addr(peer: &str) -> Result<SocketAddr, QuicAdapterError> {
     if let Ok(addr) = SocketAddr::from_str(peer) {
         return Ok(addr);
     }
-    let mut addrs = peer
+    let trimmed = peer.trim();
+    let without_scheme = trimmed
+        .strip_prefix("quic://")
+        .or_else(|| trimmed.strip_prefix("https://"))
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or(trimmed);
+
+    // Strip path if present
+    let host_port = without_scheme.split('/').next().unwrap_or(without_scheme);
+
+    let mut addrs = host_port
         .to_socket_addrs()
         .map_err(|_| QuicAdapterError::InvalidPeer)?;
     addrs.next().ok_or(QuicAdapterError::InvalidPeer)
@@ -627,7 +647,11 @@ fn derive_server_name(peer: &str) -> Option<String> {
         .or_else(|| trimmed.strip_prefix("https://"))
         .or_else(|| trimmed.strip_prefix("http://"))
         .unwrap_or(trimmed);
-    let host = without_scheme.split(':').next().unwrap_or(without_scheme);
+
+    // Strip path if present
+    let host_port = without_scheme.split('/').next().unwrap_or(without_scheme);
+    let host = host_port.split(':').next().unwrap_or(host_port);
+
     if host.is_empty() {
         None
     } else {

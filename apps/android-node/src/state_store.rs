@@ -230,6 +230,9 @@ mod tests {
                 secret_key_hex: "bb".repeat(32),
                 secret_key_enc_nonce_b64: None,
                 secret_key_enc_b64: None,
+                encrypt_key_hex: "cc".repeat(32),
+                encrypt_key_enc_nonce_b64: None,
+                encrypt_key_enc_b64: None,
             }),
             ..Default::default()
         };

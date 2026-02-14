@@ -11,6 +11,7 @@ use axum::{
 use base64::Engine;
 use tracing::info;
 use uuid::Uuid;
+use veil_core::ObjectRoot;
 
 use crate::api::{
     AppPreferencesPublishRequest, AppPreferencesPublishResponse, BlockPublishRequest,
@@ -199,36 +200,53 @@ async fn publish_object(
     if payload.len() > MAX_RAW_PAYLOAD_BYTES {
         return bad_request("payload_too_large", "payload exceeds max size");
     }
-    let object_root = blake3::hash(&payload);
+
+    // Build the object immediately to get the wire_root
+    let (encoded_object, wire_root): (Vec<u8>, ObjectRoot) = match state.protocol.build_object(payload, request.namespace, 0).await {
+        Ok(res) => res,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    };
+
+    // Inject into local cache so it's immediately fetchable
+    let _ = state.protocol.inject_object(encoded_object.clone()).await;
+
     let wrapped_payload = serde_json::json!({
-        "kind": "raw_b64",
-        "payload_b64": request.payload_b64,
+        "kind": "raw_object_b64",
+        "payload_b64": base64::engine::general_purpose::STANDARD.encode(encoded_object),
     })
     .to_string();
+
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
         payload: wrapped_payload,
     });
+
     Json(ObjectPublishResponse {
-        object_root: hex::encode(object_root.as_bytes()),
+        object_root: hex::encode(wire_root),
         message_id,
         queued: true,
     })
     .into_response()
 }
 
-fn queue_raw_object_payload(state: &AppState, namespace: u16, payload: &[u8]) -> (Uuid, [u8; 32]) {
-    let object_root = blake3::hash(payload);
+async fn queue_raw_object_payload(state: &AppState, namespace: u16, payload: &[u8]) -> (Uuid, [u8; 32]) {
+    // Build the object immediately to get the wire_root
+    let (encoded_object, wire_root): (Vec<u8>, ObjectRoot) = state.protocol.build_object(payload.to_vec(), namespace, 0).await.unwrap_or_default();
+
+    // Inject into local cache so it's immediately fetchable
+    let _ = state.protocol.inject_object(encoded_object.clone()).await;
+
     let wrapped_payload = serde_json::json!({
-        "kind": "raw_b64",
-        "payload_b64": base64::engine::general_purpose::STANDARD.encode(payload),
+        "kind": "raw_object_b64",
+        "payload_b64": base64::engine::general_purpose::STANDARD.encode(encoded_object),
     })
     .to_string();
+
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace,
         payload: wrapped_payload,
     });
-    (message_id, *object_root.as_bytes())
+    (message_id, wire_root)
 }
 
 async fn identity(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -521,7 +539,7 @@ async fn publish_direct_message_text(
         Ok(value) => value,
         Err(err) => return bad_request("encrypt_failed", &err),
     };
-    let _object_msg = queue_raw_object_payload(&state, request.namespace, &encrypted_payload);
+    let (_object_msg, object_root) = queue_raw_object_payload(&state, request.namespace, &encrypted_payload).await;
     let bundle = DirectMessageBundle {
         meta: BundleMeta {
             version: 1,
@@ -530,7 +548,7 @@ async fn publish_direct_message_text(
         channel_id: request.channel_id,
         author_pubkey_hex: pubkey_hex.clone(),
         recipient_pubkey_hex: request.recipient_pubkey_hex,
-        ciphertext_root: blake3::hash(&encrypted_payload).into(),
+        ciphertext_root: object_root.into(),
         reply_to_root: request.reply_to_root,
     };
     let feed_bundle = FeedBundle::DirectMessage(bundle);
@@ -641,7 +659,8 @@ async fn publish_group_message_text(
             &key_id,
             group_key,
             &request.member_pubkeys,
-        );
+        )
+        .await;
     }
     let encrypted_payload = match encrypt_group_message_payload(
         &request.group_id,
@@ -652,7 +671,7 @@ async fn publish_group_message_text(
         Ok(value) => value,
         Err(err) => return bad_request("encrypt_failed", &err),
     };
-    let _object_msg = queue_raw_object_payload(&state, request.namespace, &encrypted_payload);
+    let (_object_msg, object_root) = queue_raw_object_payload(&state, request.namespace, &encrypted_payload).await;
     let bundle = GroupMessageBundle {
         meta: BundleMeta {
             version: 1,
@@ -661,7 +680,7 @@ async fn publish_group_message_text(
         channel_id: request.channel_id,
         author_pubkey_hex: pubkey_hex.clone(),
         group_id: request.group_id,
-        ciphertext_root: blake3::hash(&encrypted_payload).into(),
+        ciphertext_root: object_root.into(),
         reply_to_root: request.reply_to_root,
     };
     let feed_bundle = FeedBundle::GroupMessage(bundle);
@@ -726,7 +745,8 @@ async fn share_group_key(
         &key_id,
         group_key,
         &request.member_pubkeys,
-    );
+    )
+    .await;
     Json(GroupKeyShareResponse {
         queued: true,
         key_id,
@@ -736,7 +756,7 @@ async fn share_group_key(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn queue_group_key_shares(
+async fn queue_group_key_shares(
     state: &AppState,
     namespace: u16,
     group_id: &str,
@@ -762,7 +782,7 @@ fn queue_group_key_shares(
             Ok(value) => value,
             Err(_) => continue,
         };
-        let _ = queue_raw_object_payload(state, namespace, &payload);
+        let _ = queue_raw_object_payload(state, namespace, &payload).await;
         shares += 1;
     }
     shares
@@ -1803,6 +1823,7 @@ mod tests {
             "test-node".to_string(),
             32,
             identity.public_key,
+            identity.encrypt_key,
             identity.signer(),
         );
         let protocol =

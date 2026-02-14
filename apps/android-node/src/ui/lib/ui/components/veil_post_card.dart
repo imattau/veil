@@ -38,6 +38,7 @@ class VeilPostCard extends StatelessWidget {
         : null;
     final root = event.objectRoot;
     final targetRoot = event.isRepost ? event.targetRoot : null;
+    final avatarImage = _getAvatarImage(pubkey);
 
     String? firstLink;
     if (text != null) {
@@ -48,6 +49,7 @@ class VeilPostCard extends StatelessWidget {
     }
 
     return InkWell(
+      key: ValueKey(root ?? 'seq_${event.seq}'),
       onTap: isDetail
           ? null
           : () {
@@ -68,12 +70,19 @@ class VeilPostCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  CircleAvatar(
-                    backgroundColor: VeilTheme.accent.withOpacity(0.2),
-                    backgroundImage: _getAvatarImage(pubkey),
-                    child: _getAvatarImage(pubkey) == null
-                        ? Text(displayName.substring(0, 1).toUpperCase())
-                        : null,
+                  Hero(
+                    tag: 'avatar_${pubkey}_${root ?? event.seq}',
+                    child: CircleAvatar(
+                      backgroundColor: VeilTheme.accentSubtle,
+                      backgroundImage: avatarImage,
+                      child: avatarImage == null
+                          ? Text(
+                              displayName.isEmpty
+                                  ? '?'
+                                  : displayName.substring(0, 1).toUpperCase(),
+                            )
+                          : null,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -216,7 +225,7 @@ class VeilPostCard extends StatelessWidget {
 
   ImageProvider? _getAvatarImage(String pubkey) {
     final profile = controller.nodeService.profiles[pubkey];
-    final root = profile?.data['avatar_media_root'] as String?;
+    final root = profile?.avatarMediaRoot;
     if (root != null && controller.imageCache.containsKey(root)) {
       return MemoryImage(controller.imageCache[root]!);
     }

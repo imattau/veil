@@ -56,6 +56,7 @@ pub enum WebSocketAdapterError {
 }
 
 pub struct WebSocketAdapter {
+    outbound_tx_url: String,
     max_payload_hint: Option<usize>,
     outbound_tx: tokio_mpsc::Sender<Vec<u8>>,
     inbound_rx: mpsc::Receiver<(String, Vec<u8>)>,
@@ -117,6 +118,7 @@ impl WebSocketAdapter {
         });
 
         Ok(Self {
+            outbound_tx_url: config.url,
             max_payload_hint: config.max_payload_hint,
             outbound_tx,
             inbound_rx,
@@ -154,7 +156,19 @@ impl TransportAdapter for WebSocketAdapter {
     type Peer = String;
     type Error = WebSocketAdapterError;
 
-    fn send(&mut self, _peer: &Self::Peer, bytes: &[u8]) -> Result<(), Self::Error> {
+    fn send(&mut self, peer: &Self::Peer, bytes: &[u8]) -> Result<(), Self::Error> {
+        // Only send if the peer matches our target URL or if the peer is our local peer_id
+        // (which sometimes happens in loopback/sim scenarios).
+        // Actually, most callers will pass the relay URL as the peer.
+        if peer != &self.outbound_tx_url && peer != "any" {
+            // If it doesn't match, we just return Ok(()) or ignore?
+            // TransportAdapter::send failure usually means "this adapter can't do it".
+            // But we don't have a "NotSupported" error here.
+            // Let's just return Ok(()) to avoid erroring out the whole multi-lane send
+            // if we are just not the right lane.
+            return Ok(());
+        }
+
         if let Some(hint) = self.max_payload_hint {
             if bytes.len() > hint {
                 return Err(WebSocketAdapterError::PayloadTooLarge { hint });
@@ -276,7 +290,8 @@ async fn run_websocket_worker(
                         maybe_in = read.next() => {
                             match maybe_in {
                                 Some(Ok(Message::Binary(bytes))) => {
-                                    match inbound_tx.try_send((config.peer_id.clone(), bytes.to_vec())) {
+                                    // Peer is the remote server URL
+                                    match inbound_tx.try_send((config.url.clone(), bytes.to_vec())) {
                                         Ok(_) => {
                                             metrics.inbound_received.fetch_add(1, Ordering::Relaxed);
                                         }

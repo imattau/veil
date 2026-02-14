@@ -109,11 +109,9 @@ class _ProfileViewState extends State<ProfileView> {
         final pubkey = widget.targetPubkey ?? widget.service.state.identityHex ?? 'Unknown';
         final isSelf = pubkey == widget.service.state.identityHex;
         final profile = widget.service.profiles[pubkey];
-        final displayName =
-            profile?.data['display_name'] as String? ?? 'Set Name';
-        final bio =
-            profile?.data['bio'] as String? ?? 'Add a bio to your profile';
-        final avatarRoot = profile?.data['avatar_media_root'] as String?;
+        final displayName = profile?.displayName ?? 'Set Name';
+        final bio = profile?.bio ?? 'Add a bio to your profile';
+        final avatarRoot = profile?.avatarMediaRoot;
 
         final shortPubkey = pubkey.length > 16
             ? '${pubkey.substring(0, 8)}...${pubkey.substring(pubkey.length - 8)}'
@@ -222,7 +220,17 @@ class _ProfileViewState extends State<ProfileView> {
                       icon: Icons.bolt_outlined,
                       title: 'Lightning Address',
                       subtitle: 'Configure your zap address',
-                      onTap: () {},
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ProfileEditView(
+                              service: widget.service,
+                              controller: widget.controller,
+                            ),
+                          ),
+                        );
+                      },
                     ),
                     if (widget.listController != null)
                       _ProfileTile(
@@ -263,42 +271,54 @@ class _ProfileViewState extends State<ProfileView> {
                 _ProfileSection(
                   title: 'Security',
                   children: [
-                                      _ProfileTile(
-                                        icon: Icons.key_outlined,
-                                        title: 'Backup Identity',
-                                        subtitle: 'Export your secret keys',
-                                        onTap: _exportIdentity,
-                                      ),
-                                      if (widget.preferencesController != null)
-                                        _ProfileTile(
-                                          icon: Icons.settings_outlined,
-                                          title: 'App Settings',
-                                          subtitle: 'Theme and preferences',
-                                          onTap: () {
-                                            Navigator.push(
-                                              context,
-                                              MaterialPageRoute(
-                                                builder: (context) => SettingsView(
-                                                  controller: widget.preferencesController!,
-                                                ),
-                                              ),
-                                            );
-                                          },
-                                        ),
-                                      _ProfileTile(
-                                        icon: Icons.restore_outlined,
-                                        title: 'Import Identity',
-                                        subtitle: 'Restore from secret key',
-                                        onTap: _importIdentity,
-                                      ),
-                                    ],
-                                  ),
-                    
+                    _ProfileTile(
+                      icon: Icons.key_outlined,
+                      title: 'Backup Identity',
+                      subtitle: 'Export your secret keys',
+                      onTap: _exportIdentity,
+                    ),
+                    if (widget.preferencesController != null)
+                      _ProfileTile(
+                        icon: Icons.settings_outlined,
+                        title: 'App Settings',
+                        subtitle: 'Theme and preferences',
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => SettingsView(
+                                controller: widget.preferencesController!,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    _ProfileTile(
+                      icon: Icons.restore_outlined,
+                      title: 'Import Identity',
+                      subtitle: 'Restore from secret key',
+                      onTap: _importIdentity,
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 40),
-                TextButton(
-                  onPressed: widget.service.stop,
-                  style: TextButton.styleFrom(foregroundColor: Colors.red),
-                  child: const Text('Stop Veil Node'),
+                const Divider(color: Colors.white10),
+                Center(
+                  child: TextButton.icon(
+                    onPressed: widget.service.stop,
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.redAccent,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
+                    ),
+                    icon: const Icon(Icons.power_settings_new, size: 18),
+                    label: const Text(
+                      'Stop Veil Node',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
                 ),
               ],
             ],
@@ -752,7 +772,7 @@ class _ProfileTile extends StatelessWidget {
       leading: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.05),
+          color: VeilTheme.surfaceHighlight,
           borderRadius: BorderRadius.circular(8),
         ),
         child: Icon(icon, color: VeilTheme.textSecondary, size: 20),

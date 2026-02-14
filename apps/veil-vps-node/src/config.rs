@@ -117,7 +117,7 @@ impl VpsConfig {
             .set_default("quic_key_path", "data/quic_key.der")?
             .set_default("snapshot_interval", "60s")?
             .set_default("tick_interval", "50ms")?
-            .set_default("health_bind", "127.0.0.1")?
+            .set_default("health_bind", "0.0.0.0")?
             .set_default("health_port", 9090)?
             .set_default("admin_session_db_path", "data/admin-sessions.db")?
             .set_default("peer_db_path", "data/peers.db")?

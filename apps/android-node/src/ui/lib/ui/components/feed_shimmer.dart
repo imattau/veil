@@ -122,9 +122,9 @@ class _ShimmerBox extends StatelessWidget {
                 Colors.white10,
               ],
               stops: [
-                controller.value - 0.3,
-                controller.value,
-                controller.value + 0.3,
+                (controller.value - 0.3).clamp(0.0, 1.0),
+                controller.value.clamp(0.0, 1.0),
+                (controller.value + 0.3).clamp(0.0, 1.0),
               ],
             ),
           ),

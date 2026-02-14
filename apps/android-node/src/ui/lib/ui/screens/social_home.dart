@@ -18,6 +18,7 @@ import '../components/new_message_dialog.dart';
 import '../../logic/messaging_controller.dart';
 import '../../logic/list_controller.dart';
 import '../../logic/preferences_controller.dart';
+import '../components/entrance_fader.dart';
 
 class SocialHome extends StatefulWidget {
   const SocialHome({super.key});
@@ -138,8 +139,8 @@ class _SocialHomeState extends State<SocialHome> {
             backgroundColor: VeilTheme.background.withOpacity(0.7),
             selectedItemColor: VeilTheme.accent,
             unselectedItemColor: VeilTheme.textSecondary,
-            showSelectedLabels: false,
-            showUnselectedLabels: false,
+            showSelectedLabels: true,
+            showUnselectedLabels: true,
             items: const [
               BottomNavigationBarItem(
                 icon: Icon(Icons.home_filled),
@@ -275,7 +276,6 @@ class _FeedView extends StatelessWidget {
       builder: (context, _) {
         final feed = controller.feed;
         final state = controller.nodeService.state;
-        debugPrint('[FeedView] Rendering ${feed.length} posts');
 
         if (state.busy && feed.isEmpty) {
           return const FeedShimmer();
@@ -320,13 +320,17 @@ class _FeedView extends StatelessWidget {
                 );
               }
               final event = feed[index - 1];
-              if (event.isPoll) {
-                return PollWidget(event: event, controller: controller);
-              }
-              return VeilPostCard(
-                event: event,
-                controller: controller,
-                listController: listController,
+              final item = event.isPoll
+                  ? PollWidget(event: event, controller: controller)
+                  : VeilPostCard(
+                      event: event,
+                      controller: controller,
+                      listController: listController,
+                    );
+
+              return EntranceFader(
+                delay: Duration(milliseconds: (index * 50).clamp(0, 400)),
+                child: item,
               );
             },
           ),

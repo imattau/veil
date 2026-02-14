@@ -33,16 +33,10 @@ class _ProfileEditViewState extends State<ProfileEditView> {
     super.initState();
     // Pre-fill if current profile exists
     final profile = widget.service.profiles[widget.service.state.identityHex];
-    _nameController = TextEditingController(
-      text: profile?.data['display_name'] as String?,
-    );
-    _bioController = TextEditingController(
-      text: profile?.data['bio'] as String?,
-    );
-    _lnController = TextEditingController(
-      text: profile?.data['lightning_address'] as String?,
-    );
-    _avatarMediaRoot = profile?.data['avatar_media_root'] as String?;
+    _nameController = TextEditingController(text: profile?.displayName);
+    _bioController = TextEditingController(text: profile?.bio);
+    _lnController = TextEditingController(text: profile?.lightningAddress);
+    _avatarMediaRoot = profile?.avatarMediaRoot;
   }
 
   Future<void> _pickImage() async {

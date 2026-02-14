@@ -162,6 +162,15 @@ fn queued_payload_to_bytes(payload: &str) -> Vec<u8> {
         Err(_) => return payload.as_bytes().to_vec(),
     };
     let kind = parsed.get("kind").and_then(|v| v.as_str());
+    if kind == Some("raw_object_b64") {
+        let b64 = match parsed.get("payload_b64").and_then(|v| v.as_str()) {
+            Some(value) => value,
+            None => return payload.as_bytes().to_vec(),
+        };
+        return base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap_or_else(|_| payload.as_bytes().to_vec());
+    }
     if kind != Some("raw_b64") {
         return payload.as_bytes().to_vec();
     }

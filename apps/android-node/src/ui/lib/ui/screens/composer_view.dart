@@ -108,6 +108,51 @@ class _ComposerViewState extends State<ComposerView> {
     }
   }
 
+  void _showChannelSelector() {
+    final subs = widget.service.state.subscriptions;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: VeilTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 20, 20, 10),
+              child: Text(
+                'Select Channel',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: subs.length,
+                itemBuilder: (context, index) {
+                  final channel = subs[index];
+                  return ListTile(
+                    title: Text('#$channel'),
+                    trailing: _selectedChannel == channel
+                        ? const Icon(Icons.check, color: VeilTheme.accent)
+                        : null,
+                    onTap: () {
+                      setState(() => _selectedChannel = channel);
+                      Navigator.pop(context);
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -136,23 +181,38 @@ class _ComposerViewState extends State<ComposerView> {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: VeilTheme.accent.withOpacity(0.5),
+                      InkWell(
+                        onTap: _showChannelSelector,
+                        borderRadius: BorderRadius.circular(16),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 4,
                           ),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Text(
-                          '#$_selectedChannel',
-                          style: const TextStyle(
-                            color: VeilTheme.accent,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: VeilTheme.accent.withOpacity(0.5),
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '#$_selectedChannel',
+                                style: const TextStyle(
+                                  color: VeilTheme.accent,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              const Icon(
+                                Icons.keyboard_arrow_down,
+                                size: 14,
+                                color: VeilTheme.accent,
+                              ),
+                            ],
                           ),
                         ),
                       ),

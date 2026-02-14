@@ -196,6 +196,19 @@ pub fn receive_shard_with_policy(
     let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
     let payload = cipher.decrypt(decrypt_key, object.nonce, &aad, &object.ciphertext)?;
 
+    // Index content roots for faster lookup
+    if object.object_root != root {
+        node.content_index.insert(object.object_root, root);
+    }
+    if let Ok(batch) = decode_batched_payload(&payload) {
+        for item in batch {
+            let item_root = veil_fec::sharder::derive_object_root(&item);
+            if item_root != root {
+                node.content_index.insert(item_root, root);
+            }
+        }
+    }
+
     if require_signed_namespace {
         match cache_policy {
             Some(p) => cache_put_with_policy(

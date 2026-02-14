@@ -62,6 +62,9 @@ pub struct NodeState {
     /// Reverse index of shard IDs to their object roots.
     #[serde(default)]
     pub shard_to_root: HashMap<ShardId, ObjectRoot>,
+    /// Index of content roots (payload or batch items) to their wire roots.
+    #[serde(default)]
+    pub content_index: HashMap<ObjectRoot, ObjectRoot>,
 }
 
 impl NodeState {

@@ -90,16 +90,16 @@ async fn discovery_transport_announce_and_lookup() {
     let identity_a = node_a.identity();
     let identity_b = node_b.identity();
 
+    let shared_key = [0x42; 32];
     let mut cfg_a = default_protocol_config(
         "ws://127.0.0.1:1/ws".to_string(),
         "peer-a".to_string(),
         32,
         identity_a.public_key,
+        shared_key,
         identity_a.signer(),
     );
     cfg_a.ws_url = None;
-    let shared_key = [0x42; 32];
-    cfg_a.encrypt_key = shared_key;
     cfg_a.quic_bind_addr = addr_a.clone();
     cfg_a.quic_server_name = Some("veil-android-node".to_string());
     cfg_a.fast_peers = vec![addr_b.clone()];
@@ -110,10 +110,10 @@ async fn discovery_transport_announce_and_lookup() {
         "peer-b".to_string(),
         32,
         identity_b.public_key,
+        shared_key,
         identity_b.signer(),
     );
     cfg_b.ws_url = None;
-    cfg_b.encrypt_key = shared_key;
     cfg_b.quic_bind_addr = addr_b.clone();
     cfg_b.quic_server_name = Some("veil-android-node".to_string());
     cfg_b.fast_peers = vec![addr_a.clone()];

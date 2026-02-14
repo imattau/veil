@@ -49,7 +49,7 @@ class SocialController extends ChangeNotifier {
     _reconcileOptimisticEvents();
     // Check for profiles with images
     for (var profile in nodeService.profiles.values) {
-      final root = profile.data['avatar_media_root'] as String?;
+      final root = profile.avatarMediaRoot;
       if (root != null && !imageCache.containsKey(root)) {
         _fetchImage(root);
       }
@@ -75,6 +75,10 @@ class SocialController extends ChangeNotifier {
     try {
       final res = await nodeService.fetchObject(root);
       if (res != null && res['object_b64'] != null) {
+        // Simple eviction: if cache too large, remove oldest (first) entry
+        if (imageCache.length >= 100) {
+          imageCache.remove(imageCache.keys.first);
+        }
         imageCache[root] = base64.decode(res['object_b64']);
         _fetchFailures.remove(root);
         _nextFetchAllowed.remove(root);
@@ -98,15 +102,11 @@ class SocialController extends ChangeNotifier {
       if (!e.isPost && !e.isRepost && !e.isPoll) return false;
       // If it's a post, it must NOT be a reply to another post
       if (e.isPost && e.replyToRoot != null) {
-        debugPrint('[SocialController] Filtering out comment: ${e.seq}');
         return false;
       }
       return true;
     }).toList();
 
-    debugPrint(
-      '[SocialController] Feed filtered: ${filtered.length} posts from ${nodeService.feedEvents.length} events',
-    );
     return filtered;
   }
 
@@ -206,8 +206,7 @@ class SocialController extends ChangeNotifier {
   String getDisplayName(String pubkey) {
     final profile = nodeService.profiles[pubkey];
     if (profile != null) {
-      final name = profile.data['display_name'] as String?;
-      if (name != null && name.isNotEmpty) return name;
+      if (profile.displayName.isNotEmpty) return profile.displayName;
     }
     return pubkey.length >= 8 ? pubkey.substring(0, 8) : pubkey;
   }

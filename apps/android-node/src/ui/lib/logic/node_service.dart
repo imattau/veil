@@ -9,6 +9,7 @@ import 'package:web_socket_channel/status.dart' as ws_status;
 
 import './models/node_event.dart';
 import './models/node_state.dart';
+import './models/profile_data.dart';
 
 class NodeService extends ChangeNotifier {
   static const int _maxEvents = 300;
@@ -25,7 +26,7 @@ class NodeService extends ChangeNotifier {
   final List<NodeEvent> _events = [];
   final Set<int> _eventSeqs = <int>{};
   final List<NodeEvent> _feedEvents = [];
-  final Map<String, NodeEvent> _profiles = {};
+  final Map<String, ProfileData> _profiles = {};
   final Map<String, NodeEvent> _latestLists = {};
   final Map<String, NodeEvent> _latestPrefs = {};
   final Map<String, String> _decryptedPayloads = {};
@@ -38,7 +39,7 @@ class NodeService extends ChangeNotifier {
 
   List<NodeEvent> get events => List.unmodifiable(_events);
   List<NodeEvent> get feedEvents => List.unmodifiable(_feedEvents);
-  Map<String, NodeEvent> get profiles => Map.unmodifiable(_profiles);
+  Map<String, ProfileData> get profiles => Map.unmodifiable(_profiles);
   Map<String, NodeEvent> get latestLists => Map.unmodifiable(_latestLists);
   Map<String, NodeEvent> get latestPrefs => Map.unmodifiable(_latestPrefs);
   Map<String, String> get decryptedPayloads =>
@@ -881,12 +882,14 @@ class NodeService extends ChangeNotifier {
         // Optimistically update the local cache for immediate UI feedback
         final selfPubkey = _state.identityHex;
         if (selfPubkey != null) {
-          final optimisticEvent = NodeEvent.fromJson({
-            'seq': -1,
-            'event': 'feed_bundle',
-            'data': {'kind': 'profile', ...bundle},
-          });
-          _profiles[selfPubkey] = optimisticEvent;
+          _profiles[selfPubkey] = ProfileData(
+            pubkey: selfPubkey,
+            displayName: displayName,
+            bio: bio,
+            avatarMediaRoot: avatarMediaRoot,
+            lightningAddress: lightningAddress,
+            updatedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          );
         }
         await refresh();
         await fetchFeed();
@@ -1419,8 +1422,8 @@ class NodeService extends ChangeNotifier {
       final pubkey = event.authorPubkey;
       if (pubkey != null) {
         final existing = _profiles[pubkey];
-        if (existing == null || event.seq > existing.seq) {
-          _profiles[pubkey] = event;
+        if (existing == null || event.seq > existing.updatedAt) {
+          _profiles[pubkey] = ProfileData.fromEvent(event);
           debugPrint('[NodeService] Cached profile for $pubkey');
         }
       }

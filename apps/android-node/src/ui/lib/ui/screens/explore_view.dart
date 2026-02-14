@@ -15,15 +15,19 @@ class ExploreView extends StatelessWidget {
       listenable: service,
       builder: (context, _) {
         final subscribed = service.state.subscriptions.toSet();
-        final discovered = service.feedEvents
-            .map((event) => event.channelId)
-            .whereType<String>()
-            .map((channel) => channel.trim())
-            .where((channel) => channel.isNotEmpty)
-            .toSet();
+        
+        // Optimize: Count posts per channel once
+        final counts = <String, int>{};
+        for (final event in service.feedEvents) {
+          final channel = event.channelId;
+          if (channel != null && channel.isNotEmpty) {
+            counts[channel] = (counts[channel] ?? 0) + 1;
+          }
+        }
 
+        final discovered = counts.keys.toSet();
         final channels = <String>{...subscribed, ...discovered}.toList()
-          ..sort();
+          ..sort((a, b) => (counts[b] ?? 0).compareTo(counts[a] ?? 0)); // Sort by popularity
 
         if (channels.isEmpty) {
           return const EmptyState(
@@ -36,35 +40,53 @@ class ExploreView extends StatelessWidget {
 
         return RefreshIndicator(
           onRefresh: service.refresh,
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              const Text(
-                'Channels',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-              ...channels.map((channel) {
-                final isSubscribed = subscribed.contains(channel);
-                final postCount = service.feedEvents
-                    .where((event) => event.channelId == channel)
-                    .length;
+          child: ListView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+            itemCount: channels.length + 1,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return const Padding(
+                  padding: EdgeInsets.only(bottom: 16),
+                  child: Text(
+                    'Channels',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                );
+              }
 
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 10),
+              final channel = channels[index - 1];
+              final isSubscribed = subscribed.contains(channel);
+              final postCount = counts[channel] ?? 0;
+
+              return Card(
+                margin: const EdgeInsets.only(bottom: 12),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
                   child: ListTile(
+                    leading: Container(
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        color: VeilTheme.accent.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.tag,
+                        color: VeilTheme.accent,
+                      ),
+                    ),
                     title: Text(
                       '#$channel',
                       style: const TextStyle(
-                        color: VeilTheme.accent,
-                        fontWeight: FontWeight.w700,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
                       ),
                     ),
                     subtitle: Text(
                       '$postCount recent events',
                       style: const TextStyle(color: VeilTheme.textSecondary),
                     ),
-                    trailing: TextButton(
+                    trailing: FilledButton.tonal(
                       onPressed: () async {
                         final ok = isSubscribed
                             ? await service.unsubscribeTag(channel)
@@ -80,12 +102,20 @@ class ExploreView extends StatelessWidget {
                           ),
                         );
                       },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: isSubscribed
+                            ? Colors.white.withOpacity(0.1)
+                            : VeilTheme.accent.withOpacity(0.2),
+                        foregroundColor: isSubscribed
+                            ? Colors.white
+                            : VeilTheme.accent,
+                      ),
                       child: Text(isSubscribed ? 'Joined' : 'Join'),
                     ),
                   ),
-                );
-              }),
-            ],
+                ),
+              );
+            },
           ),
         );
       },

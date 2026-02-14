@@ -114,7 +114,7 @@ pub struct PublishServiceTickResult {
     pub ack_retry_sends: usize,
 }
 
-fn derive_object_nonce(
+pub fn derive_object_nonce(
     tag: Tag,
     namespace: Namespace,
     epoch: Epoch,
@@ -135,7 +135,7 @@ fn derive_object_nonce(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_encoded_object(
+pub fn build_encoded_object(
     payload: &[u8],
     namespace: Namespace,
     epoch: Epoch,
