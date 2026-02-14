@@ -41,7 +41,7 @@ fn alpn_protocols() -> Vec<Vec<u8>> {
 
 #[derive(Debug, Clone)]
 pub struct QuicIdentity {
-    pub cert_der: Vec<u8>,
+    pub cert_chain_der: Vec<Vec<u8>>,
     pub key_der: Vec<u8>,
 }
 
@@ -71,7 +71,7 @@ impl QuicIdentity {
             .map_err(|_| QuicAdapterError::IdentityGenerationFailed)?;
         let cert_der = cert.der().to_vec();
         let key_der = key_pair.serialize_der();
-        Ok(Self { cert_der, key_der })
+        Ok(Self { cert_chain_der: vec![cert_der], key_der })
     }
 }
 
@@ -473,11 +473,15 @@ async fn run_quic_worker(
 }
 
 fn build_server_config(identity: &QuicIdentity) -> Result<ServerConfig, QuicAdapterError> {
-    let cert = CertificateDer::from(identity.cert_der.clone());
+    let chain = identity
+        .cert_chain_der
+        .iter()
+        .map(|c| CertificateDer::from(c.clone()))
+        .collect();
     let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(identity.key_der.clone()));
     let mut tls = rustls::ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(vec![cert], key)
+        .with_single_cert(chain, key)
         .map_err(|_| QuicAdapterError::InvalidIdentity)?;
     tls.alpn_protocols = alpn_protocols();
     let quic_tls = quinn::crypto::rustls::QuicServerConfig::try_from(tls)

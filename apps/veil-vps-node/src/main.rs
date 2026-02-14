@@ -435,12 +435,39 @@ fn ensure_parent(path: &Path) -> std::io::Result<()> {
 
 fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIdentity, String> {
     if cert_path.exists() && key_path.exists() {
-        let cert = fs::read(cert_path).map_err(|e| format!("read cert: {e}"))?;
-        let key = fs::read(key_path).map_err(|e| format!("read key: {e}"))?;
-        info!("loaded existing QUIC identity from {}", cert_path.display());
+        let cert_bytes = fs::read(cert_path).map_err(|e| format!("read cert: {e}"))?;
+        let key_bytes = fs::read(key_path).map_err(|e| format!("read key: {e}"))?;
+
+        // Try parsing as PEM first
+        let mut cert_reader = std::io::BufReader::new(&cert_bytes[..]);
+        let cert_chain: Vec<Vec<u8>> = rustls_pemfile::certs(&mut cert_reader)
+            .filter_map(|r| r.ok())
+            .map(|c| c.to_vec())
+            .collect();
+
+        let mut key_reader = std::io::BufReader::new(&key_bytes[..]);
+        let key_der = rustls_pemfile::private_key(&mut key_reader)
+            .ok()
+            .flatten()
+            .map(|k| k.secret_der().to_vec());
+
+        if !cert_chain.is_empty() && key_der.is_some() {
+            info!(
+                "loaded existing QUIC identity (PEM) from {} (chain length: {})",
+                cert_path.display(),
+                cert_chain.len()
+            );
+            return Ok(QuicIdentity {
+                cert_chain_der: cert_chain,
+                key_der: key_der.unwrap(),
+            });
+        }
+
+        // Fallback to raw DER (single cert)
+        info!("loaded existing QUIC identity (raw DER) from {}", cert_path.display());
         return Ok(QuicIdentity {
-            cert_der: cert,
-            key_der: key,
+            cert_chain_der: vec![cert_bytes],
+            key_der: key_bytes,
         });
     }
 
@@ -448,7 +475,9 @@ fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIden
         .map_err(|e| format!("generate identity: {e}"))?;
     ensure_parent(cert_path).map_err(|e| format!("create cert dir: {e}"))?;
     ensure_parent(key_path).map_err(|e| format!("create key dir: {e}"))?;
-    fs::write(cert_path, &identity.cert_der).map_err(|e| format!("write cert: {e}"))?;
+    
+    // For generated self-signed, we just write the raw DER bytes
+    fs::write(cert_path, &identity.cert_chain_der[0]).map_err(|e| format!("write cert: {e}"))?;
     fs::write(key_path, &identity.key_der).map_err(|e| format!("write key: {e}"))?;
     #[cfg(unix)]
     {
@@ -1135,7 +1164,7 @@ async fn main() {
     let trusted_cert_paths = config.quic_trusted_certs.clone();
     let mut trusted = load_trusted_certs(&trusted_cert_paths);
     if trusted.is_empty() {
-        trusted.push(identity.cert_der.clone());
+        trusted.push(identity.cert_chain_der[0].clone());
     }
 
     let mut state = load_state_or_default(&state_path).unwrap_or_default();
