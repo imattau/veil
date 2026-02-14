@@ -487,8 +487,10 @@ fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIden
     );
     
     // For generated self-signed, we just write the raw DER bytes
-    fs::write(cert_path, &identity.cert_chain_der[0]).map_err(|e| format!("write cert: {e}"))?;
-    fs::write(key_path, &identity.key_der).map_err(|e| format!("write key: {e}"))?;
+    fs::write(cert_path, &identity.cert_chain_der[0])
+        .map_err(|e| format!("write cert to {}: {}", cert_path.display(), e))?;
+    fs::write(key_path, &identity.key_der)
+        .map_err(|e| format!("write key to {}: {}", key_path.display(), e))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
