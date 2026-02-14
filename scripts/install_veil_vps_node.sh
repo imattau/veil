@@ -316,8 +316,11 @@ resolve_certificates() {
       "/etc/letsencrypt/live/${PROXY_DOMAIN}"
       "/var/lib/caddy/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${PROXY_DOMAIN}"
       "/var/lib/caddy/.local/share/caddy/certificates/acme.zerossl.com-v2-directory/${PROXY_DOMAIN}"
+      "/var/lib/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${PROXY_DOMAIN}"
+      "/root/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${PROXY_DOMAIN}"
     )
 
+    echo "Searching for CA-signed certificates for $PROXY_DOMAIN..."
     for path in "${SEARCH_PATHS[@]}"; do
       local test_cert="${path}/fullchain.pem"
       local test_key="${path}/privkey.pem"
@@ -329,7 +332,7 @@ resolve_certificates() {
       fi
 
       if [[ -f "$test_cert" && -f "$test_key" ]]; then
-        echo "Detected certificates at $path"
+        echo "FOUND certificates at $path"
         read -r -p "Use these certificates for QUIC? [Y/n] " use_found
         if [[ -z "$use_found" || "$use_found" =~ ^[Yy]$ ]]; then
           cert_path="$test_cert"
@@ -339,6 +342,36 @@ resolve_certificates() {
         fi
       fi
     done
+
+    # If still not found, try a broader search
+    if [[ "$force_update" == "0" ]]; then
+      echo "Standard paths failed. Attempting a broader search for '$PROXY_DOMAIN' in common locations..."
+      local found_path
+      found_path=$(find /etc/letsencrypt /var/lib/caddy /root/.local/share/caddy -type d -name "$PROXY_DOMAIN" 2>/dev/null | head -n 1 || true)
+      if [[ -n "$found_path" ]]; then
+        local test_cert="${found_path}/fullchain.pem"
+        local test_key="${found_path}/privkey.pem"
+        if [[ ! -f "$test_cert" ]]; then
+          test_cert="${found_path}/${PROXY_DOMAIN}.crt"
+          test_key="${found_path}/${PROXY_DOMAIN}.key"
+        fi
+        if [[ -f "$test_cert" ]]; then
+          echo "FOUND certificates via search at $found_path"
+          read -r -p "Use these certificates for QUIC? [Y/n] " use_search
+          if [[ -z "$use_search" || "$use_search" =~ ^[Yy]$ ]]; then
+            cert_path="$test_cert"
+            key_path="$test_key"
+            force_update=1
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  if [[ "$force_update" == "1" ]]; then
+    echo "Configuring QUIC to use CA certificates: $cert_path"
+  else
+    echo "Using default self-signed certificates at $cert_path"
   fi
 
   # 2. Prompt for custom paths if not using LE or if user wants to change
