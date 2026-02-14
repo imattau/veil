@@ -304,20 +304,41 @@ resolve_certificates() {
   local key_path="${PREFIX}/data/quic_key.der"
   local force_update=0
 
-  # 1. Try to find Let's Encrypt certificates if a domain is set
+  # If PROXY_DOMAIN is empty, try to get it from the user now
+  if [[ -z "$PROXY_DOMAIN" ]]; then
+    echo "No domain found in current settings."
+    read -r -p "Enter your node's domain (e.g. veilnode.3nostr.com) to search for certificates: " PROXY_DOMAIN
+  fi
+
   if [[ -n "$PROXY_DOMAIN" ]]; then
-    local le_cert="/etc/letsencrypt/live/${PROXY_DOMAIN}/fullchain.pem"
-    local le_key="/etc/letsencrypt/live/${PROXY_DOMAIN}/privkey.pem"
-    
-    if [[ -f "$le_cert" && -f "$le_key" ]]; then
-      echo "Detected Let's Encrypt certificates for $PROXY_DOMAIN."
-      read -r -p "Use these certificates for QUIC? [Y/n] " use_le
-      if [[ -z "$use_le" || "$use_le" =~ ^[Yy]$ ]]; then
-        cert_path="$le_cert"
-        key_path="$le_key"
-        force_update=1
+    # Search paths for both Certbot and Caddy
+    local SEARCH_PATHS=(
+      "/etc/letsencrypt/live/${PROXY_DOMAIN}"
+      "/var/lib/caddy/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${PROXY_DOMAIN}"
+      "/var/lib/caddy/.local/share/caddy/certificates/acme.zerossl.com-v2-directory/${PROXY_DOMAIN}"
+    )
+
+    for path in "${SEARCH_PATHS[@]}"; do
+      local test_cert="${path}/fullchain.pem"
+      local test_key="${path}/privkey.pem"
+      
+      # Caddy uses .crt/.key extension sometimes
+      if [[ ! -f "$test_cert" ]]; then
+        test_cert="${path}/${PROXY_DOMAIN}.crt"
+        test_key="${path}/${PROXY_DOMAIN}.key"
       fi
-    fi
+
+      if [[ -f "$test_cert" && -f "$test_key" ]]; then
+        echo "Detected certificates at $path"
+        read -r -p "Use these certificates for QUIC? [Y/n] " use_found
+        if [[ -z "$use_found" || "$use_found" =~ ^[Yy]$ ]]; then
+          cert_path="$test_cert"
+          key_path="$test_key"
+          force_update=1
+          break
+        fi
+      fi
+    done
   fi
 
   # 2. Prompt for custom paths if not using LE or if user wants to change
