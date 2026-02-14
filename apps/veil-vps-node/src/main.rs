@@ -788,8 +788,7 @@ pub fn decode_nostr_secret_input(value: &str) -> Option<[u8; 32]> {
     if decoded_hrp.as_str() != "nsec" {
         return None;
     }
-    let data8 = convert_bits(&data, 5, 8, false)?;
-    if let Ok(key) = <[u8; 32]>::try_from(data8.as_slice()) {
+    if let Ok(key) = <[u8; 32]>::try_from(data.as_slice()) {
         return Some(key);
     }
     None
@@ -797,31 +796,7 @@ pub fn decode_nostr_secret_input(value: &str) -> Option<[u8; 32]> {
 
 fn encode_nostr_nsec(secret: [u8; 32]) -> Option<String> {
     let hrp = Hrp::parse("nsec").ok()?;
-    let data5 = convert_bits(&secret, 8, 5, true)?;
-    bech32::encode::<Bech32>(hrp, &data5).ok()
-}
-
-fn convert_bits(data: &[u8], from: u32, to: u32, pad: bool) -> Option<Vec<u8>> {
-    let mut acc = 0u32;
-    let mut bits = 0u32;
-    let mut res = Vec::new();
-    let maxv = (1u32 << to) - 1;
-    for &value in data {
-        acc = (acc << from) | (value as u32);
-        bits += from;
-        while bits >= to {
-            bits -= to;
-            res.push(((acc >> bits) & maxv) as u8);
-        }
-    }
-    if pad {
-        if bits > 0 {
-            res.push(((acc << (to - bits)) & maxv) as u8);
-        }
-    } else if bits >= from || ((acc << (to - bits)) & maxv) != 0 {
-        return None;
-    }
-    Some(res)
+    bech32::encode::<Bech32>(hrp, &secret).ok()
 }
 
 #[derive(Parser)]
