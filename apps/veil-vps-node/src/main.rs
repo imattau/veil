@@ -433,10 +433,16 @@ fn ensure_parent(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIdentity, String> {
+fn load_or_create_identity(
+    cert_path: &Path,
+    key_path: &Path,
+    prefix: &Path,
+) -> Result<QuicIdentity, String> {
+    let is_internal = cert_path.starts_with(prefix) && key_path.starts_with(prefix);
+
     if cert_path.exists() && key_path.exists() {
-        let cert_bytes = fs::read(cert_path).map_err(|e| format!("read cert: {e}"))?;
-        let key_bytes = fs::read(key_path).map_err(|e| format!("read key: {e}"))?;
+        let cert_bytes = fs::read(cert_path).map_err(|e| format!("read cert from {}: {}", cert_path.display(), e))?;
+        let key_bytes = fs::read(key_path).map_err(|e| format!("read key from {}: {}", key_path.display(), e))?;
 
         // Try parsing as PEM first
         let mut cert_reader = std::io::BufReader::new(&cert_bytes[..]);
@@ -476,6 +482,14 @@ fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIden
             cert_chain_der: vec![cert_bytes],
             key_der: key_bytes,
         });
+    }
+
+    if !is_internal {
+        return Err(format!(
+            "external certificate files not found or unreadable at {} / {}. verify permissions and path.",
+            cert_path.display(),
+            key_path.display()
+        ));
     }
 
     let identity = QuicIdentity::generate_self_signed("veil-node")
@@ -1175,7 +1189,11 @@ async fn main() {
         return;
     }
 
-    let identity = match load_or_create_identity(&quic_cert_path, &quic_key_path) {
+    let identity_prefix = std::env::var("VEIL_VPS_PREFIX")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/opt/veil-vps-node"));
+
+    let identity = match load_or_create_identity(&quic_cert_path, &quic_key_path, &identity_prefix) {
         Ok(identity) => identity,
         Err(err) => {
             error!("fatal: {err}");

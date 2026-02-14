@@ -406,6 +406,7 @@ resolve_certificates() {
 
 HOSTNAME_FQDN=$(hostname -f 2>/dev/null || hostname)
 resolve_certificates
+set_config_var "VEIL_VPS_PREFIX" "${PREFIX}"
 set_config_var "VEIL_VPS_STATE_PATH" "${PREFIX}/data/node_state.cbor"
 set_config_var "VEIL_VPS_NODE_KEY_PATH" "${PREFIX}/data/node_identity.key"
 set_config_var "VEIL_VPS_QUIC_CERT_PATH" "${FINAL_CERT_PATH}" "$CERT_FORCE_UPDATE"
