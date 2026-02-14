@@ -929,6 +929,9 @@ fn apply_settings_db_overrides(path: &Path) {
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
+    if let Ok(cwd) = std::env::current_dir() {
+        info!("starting veil-vps-node in {}", cwd.display());
+    }
     let log_buffer = Arc::new(LogBuffer::new(1000));
     let filter = std::env::var("VEIL_LOG").unwrap_or_else(|_| "info".to_string());
 

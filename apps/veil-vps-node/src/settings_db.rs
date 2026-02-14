@@ -11,9 +11,19 @@ pub struct SettingsStore {
 impl SettingsStore {
     pub fn open(path: &Path) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|e| {
+                    format!("failed to create directory {}: {}", parent.display(), e)
+                })?;
+            }
         }
-        let conn = Connection::open(path).map_err(|e| format!("open settings db: {e}"))?;
+        let conn = Connection::open(path).map_err(|e| {
+            format!(
+                "open settings db at {}: {}",
+                path.display(),
+                e
+            )
+        })?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
