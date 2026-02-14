@@ -490,7 +490,9 @@ if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   rm "$TMP_SERVICE"
 
   if has_systemd; then
+    echo "Restarting veil-vps-node service..."
     systemctl daemon-reload || true
+    systemctl reset-failed veil-vps-node.service || true
     systemctl enable veil-vps-node.service || true
     systemctl restart veil-vps-node.service || true
   else
