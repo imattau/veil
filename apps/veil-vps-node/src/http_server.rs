@@ -138,8 +138,11 @@ async fn admin_login(
     Json(payload): Json<AdminLoginRequest>,
 ) -> impl IntoResponse {
     tracing::debug!("admin login: attempt received");
+    let input = payload.secret.trim();
+    tracing::debug!("admin login: input prefix: {}", if input.len() > 5 { &input[..5] } else { input });
+    
     let Some(secret) = decode_nostr_secret_input(&payload.secret) else {
-        tracing::warn!("admin login: failed to decode secret input");
+        tracing::warn!("admin login: failed to decode secret input (tried hex and nsec)");
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"ok": false, "error": "secret must be hex or nsec"})),

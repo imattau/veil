@@ -2,11 +2,13 @@ class NodeContactConfig {
   final String peerId;
   final String wsUrl;
   final String quicAddr;
+  final String? rpcUrl;
 
   const NodeContactConfig({
     required this.peerId,
     required this.wsUrl,
     required this.quicAddr,
+    this.rpcUrl,
   });
 }
 
@@ -39,6 +41,7 @@ NodeContactConfig? deriveNodeContactConfig(String rawInput) {
     peerId: host,
     wsUrl: 'wss://$wsHostPort/ws',
     quicAddr: '$host:5000',
+    rpcUrl: 'https://$host',
   );
 }
 
@@ -49,6 +52,7 @@ NodeContactConfig? _fromVeilProfile(String input) {
   }
   final wsRaw = uri.queryParameters['ws'];
   final quicRaw = uri.queryParameters['quic'];
+  final rpcRaw = uri.queryParameters['rpc'];
   if (wsRaw == null || wsRaw.trim().isEmpty) {
     return null;
   }
@@ -74,7 +78,17 @@ NodeContactConfig? _fromVeilProfile(String input) {
     }
   }
 
-  return NodeContactConfig(peerId: host, wsUrl: wsUrl, quicAddr: quicAddr);
+  String? rpcUrl = rpcRaw;
+  if (rpcUrl == null || rpcUrl.trim().isEmpty) {
+    rpcUrl = 'https://$host';
+  }
+
+  return NodeContactConfig(
+    peerId: host,
+    wsUrl: wsUrl,
+    quicAddr: quicAddr,
+    rpcUrl: rpcUrl,
+  );
 }
 
 NodeContactConfig? _fromUri(Uri uri) {
@@ -90,6 +104,7 @@ NodeContactConfig? _fromUri(Uri uri) {
       peerId: host,
       wsUrl: 'wss://$host/ws',
       quicAddr: '$host:$quicPort',
+      rpcUrl: 'https://$host',
     );
   }
 
@@ -105,6 +120,7 @@ NodeContactConfig? _fromUri(Uri uri) {
       peerId: host,
       wsUrl: '$wsScheme://$wsHostPort$wsPath',
       quicAddr: '$host:5000',
+      rpcUrl: 'https://$host',
     );
   }
 

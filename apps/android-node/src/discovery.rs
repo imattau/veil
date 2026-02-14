@@ -146,7 +146,9 @@ impl DiscoveryWorker {
         let contacts = self.state.contacts();
         for contact in &contacts {
             if let Some(rpc_url) = &contact.rpc_url {
-                targets.push(rpc_url.clone());
+                if rpc_url.starts_with("http://") || rpc_url.starts_with("https://") {
+                    targets.push(rpc_url.clone());
+                }
             }
         }
         targets.sort();

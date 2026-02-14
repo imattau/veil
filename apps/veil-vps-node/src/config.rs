@@ -154,7 +154,16 @@ impl VpsConfig {
             .set_default("quic_trusted_certs", Vec::<String>::new())?;
 
         if let Some(path) = config_path {
-            builder = builder.add_source(File::from(path));
+            if path.extension().and_then(|ext| ext.to_str()) == Some("env") {
+                // For .env files, load them into the environment instead of using as a config source
+                // This allows the Environment::with_prefix source to pick them up.
+                match dotenvy::from_path(&path) {
+                    Ok(_) => tracing::info!("loaded environment from {}", path.display()),
+                    Err(err) => tracing::warn!("failed to load .env from {}: {}", path.display(), err),
+                }
+            } else {
+                builder = builder.add_source(File::from(path));
+            }
         }
 
                 builder = builder.add_source(

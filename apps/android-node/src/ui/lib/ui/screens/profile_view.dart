@@ -722,6 +722,7 @@ Future<void> _showNodeContactDialog(
       peerId: derived.peerId,
       wsUrl: derived.wsUrl,
       quicAddr: derived.quicAddr,
+      rpcUrl: derived.rpcUrl,
     );
     if (!context.mounted) return;
     final err = service.state.lastError;

@@ -508,10 +508,10 @@ if [[ -x "$BIN" ]]; then
   # Export identity
   if [[ -f "$NODE_KEY_PATH" ]]; then
     # Key already exists, just show it
-    sudo -u "$RUN_USER" "$BIN" --config "$ENV_FILE" identity || true
+    VEIL_LOG=info sudo -u "$RUN_USER" "$BIN" --config "$ENV_FILE" identity || true
   else
     # First time generation
-    sudo -u "$RUN_USER" "$BIN" --config "$ENV_FILE" identity || true
+    VEIL_LOG=info sudo -u "$RUN_USER" "$BIN" --config "$ENV_FILE" identity || true
   fi
   echo "-----------------------------------"
   echo "Use the 'nsec' or 'hex' secret above to log in to the admin dashboard."

@@ -206,7 +206,9 @@ async fn main() {
             .unwrap_or_default()
             .split(',')
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+            .filter(|value| {
+                !value.is_empty() && (value.starts_with("http://") || value.starts_with("https://"))
+            })
             .collect(),
         gossip_interval: std::env::var("VEIL_DISCOVERY_INTERVAL_MS")
             .ok()

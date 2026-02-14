@@ -1517,7 +1517,7 @@ async fn contact_import(
     if !authorized(&headers, &state.auth_token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    if request.contact.pubkey_hex.len() != 64 {
+    if !request.contact.pubkey_hex.is_empty() && request.contact.pubkey_hex.len() != 64 {
         return bad_request("invalid_pubkey", "pubkey invalid");
     }
     state.node.set_contact(request.contact);
