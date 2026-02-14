@@ -336,7 +336,17 @@ set_env_var "VEIL_VPS_NOSTR_MAX_SEEN_IDS" "20000"
 set_env_var "VEIL_VPS_NOSTR_PERSIST_EVERY_UPDATES" "32"
 
 if [[ -f docs/runbooks/veil-vps-node.service ]]; then
-  install -m 0644 docs/runbooks/veil-vps-node.service "$SERVICE_FILE" || true
+  # Create a temporary service file with correct paths
+  TMP_SERVICE=$(mktemp)
+  cp docs/runbooks/veil-vps-node.service "$TMP_SERVICE"
+  sed -i "s|WorkingDirectory=/opt/veil-vps-node|WorkingDirectory=${PREFIX}|g" "$TMP_SERVICE"
+  sed -i "s|ExecStart=/opt/veil-vps-node/veil-vps-node|ExecStart=${PREFIX}/veil-vps-node|g" "$TMP_SERVICE"
+  sed -i "s|EnvironmentFile=/opt/veil-vps-node/veil-vps-node.env|EnvironmentFile=${ENV_FILE}|g" "$TMP_SERVICE"
+  sed -i "s|ReadWritePaths=/opt/veil-vps-node|ReadWritePaths=${PREFIX}|g" "$TMP_SERVICE"
+
+  install -m 0644 "$TMP_SERVICE" "$SERVICE_FILE" || true
+  rm "$TMP_SERVICE"
+
   if has_systemd; then
     systemctl daemon-reload || true
     systemctl enable veil-vps-node.service || true
@@ -514,13 +524,17 @@ if [[ -x "$BIN" ]]; then
   chown -R "$RUN_USER:$RUN_GROUP" "$PREFIX"
   
   # Export identity
-  if [[ -f "$NODE_KEY_PATH" ]]; then
-    # Key already exists, just show it
-    VEIL_LOG=info sudo -u "$RUN_USER" "$BIN" --config "$ENV_FILE" identity || true
-  else
-    # First time generation
-    VEIL_LOG=info sudo -u "$RUN_USER" "$BIN" --config "$ENV_FILE" identity || true
-  fi
+  # Change to PREFIX to avoid "running from home directory" warnings
+  (
+    cd "$PREFIX"
+    if [[ -f "$NODE_KEY_PATH" ]]; then
+      # Key already exists, just show it
+      VEIL_LOG=info sudo -u "$RUN_USER" "$BIN" --config "$ENV_FILE" identity || true
+    else
+      # First time generation
+      VEIL_LOG=info sudo -u "$RUN_USER" "$BIN" --config "$ENV_FILE" identity || true
+    fi
+  )
   echo "-----------------------------------"
   echo "Use the 'nsec' or 'hex' secret above to log in to the admin dashboard."
   echo ""
