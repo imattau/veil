@@ -452,10 +452,12 @@ fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIden
             .map(|k| k.secret_der().to_vec());
 
         if !cert_chain.is_empty() && key_der.is_some() {
+            let fingerprint = blake3_32(&cert_chain[0]);
             info!(
-                "loaded existing QUIC identity (PEM) from {} (chain length: {})",
+                "loaded existing QUIC identity (PEM) from {} (chain length: {}, fingerprint: {})",
                 cert_path.display(),
-                cert_chain.len()
+                cert_chain.len(),
+                hex::encode(fingerprint)
             );
             return Ok(QuicIdentity {
                 cert_chain_der: cert_chain,
@@ -464,7 +466,12 @@ fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIden
         }
 
         // Fallback to raw DER (single cert)
-        info!("loaded existing QUIC identity (raw DER) from {}", cert_path.display());
+        let fingerprint = blake3_32(&cert_bytes);
+        info!(
+            "loaded existing QUIC identity (raw DER) from {} (fingerprint: {})",
+            cert_path.display(),
+            hex::encode(fingerprint)
+        );
         return Ok(QuicIdentity {
             cert_chain_der: vec![cert_bytes],
             key_der: key_bytes,
@@ -473,8 +480,11 @@ fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIden
 
     let identity = QuicIdentity::generate_self_signed("veil-node")
         .map_err(|e| format!("generate identity: {e}"))?;
-    ensure_parent(cert_path).map_err(|e| format!("create cert dir: {e}"))?;
-    ensure_parent(key_path).map_err(|e| format!("create key dir: {e}"))?;
+    let fingerprint = blake3_32(&identity.cert_chain_der[0]);
+    info!(
+        "generated new self-signed QUIC identity (fingerprint: {})",
+        hex::encode(fingerprint)
+    );
     
     // For generated self-signed, we just write the raw DER bytes
     fs::write(cert_path, &identity.cert_chain_der[0]).map_err(|e| format!("write cert: {e}"))?;

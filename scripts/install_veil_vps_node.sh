@@ -413,7 +413,15 @@ if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   sed -i "s|WorkingDirectory=/opt/veil-vps-node|WorkingDirectory=${PREFIX}|g" "$TMP_SERVICE"
   sed -i "s|ExecStart=/opt/veil-vps-node/veil-vps-node|ExecStart=${PREFIX}/veil-vps-node|g" "$TMP_SERVICE"
   sed -i "s|EnvironmentFile=/opt/veil-vps-node/veil-vps-node.env|EnvironmentFile=${ENV_FILE}|g" "$TMP_SERVICE"
-  sed -i "s|ReadWritePaths=/opt/veil-vps-node|ReadWritePaths=${PREFIX}|g" "$TMP_SERVICE"
+  
+  # Allow reading external certificate directories if needed
+  ALLOWED_PATHS="${PREFIX}"
+  if [[ "$FINAL_CERT_PATH" != "${PREFIX}"* ]]; then
+    CERT_DIR=$(dirname "$FINAL_CERT_PATH")
+    ALLOWED_PATHS="${ALLOWED_PATHS}:${CERT_DIR}"
+    echo "Adding certificate path to systemd allowed paths: ${CERT_DIR}"
+  fi
+  sed -i "s|ReadWritePaths=/opt/veil-vps-node|ReadWritePaths=${ALLOWED_PATHS}|g" "$TMP_SERVICE"
 
   install -m 0644 "$TMP_SERVICE" "$SERVICE_FILE" || true
   rm "$TMP_SERVICE"
