@@ -382,8 +382,17 @@ fi
 
 configure_nginx() {
   if [[ -f "$NGINX_SITE_PATH" ]]; then
-    echo "nginx config exists at $NGINX_SITE_PATH (skipping)"
-    return 0
+    if ! grep -q "location /ws" "$NGINX_SITE_PATH"; then
+      echo "WARNING: Existing nginx config at $NGINX_SITE_PATH is missing the '/ws' block."
+      echo "This will cause WebSocket connection failures (404)."
+      read -r -p "Overwrite existing nginx config? [y/N] " overwrite_nginx
+      if [[ ! "$overwrite_nginx" =~ ^[Yy]$ ]]; then
+        return 0
+      fi
+    else
+      echo "nginx config exists at $NGINX_SITE_PATH (skipping)"
+      return 0
+    fi
   fi
   if [[ -z "$PROXY_DOMAIN" ]]; then
     echo "PROXY_DOMAIN not set; skipping nginx config"
@@ -442,8 +451,16 @@ NGINXCONF
 
 configure_caddy() {
   if [[ -f "$CADDY_SITE_PATH" ]]; then
-    echo "caddy config exists at $CADDY_SITE_PATH (skipping)"
-    return 0
+    if ! grep -q "reverse_proxy /ws" "$CADDY_SITE_PATH"; then
+      echo "WARNING: Existing caddy config at $CADDY_SITE_PATH is missing the '/ws' block."
+      read -r -p "Overwrite existing caddy config? [y/N] " overwrite_caddy
+      if [[ ! "$overwrite_caddy" =~ ^[Yy]$ ]]; then
+        return 0
+      fi
+    else
+      echo "caddy config exists at $CADDY_SITE_PATH (skipping)"
+      return 0
+    fi
   fi
   if [[ -z "$PROXY_DOMAIN" ]]; then
     echo "PROXY_DOMAIN not set; skipping caddy config"

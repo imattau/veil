@@ -44,8 +44,16 @@ pub fn build_router(state: VpsAppState) -> Router {
         .route("/admin-api/settings", post(admin_settings_set))
         .route("/admin-api/settings", delete(admin_settings_delete))
         .route("/admin-api/logs", get(admin_logs))
+        .route("/ws", get(ws_error_handler))
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+async fn ws_error_handler() -> impl IntoResponse {
+    (
+        StatusCode::BAD_REQUEST,
+        "This is the VEIL API port (default 9090). WebSockets should be routed to the VEIL WebSocket port (default 8080). Check your proxy configuration.",
+    )
 }
 
 fn admin_authenticated(headers: &HeaderMap, admin: &AdminAuthState) -> bool {
