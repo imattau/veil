@@ -193,6 +193,9 @@ pub fn build_quic_adapter(
     server_name: String,
     trusted_certs: Vec<Vec<u8>>,
 ) -> Result<QuicAdapter, QuicAdapterError> {
+    if std::env::var_os("VEIL_QUIC_INSECURE").is_some() {
+        tracing::warn!("QUIC insecure mode enabled - skipping certificate verification");
+    }
     let identity = QuicIdentity::generate_self_signed("veil-android-node")
         .map_err(|_| QuicAdapterError::InvalidIdentity)?;
     let mut cfg = QuicAdapterConfig::new(bind_addr, server_name, identity);
