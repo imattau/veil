@@ -1522,6 +1522,9 @@ async fn main() {
                                 obj.insert("source_relay".to_string(), serde_json::Value::String(item.source_relay.clone()));
                             }
                             guard.push_back(value);
+                            info!("nostr bridge: added post to local history (relay={})", item.source_relay);
+                        } else {
+                            warn!("nostr bridge: received payload that failed to parse as FeedBundle (relay={})", item.source_relay);
                         }
 
                         bridge_batcher.enqueue(item.payload);
@@ -1568,6 +1571,7 @@ async fn main() {
                             guard.pop_front();
                         }
                         guard.push_back(serde_json::to_value(bundle).unwrap_or_default());
+                        info!("runtime: delivered post added to history");
                     } else if let Ok(batch) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload) {
                         for item in batch {
                             if let Ok(bundle) = serde_json::from_slice::<veil_schema_feed::FeedBundle>(&item) {
@@ -1576,8 +1580,12 @@ async fn main() {
                                     guard.pop_front();
                                 }
                                 guard.push_back(serde_json::to_value(bundle).unwrap_or_default());
+                                info!("runtime: delivered batched post added to history");
                             }
                         }
+                    } else {
+                        // Debug log only to avoid noise for non-feed payloads (DMs, etc)
+                        debug!("runtime: delivered payload is not a standard FeedBundle or Batch");
                     }
                 }),
                 on_send_failure: Some(&mut |count| {

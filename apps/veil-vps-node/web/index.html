@@ -226,6 +226,7 @@
       }
 
       function renderPosts(posts) {
+        console.log("Rendering posts:", posts);
         if (!posts || posts.length === 0) {
           postsListEl.innerHTML = '<div class="text-muted text-small text-center" style="grid-column: 1/-1;">No public posts yet.</div>';
           return;
@@ -237,7 +238,10 @@
         
         for (const post of recent) {
           // Supports "post" kind in FeedBundle
-          if (post.kind !== 'post') continue;
+          if (post.kind !== 'post') {
+            console.log("Skipping non-post bundle:", post.kind);
+            continue;
+          }
           
           const card = document.createElement('div');
           card.className = 'post-card';
@@ -277,7 +281,8 @@
           
           const footer = document.createElement('div');
           footer.className = 'post-footer';
-          const date = new Date(post.meta.created_at * 1000);
+          const createdAt = (post.meta && post.meta.created_at) ? post.meta.created_at : 0;
+          const date = new Date(createdAt * 1000);
           footer.textContent = date.toLocaleString();
           
           card.appendChild(header);
