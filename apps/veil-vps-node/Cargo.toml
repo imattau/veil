@@ -24,7 +24,6 @@ tokio-tungstenite = "0.24"
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "registry"] }
-rustls-pemfile = "2"
 veil-core = { path = "../../crates/veil-core" }
 veil-codec = { path = "../../crates/veil-codec" }
 veil-crypto = { path = "../../crates/veil-crypto" }

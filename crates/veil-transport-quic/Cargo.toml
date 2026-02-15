@@ -12,7 +12,6 @@ rustls = { version = "0.23", features = ["ring"] }
 rustls-pki-types = "1"
 rustls-pemfile = "2"
 rcgen = "0.13"
-tracing = "0.1"
 thiserror.workspace = true
 webpki-roots = "0.26"
 

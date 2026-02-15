@@ -15,8 +15,8 @@ mod http_server;
 mod logger;
 mod nostr_bridge;
 mod settings_db;
- 
- use bech32::{Bech32, Hrp};
+
+use bech32::{Bech32, Hrp};
 use logger::{AdminLoggerLayer, LogBuffer};
 use nostr_bridge::{start_nostr_bridge, NostrBridgeConfig};
 use rand::RngCore;
@@ -316,10 +316,6 @@ impl<A: TransportAdapter> RecordingAdapter<A> {
         Self { inner, seen }
     }
 
-    fn inner_mut(&mut self) -> &mut A {
-        &mut self.inner
-    }
-
     fn snapshot_seen(&self) -> Vec<A::Peer>
     where
         A::Peer: Clone,
@@ -328,43 +324,6 @@ impl<A: TransportAdapter> RecordingAdapter<A> {
         guard.iter().cloned().collect()
     }
 }
-
-struct CertReloadState {
-    cert_path: PathBuf,
-    key_path: PathBuf,
-    trusted_paths: Vec<String>,
-    prefix: PathBuf,
-    last_cert_mod: Option<SystemTime>,
-    last_key_mod: Option<SystemTime>,
-}
-
-impl CertReloadState {
-    fn check_and_reload(&mut self, adapter: &QuicAdapter) {
-        let cert_mod = fs::metadata(&self.cert_path).and_then(|m| m.modified()).ok();
-        let key_mod = fs::metadata(&self.key_path).and_then(|m| m.modified()).ok();
-
-        if (cert_mod.is_some() && cert_mod != self.last_cert_mod)
-            || (key_mod.is_some() && key_mod != self.last_key_mod)
-        {
-            info!("quic: certificate or key changed on disk; reloading...");
-            match load_or_create_identity(&self.cert_path, &self.key_path, &self.prefix) {
-                Ok(identity) => {
-                    let trusted = load_trusted_certs(&self.trusted_paths);
-                    if let Err(err) = adapter.reload_identity(identity, trusted) {
-                        error!("quic: reload_identity failed: {err}");
-                    } else {
-                        self.last_cert_mod = cert_mod;
-                        self.last_key_mod = key_mod;
-                    }
-                }
-                Err(err) => {
-                    error!("quic: failed to load new identity for reload: {err}");
-                }
-            }
-        }
-    }
-}
-
 
 impl<A: TransportAdapter> TransportAdapter for RecordingAdapter<A>
 where
@@ -474,59 +433,15 @@ fn ensure_parent(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn load_or_create_identity(
-    cert_path: &Path,
-    key_path: &Path,
-    prefix: &Path,
-) -> Result<QuicIdentity, String> {
-    let is_internal = cert_path.starts_with(prefix) && key_path.starts_with(prefix);
-
-    let cert_meta = fs::metadata(cert_path);
-    let key_meta = fs::metadata(key_path);
-
-    if cert_meta.is_ok() && key_meta.is_ok() {
-        let cert_bytes = fs::read(cert_path).map_err(|e| format!("read cert from {}: {}", cert_path.display(), e))?;
-        let key_bytes = fs::read(key_path).map_err(|e| format!("read key from {}: {}", key_path.display(), e))?;
-
-        // Try parsing as PEM first
-        let mut cert_reader = std::io::BufReader::new(&cert_bytes[..]);
-        let cert_chain: Vec<Vec<u8>> = rustls_pemfile::certs(&mut cert_reader)
-            .filter_map(|r| r.ok())
-            .map(|c| c.to_vec())
-            .collect();
-
-        let mut key_reader = std::io::BufReader::new(&key_bytes[..]);
-        let key_der = rustls_pemfile::private_key(&mut key_reader)
-            .ok()
-            .flatten()
-            .map(|k| k.secret_der().to_vec());
-
-        if !cert_chain.is_empty() && key_der.is_some() {
-            let fingerprint = blake3_32(&cert_chain[0]);
-            info!(
-                "loaded existing QUIC identity (PEM) from {} (chain length: {}, fingerprint: {})",
-                cert_path.display(),
-                cert_chain.len(),
-                hex::encode(fingerprint)
-            );
-            return Ok(QuicIdentity {
-                cert_chain_der: cert_chain,
-                key_der: key_der.unwrap(),
-            });
-        }
-
-        // Fallback to raw DER validation
-        let chain = vec![rustls::pki_types::CertificateDer::from(cert_bytes.clone())];
-        let key = rustls::pki_types::PrivateKeyDer::from(rustls::pki_types::PrivatePkcs8KeyDer::from(key_bytes.clone()));
-        if let Err(e) = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(chain, key) {
-             return Err(format!("invalid DER certificate or key at {}: {}", cert_path.display(), e));
-        }
-
+fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIdentity, String> {
+    if cert_path.exists() && key_path.exists() {
+        let cert_bytes = fs::read(cert_path)
+            .map_err(|e| format!("read cert from {}: {}", cert_path.display(), e))?;
+        let key_bytes = fs::read(key_path)
+            .map_err(|e| format!("read key from {}: {}", key_path.display(), e))?;
         let fingerprint = blake3_32(&cert_bytes);
         info!(
-            "loaded existing QUIC identity (raw DER) from {} (fingerprint: {})",
+            "loaded existing QUIC identity from {} (fingerprint: {})",
             cert_path.display(),
             hex::encode(fingerprint)
         );
@@ -536,16 +451,6 @@ fn load_or_create_identity(
         });
     }
 
-    if !is_internal {
-        return Err(format!(
-            "external certificate files not found or unreadable. cert_error={:?}, key_error={:?}. Paths: {} / {}. verify permissions and group membership.",
-            cert_meta.err(),
-            key_meta.err(),
-            cert_path.display(),
-            key_path.display()
-        ));
-    }
-
     let identity = QuicIdentity::generate_self_signed("veil-node")
         .map_err(|e| format!("generate identity: {e}"))?;
     let fingerprint = blake3_32(&identity.cert_chain_der[0]);
@@ -553,8 +458,7 @@ fn load_or_create_identity(
         "generated new self-signed QUIC identity (fingerprint: {})",
         hex::encode(fingerprint)
     );
-    
-    // For generated self-signed, we just write the raw DER bytes
+    ensure_parent(cert_path).map_err(|e| format!("create cert dir: {e}"))?;
     fs::write(cert_path, &identity.cert_chain_der[0])
         .map_err(|e| format!("write cert to {}: {}", cert_path.display(), e))?;
     fs::write(key_path, &identity.key_der)
@@ -572,20 +476,7 @@ fn load_trusted_certs(paths: &[String]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for path in paths {
         match fs::read(path) {
-            Ok(bytes) => {
-                let mut reader = std::io::BufReader::new(&bytes[..]);
-                let certs: Vec<Vec<u8>> = rustls_pemfile::certs(&mut reader)
-                    .filter_map(|r| r.ok())
-                    .map(|c| c.to_vec())
-                    .collect();
-                
-                if certs.is_empty() {
-                    // Fallback to raw DER
-                    out.push(bytes);
-                } else {
-                    out.extend(certs);
-                }
-            }
+            Ok(bytes) => out.push(bytes),
             Err(err) => eprintln!("failed to read trusted cert {path}: {err}"),
         }
     }
@@ -806,7 +697,10 @@ pub struct AdminSettingUpsertRequest {
 impl AdminAuthState {
     fn bootstrap_session_db(path: &Path) -> Result<(), String> {
         if let Err(err) = ensure_parent(path) {
-            return Err(format!("failed to create session db parent {}: {err}", path.display()));
+            return Err(format!(
+                "failed to create session db parent {}: {err}",
+                path.display()
+            ));
         }
         match Connection::open(path) {
             Ok(conn) => {
@@ -817,7 +711,10 @@ impl AdminAuthState {
                     )",
                     params![],
                 ) {
-                    return Err(format!("failed to initialize session table {}: {err}", path.display()));
+                    return Err(format!(
+                        "failed to initialize session table {}: {err}",
+                        path.display()
+                    ));
                 }
                 let now = now_unix_secs() as i64;
                 let _ = conn.execute(
@@ -826,9 +723,10 @@ impl AdminAuthState {
                 );
                 Ok(())
             }
-            Err(err) => {
-                Err(format!("failed to open session db {}: {err}", path.display()))
-            }
+            Err(err) => Err(format!(
+                "failed to open session db {}: {err}",
+                path.display()
+            )),
         }
     }
 
@@ -944,15 +842,15 @@ fn encode_nostr_nsec(secret: [u8; 32]) -> Option<String> {
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Path to configuration file
-        #[arg(long, short)]
-        config: Option<PathBuf>,
-    
-        /// Ignore all settings in the database and use only config file/defaults
-        #[arg(long)]
-        safe_mode: bool,
-    
-        #[command(subcommand)]
-        command: Option<Commands>,
+    #[arg(long, short)]
+    config: Option<PathBuf>,
+
+    /// Ignore all settings in the database and use only config file/defaults
+    #[arg(long)]
+    safe_mode: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -1071,7 +969,9 @@ async fn main() {
     dotenvy::dotenv().ok();
     if let Ok(cwd) = std::env::current_dir() {
         info!("starting veil-vps-node in {}", cwd.display());
-        if cwd.to_string_lossy().starts_with("/home/") && !cwd.to_string_lossy().contains("workspace") {
+        if cwd.to_string_lossy().starts_with("/home/")
+            && !cwd.to_string_lossy().contains("workspace")
+        {
             warn!("Node is running from a home directory. Ensure this is intentional and that absolute paths are set for 'data/' directories if running as a service user.");
         }
     }
@@ -1143,7 +1043,10 @@ async fn main() {
 
     let settings_db_path = settings_db_path_from_env();
     if cli.safe_mode {
-        warn!("SAFE MODE ENABLED: Ignoring all settings overrides from {}", settings_db_path.display());
+        warn!(
+            "SAFE MODE ENABLED: Ignoring all settings overrides from {}",
+            settings_db_path.display()
+        );
     } else {
         apply_settings_db_overrides(&settings_db_path);
     }
@@ -1190,7 +1093,10 @@ async fn main() {
     let ws_listen = config.ws_listen.clone().filter(|s| !s.trim().is_empty());
     let ws_peer = config.ws_peer.clone().filter(|s| !s.trim().is_empty());
     let ws_peer_id = ws_peer.clone().unwrap_or_else(|| "ws-peer".to_string());
-    let tor_socks_addr = config.tor_socks_addr.clone().filter(|s| !s.trim().is_empty());
+    let tor_socks_addr = config
+        .tor_socks_addr
+        .clone()
+        .filter(|s| !s.trim().is_empty());
 
     let adaptive_scoring = config.adaptive_lane_scoring;
     let probabilistic_forwarding = config.probabilistic_forwarding;
@@ -1256,11 +1162,7 @@ async fn main() {
         return;
     }
 
-    let identity_prefix = std::env::var("VEIL_VPS_PREFIX")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/opt/veil-vps-node"));
-
-    let identity = match load_or_create_identity(&quic_cert_path, &quic_key_path, &identity_prefix) {
+    let identity = match load_or_create_identity(&quic_cert_path, &quic_key_path) {
         Ok(identity) => identity,
         Err(err) => {
             error!("fatal: {err}");
@@ -1508,15 +1410,6 @@ async fn main() {
     let bridge_tag = derive_channel_feed_tag(&node_pubkey, bridge_namespace, &nostr_bridge_channel);
 
     let mut last_snapshot = Instant::now();
-    let mut cert_reload = CertReloadState {
-        cert_path: quic_cert_path,
-        key_path: quic_key_path,
-        trusted_paths: trusted_cert_paths,
-        prefix: identity_prefix,
-        last_cert_mod: fs::metadata(&config.quic_cert_path).and_then(|m| m.modified()).ok(),
-        last_key_mod: fs::metadata(&config.quic_key_path).and_then(|m| m.modified()).ok(),
-    };
-
     let mut last_health_log = Instant::now();
     let health_log_interval = Duration::from_secs(30);
 
@@ -1664,7 +1557,6 @@ async fn main() {
         metrics.ticks.fetch_add(1, Ordering::Relaxed);
 
         if last_snapshot.elapsed() >= snapshot_interval {
-            cert_reload.check_and_reload(runtime.fast_adapter.inner_mut());
             if let Err(err) = save_state_to_path(&state_path, &mut runtime.state) {
                 error!("snapshot failed: {err}");
             }

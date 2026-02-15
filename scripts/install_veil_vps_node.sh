@@ -307,110 +307,12 @@ set_config_var() {
   fi
 }
 
-resolve_certificates() {
-  local cert_path="${PREFIX}/data/quic_cert.der"
-  local key_path="${PREFIX}/data/quic_key.der"
-  local force_update=0
-
-  # If PROXY_DOMAIN is empty, try to get it from the user now
-  if [[ -z "$PROXY_DOMAIN" ]]; then
-    echo "No domain found in current settings."
-    read -r -p "Enter your node's domain (e.g. veilnode.3nostr.com) to search for certificates: " PROXY_DOMAIN
-  fi
-
-  if [[ -n "$PROXY_DOMAIN" ]]; then
-    # Search paths for both Certbot and Caddy
-    local SEARCH_PATHS=(
-      "/etc/letsencrypt/live/${PROXY_DOMAIN}"
-      "/var/lib/caddy/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${PROXY_DOMAIN}"
-      "/var/lib/caddy/.local/share/caddy/certificates/acme.zerossl.com-v2-directory/${PROXY_DOMAIN}"
-      "/var/lib/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${PROXY_DOMAIN}"
-      "/root/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${PROXY_DOMAIN}"
-    )
-
-    echo "Searching for CA-signed certificates for $PROXY_DOMAIN..."
-    for path in "${SEARCH_PATHS[@]}"; do
-      local test_cert="${path}/fullchain.pem"
-      local test_key="${path}/privkey.pem"
-      
-      # Caddy uses .crt/.key extension sometimes
-      if [[ ! -f "$test_cert" ]]; then
-        test_cert="${path}/${PROXY_DOMAIN}.crt"
-        test_key="${path}/${PROXY_DOMAIN}.key"
-      fi
-
-      if [[ -f "$test_cert" && -f "$test_key" ]]; then
-        echo "FOUND certificates at $path"
-        read -r -p "Use these certificates for QUIC? [Y/n] " use_found
-        if [[ -z "$use_found" || "$use_found" =~ ^[Yy]$ ]]; then
-          cert_path="$test_cert"
-          key_path="$test_key"
-          force_update=1
-          break
-        fi
-      fi
-    done
-
-    # If still not found, try a broader search
-    if [[ "$force_update" == "0" ]]; then
-      echo "Standard paths failed. Attempting a broader search for '$PROXY_DOMAIN' in common locations..."
-      local found_path
-      found_path=$(find /etc/letsencrypt /var/lib/caddy /root/.local/share/caddy -type d -name "$PROXY_DOMAIN" 2>/dev/null | head -n 1 || true)
-      if [[ -n "$found_path" ]]; then
-        local test_cert="${found_path}/fullchain.pem"
-        local test_key="${found_path}/privkey.pem"
-        if [[ ! -f "$test_cert" ]]; then
-          test_cert="${found_path}/${PROXY_DOMAIN}.crt"
-          test_key="${found_path}/${PROXY_DOMAIN}.key"
-        fi
-        if [[ -f "$test_cert" ]]; then
-          echo "FOUND certificates via search at $found_path"
-          read -r -p "Use these certificates for QUIC? [Y/n] " use_search
-          if [[ -z "$use_search" || "$use_search" =~ ^[Yy]$ ]]; then
-            cert_path="$test_cert"
-            key_path="$test_key"
-            force_update=1
-          fi
-        fi
-      fi
-    fi
-  fi
-
-  if [[ "$force_update" == "1" ]]; then
-    echo "Configuring QUIC to use CA certificates: $cert_path"
-  else
-    echo "Using default self-signed certificates at $cert_path"
-  fi
-
-  # 2. Prompt for custom paths if not using LE or if user wants to change
-  if [[ "$force_update" == "0" ]]; then
-    echo "Current QUIC certificate path: $cert_path"
-    read -r -p "Enter custom certificate path (leave blank to keep current): " input_cert
-    if [[ -n "$input_cert" ]]; then
-      cert_path="$input_cert"
-      force_update=1
-    fi
-    
-    echo "Current QUIC private key path: $key_path"
-    read -r -p "Enter custom private key path (leave blank to keep current): " input_key
-    if [[ -n "$input_key" ]]; then
-      key_path="$input_key"
-      force_update=1
-    fi
-  fi
-
-  export FINAL_CERT_PATH="$cert_path"
-  export FINAL_KEY_PATH="$key_path"
-  export CERT_FORCE_UPDATE="$force_update"
-}
-
 HOSTNAME_FQDN=$(hostname -f 2>/dev/null || hostname)
-resolve_certificates
 set_config_var "VEIL_VPS_PREFIX" "${PREFIX}"
 set_config_var "VEIL_VPS_STATE_PATH" "${PREFIX}/data/node_state.cbor"
 set_config_var "VEIL_VPS_NODE_KEY_PATH" "${PREFIX}/data/node_identity.key"
-set_config_var "VEIL_VPS_QUIC_CERT_PATH" "${FINAL_CERT_PATH}" "$CERT_FORCE_UPDATE"
-set_config_var "VEIL_VPS_QUIC_KEY_PATH" "${FINAL_KEY_PATH}" "$CERT_FORCE_UPDATE"
+set_config_var "VEIL_VPS_QUIC_CERT_PATH" "${PREFIX}/data/quic_cert.der"
+set_config_var "VEIL_VPS_QUIC_KEY_PATH" "${PREFIX}/data/quic_key.der"
 set_config_var "VEIL_VPS_QUIC_BIND" "${VEIL_VPS_QUIC_BIND:-0.0.0.0:5000}"
 set_config_var "VEIL_VPS_QUIC_ALPN" "veil-quic/1,veil/1,veil-node,veil,h3,hq-29"
 set_config_var "VEIL_VPS_FAST_PEERS" ""
@@ -456,114 +358,7 @@ if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   sed -i "s|ExecStart=/opt/veil-vps-node/veil-vps-node|ExecStart=${PREFIX}/veil-vps-node|g" "$TMP_SERVICE"
   sed -i "s|EnvironmentFile=/opt/veil-vps-node/veil-vps-node.env|EnvironmentFile=${ENV_FILE}|g" "$TMP_SERVICE"
   
-  # Allow reading external certificate directories if needed
-  ALLOWED_RW_PATHS="${PREFIX}"
-  ALLOWED_RO_PATHS=""
-  SUPP_GROUPS=""
-  PROTECT_HOME="true"
-  
-  if [[ "$FINAL_CERT_PATH" != "${PREFIX}"* ]]; then
-    # If cert is in /root or /home, we must disable ProtectHome
-    if [[ "$FINAL_CERT_PATH" == "/root/"* ]] || [[ "$FINAL_CERT_PATH" == "/home/"* ]]; then
-      PROTECT_HOME="false"
-      echo "Cert is in a home directory; setting ProtectHome=false in service."
-    fi
-    # Caddy in /var/lib can sometimes be affected by ProtectHome depending on distro
-    if [[ "$FINAL_CERT_PATH" == "/var/lib/caddy/"* ]]; then
-      PROTECT_HOME="read-only"
-      echo "Cert is in /var/lib/caddy; setting ProtectHome=read-only in service."
-    fi
-
-    CERT_DIR=$(dirname "$FINAL_CERT_PATH")
-    if [[ -d "$CERT_DIR" ]]; then
-      ALLOWED_RO_PATHS="${CERT_DIR}"
-      
-      # Let's Encrypt: if path is in /live/, we also need /archive/
-      if [[ "$FINAL_CERT_PATH" == *"/letsencrypt/live/"* ]]; then
-        ARCHIVE_DIR=$(echo "$CERT_DIR" | sed 's|/live/|/archive/|')
-        if [[ -d "$ARCHIVE_DIR" ]]; then
-          ALLOWED_RO_PATHS="${ALLOWED_RO_PATHS} ${ARCHIVE_DIR}"
-        fi
-      fi
-      
-      echo "Adding certificate paths to systemd ReadOnlyPaths: ${ALLOWED_RO_PATHS}"
-      
-      # Try to detect which group is needed
-      if [[ "$FINAL_CERT_PATH" == *"/caddy/"* ]]; then
-        if getent group caddy >/dev/null; then SUPP_GROUPS="caddy"; fi
-      elif [[ "$FINAL_CERT_PATH" == *"/letsencrypt/"* ]]; then
-        if getent group certbot >/dev/null; then SUPP_GROUPS="certbot"; fi
-      fi
-      
-      # Fallback: check group of the file itself if it's not world-readable
-      if [[ -z "$SUPP_GROUPS" ]]; then
-        FILE_GROUP=$(stat -c '%G' "$FINAL_CERT_PATH" 2>/dev/null || true)
-        if [[ -n "$FILE_GROUP" && "$FILE_GROUP" != "root" && "$FILE_GROUP" != "$RUN_GROUP" ]]; then
-          SUPP_GROUPS="$FILE_GROUP"
-        fi
-      fi
-      
-      if [[ -n "$SUPP_GROUPS" ]]; then
-        # Add the user to the group on the system for easier debugging and access
-        usermod -a -G "$SUPP_GROUPS" "$RUN_USER" || true
-        echo "Added system user '$RUN_USER' to group '$SUPP_GROUPS' for certificate access."
-      fi
-    fi
-    
-    # Check parent directory permissions for the certificate
-    check_path="$FINAL_CERT_PATH"
-    blockage_found=0
-    while [[ "$check_path" != "/" && "$check_path" != "." ]]; do
-      check_path=$(dirname "$check_path")
-      perms=$(stat -c '%a' "$check_path" 2>/dev/null || true)
-      if [[ -n "$perms" && ("$perms" == "700" || "$perms" == "750") ]]; then
-          owner=$(stat -c '%U' "$check_path" 2>/dev/null || true)
-          group=$(stat -c '%G' "$check_path" 2>/dev/null || true)
-          
-          if [[ "$owner" != "$RUN_USER" ]]; then
-             if [[ "$perms" == "700" ]] || [[ "$perms" == "750" && "$group" != "$SUPP_GROUPS" ]]; then
-                echo "WARNING: Parent directory $check_path has restrictive permissions ($perms) owned by $owner:$group."
-                echo "         This may block the service user '$RUN_USER' from reaching the certificate."
-                blockage_found=1
-             fi
-          fi
-      fi
-    done
-    if [[ "$blockage_found" == "1" ]]; then
-       echo "SUGGESTION: Try 'chmod 755' on the directories above if the service fails to start."
-    fi
-    
-    # Check if the certificates are readable by the service user
-    if ! sudo -u "$RUN_USER" test -r "$FINAL_CERT_PATH" 2>/dev/null; then
-      echo "WARNING: Selected certificate is NOT readable by service user '$RUN_USER': $FINAL_CERT_PATH"
-      
-      # Check if it's a file permission issue (e.g. 600)
-      local_file_perms=$(stat -c '%a' "$FINAL_CERT_PATH" 2>/dev/null || true)
-      if [[ -n "$local_file_perms" && "$local_file_perms" == "600" ]]; then
-        echo "CAUSE: The certificate file has restrictive permissions (600)."
-        echo "SUGGESTION: Try 'chmod 640 $FINAL_CERT_PATH' (and the .key file) to allow group access."
-      fi
-
-      if [[ -n "$SUPP_GROUPS" ]]; then
-        echo "Check if '$RUN_USER' has been added to group '$SUPP_GROUPS' (installer tried this) or if permissions are too restrictive."
-      else
-        echo "Check path permissions (all parent directories must be searchable)."
-      fi
-    fi
-  fi
-  
-  sed -i "s|ReadWritePaths=/opt/veil-vps-node|ReadWritePaths=${ALLOWED_RW_PATHS}|g" "$TMP_SERVICE"
-  sed -i "s|ProtectHome=true|ProtectHome=${PROTECT_HOME}|g" "$TMP_SERVICE"
-  if [[ -n "$ALLOWED_RO_PATHS" ]]; then
-    # Insert ReadOnlyPaths after ReadWritePaths
-    sed -i "/ReadWritePaths=/a ReadOnlyPaths=${ALLOWED_RO_PATHS}" "$TMP_SERVICE"
-  fi
-  
-  if [[ -n "$SUPP_GROUPS" ]]; then
-    # Add SupplementaryGroups to the [Service] section
-    sed -i "/\[Service\]/a SupplementaryGroups=${SUPP_GROUPS}" "$TMP_SERVICE"
-    echo "Added supplementary group '${SUPP_GROUPS}' to service configuration."
-  fi
+  sed -i "s|ReadWritePaths=/opt/veil-vps-node|ReadWritePaths=${PREFIX}|g" "$TMP_SERVICE"
 
   install -m 0644 "$TMP_SERVICE" "$SERVICE_FILE" || true
   rm "$TMP_SERVICE"
@@ -589,7 +384,7 @@ if [[ -d apps/veil-vps-node/web ]]; then
   fi
   quic_bind_value="${VEIL_VPS_QUIC_BIND:-0.0.0.0:5000}"
   quic_port="${quic_bind_value##*:}"
-  quic_cert_path="${FINAL_CERT_PATH:-${VEIL_VPS_QUIC_CERT_PATH:-${PREFIX}/data/quic_cert.der}}"
+  quic_cert_path="${VEIL_VPS_QUIC_CERT_PATH:-${PREFIX}/data/quic_cert.der}"
   quic_cert_b64=""
   if [[ -f "${quic_cert_path}" ]]; then
     if command -v base64 >/dev/null 2>&1; then
