@@ -524,6 +524,14 @@ if [[ -f docs/runbooks/veil-vps-node.service ]]; then
     # Check if the certificates are readable by the service user
     if ! sudo -u "$RUN_USER" test -r "$FINAL_CERT_PATH" 2>/dev/null; then
       echo "WARNING: Selected certificate is NOT readable by service user '$RUN_USER': $FINAL_CERT_PATH"
+      
+      # Check if it's a file permission issue (e.g. 600)
+      local_file_perms=$(stat -c '%a' "$FINAL_CERT_PATH" 2>/dev/null || true)
+      if [[ -n "$local_file_perms" && "$local_file_perms" == "600" ]]; then
+        echo "CAUSE: The certificate file has restrictive permissions (600)."
+        echo "SUGGESTION: Try 'chmod 640 $FINAL_CERT_PATH' (and the .key file) to allow group access."
+      fi
+
       if [[ -n "$SUPP_GROUPS" ]]; then
         echo "Check if '$RUN_USER' has been added to group '$SUPP_GROUPS' (installer tried this) or if permissions are too restrictive."
       else
