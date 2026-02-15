@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 mod config;
 mod http_server;
