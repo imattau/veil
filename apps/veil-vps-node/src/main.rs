@@ -316,6 +316,10 @@ impl<A: TransportAdapter> RecordingAdapter<A> {
         Self { inner, seen }
     }
 
+    fn inner_mut(&mut self) -> &mut A {
+        &mut self.inner
+    }
+
     fn snapshot_seen(&self) -> Vec<A::Peer>
     where
         A::Peer: Clone,
@@ -324,6 +328,43 @@ impl<A: TransportAdapter> RecordingAdapter<A> {
         guard.iter().cloned().collect()
     }
 }
+
+struct CertReloadState {
+    cert_path: PathBuf,
+    key_path: PathBuf,
+    trusted_paths: Vec<String>,
+    prefix: PathBuf,
+    last_cert_mod: Option<SystemTime>,
+    last_key_mod: Option<SystemTime>,
+}
+
+impl CertReloadState {
+    fn check_and_reload(&mut self, adapter: &QuicAdapter) {
+        let cert_mod = fs::metadata(&self.cert_path).and_then(|m| m.modified()).ok();
+        let key_mod = fs::metadata(&self.key_path).and_then(|m| m.modified()).ok();
+
+        if (cert_mod.is_some() && cert_mod != self.last_cert_mod)
+            || (key_mod.is_some() && key_mod != self.last_key_mod)
+        {
+            info!("quic: certificate or key changed on disk; reloading...");
+            match load_or_create_identity(&self.cert_path, &self.key_path, &self.prefix) {
+                Ok(identity) => {
+                    let trusted = load_trusted_certs(&self.trusted_paths);
+                    if let Err(err) = adapter.reload_identity(identity, trusted) {
+                        error!("quic: reload_identity failed: {err}");
+                    } else {
+                        self.last_cert_mod = cert_mod;
+                        self.last_key_mod = key_mod;
+                    }
+                }
+                Err(err) => {
+                    error!("quic: failed to load new identity for reload: {err}");
+                }
+            }
+        }
+    }
+}
+
 
 impl<A: TransportAdapter> TransportAdapter for RecordingAdapter<A>
 where
@@ -474,7 +515,15 @@ fn load_or_create_identity(
             });
         }
 
-        // Fallback to raw DER (single cert)
+        // Fallback to raw DER validation
+        let chain = vec![rustls::pki_types::CertificateDer::from(cert_bytes.clone())];
+        let key = rustls::pki_types::PrivateKeyDer::from(rustls::pki_types::PrivatePkcs8KeyDer::from(key_bytes.clone()));
+        if let Err(e) = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(chain, key) {
+             return Err(format!("invalid DER certificate or key at {}: {}", cert_path.display(), e));
+        }
+
         let fingerprint = blake3_32(&cert_bytes);
         info!(
             "loaded existing QUIC identity (raw DER) from {} (fingerprint: {})",
@@ -523,7 +572,20 @@ fn load_trusted_certs(paths: &[String]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for path in paths {
         match fs::read(path) {
-            Ok(bytes) => out.push(bytes),
+            Ok(bytes) => {
+                let mut reader = std::io::BufReader::new(&bytes[..]);
+                let certs: Vec<Vec<u8>> = rustls_pemfile::certs(&mut reader)
+                    .filter_map(|r| r.ok())
+                    .map(|c| c.to_vec())
+                    .collect();
+                
+                if certs.is_empty() {
+                    // Fallback to raw DER
+                    out.push(bytes);
+                } else {
+                    out.extend(certs);
+                }
+            }
             Err(err) => eprintln!("failed to read trusted cert {path}: {err}"),
         }
     }
@@ -1446,6 +1508,14 @@ async fn main() {
     let bridge_tag = derive_channel_feed_tag(&node_pubkey, bridge_namespace, &nostr_bridge_channel);
 
     let mut last_snapshot = Instant::now();
+    let mut cert_reload = CertReloadState {
+        cert_path: quic_cert_path,
+        key_path: quic_key_path,
+        trusted_paths: trusted_cert_paths,
+        prefix: identity_prefix,
+        last_cert_mod: fs::metadata(&config.quic_cert_path).and_then(|m| m.modified()).ok(),
+        last_key_mod: fs::metadata(&config.quic_key_path).and_then(|m| m.modified()).ok(),
+    };
 
     let mut last_health_log = Instant::now();
     let health_log_interval = Duration::from_secs(30);
@@ -1594,6 +1664,7 @@ async fn main() {
         metrics.ticks.fetch_add(1, Ordering::Relaxed);
 
         if last_snapshot.elapsed() >= snapshot_interval {
+            cert_reload.check_and_reload(runtime.fast_adapter.inner_mut());
             if let Err(err) = save_state_to_path(&state_path, &mut runtime.state) {
                 error!("snapshot failed: {err}");
             }

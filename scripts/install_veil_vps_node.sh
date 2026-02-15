@@ -457,28 +457,57 @@ if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   sed -i "s|EnvironmentFile=/opt/veil-vps-node/veil-vps-node.env|EnvironmentFile=${ENV_FILE}|g" "$TMP_SERVICE"
   
   # Allow reading external certificate directories if needed
-  ALLOWED_PATHS="${PREFIX}"
+  ALLOWED_RW_PATHS="${PREFIX}"
+  ALLOWED_RO_PATHS=""
   SUPP_GROUPS=""
+  
   if [[ "$FINAL_CERT_PATH" != "${PREFIX}"* ]]; then
     CERT_DIR=$(dirname "$FINAL_CERT_PATH")
     if [[ -d "$CERT_DIR" ]]; then
-      ALLOWED_PATHS="${ALLOWED_PATHS} ${CERT_DIR}"
-      echo "Adding certificate path to systemd allowed paths: ${CERT_DIR}"
+      ALLOWED_RO_PATHS="${CERT_DIR}"
+      
+      # Let's Encrypt: if path is in /live/, we also need /archive/
+      if [[ "$FINAL_CERT_PATH" == *"/letsencrypt/live/"* ]]; then
+        ARCHIVE_DIR=$(echo "$CERT_DIR" | sed 's|/live/|/archive/|')
+        if [[ -d "$ARCHIVE_DIR" ]]; then
+          ALLOWED_RO_PATHS="${ALLOWED_RO_PATHS} ${ARCHIVE_DIR}"
+        fi
+      fi
+      
+      echo "Adding certificate paths to systemd ReadOnlyPaths: ${ALLOWED_RO_PATHS}"
       
       # Try to detect which group is needed
       if [[ "$FINAL_CERT_PATH" == *"/caddy/"* ]]; then
-        SUPP_GROUPS="caddy"
+        if getent group caddy >/dev/null; then SUPP_GROUPS="caddy"; fi
       elif [[ "$FINAL_CERT_PATH" == *"/letsencrypt/"* ]]; then
-        SUPP_GROUPS="certbot"
+        if getent group certbot >/dev/null; then SUPP_GROUPS="certbot"; fi
+      fi
+      
+      # Fallback: check group of the file itself if it's not world-readable
+      if [[ -z "$SUPP_GROUPS" ]]; then
+        FILE_GROUP=$(stat -c '%G' "$FINAL_CERT_PATH" 2>/dev/null || true)
+        if [[ -n "$FILE_GROUP" && "$FILE_GROUP" != "root" && "$FILE_GROUP" != "$RUN_GROUP" ]]; then
+          SUPP_GROUPS="$FILE_GROUP"
+        fi
       fi
     fi
     
-    # Check if the certificates are readable by root (installer) and warn if they might be a problem for the service user
-    if [[ ! -r "$FINAL_CERT_PATH" ]]; then
-      echo "WARNING: Selected certificate is not readable even by the installer: $FINAL_CERT_PATH"
+    # Check if the certificates are readable by the service user
+    if ! sudo -u "$RUN_USER" test -r "$FINAL_CERT_PATH" 2>/dev/null; then
+      echo "WARNING: Selected certificate is NOT readable by service user '$RUN_USER': $FINAL_CERT_PATH"
+      if [[ -n "$SUPP_GROUPS" ]]; then
+        echo "Check if '$RUN_USER' needs to be in group '$SUPP_GROUPS' or if permissions are too restrictive."
+      else
+        echo "Check path permissions (all parent directories must be searchable)."
+      fi
     fi
   fi
-  sed -i "s|ReadWritePaths=/opt/veil-vps-node|ReadWritePaths=${ALLOWED_PATHS}|g" "$TMP_SERVICE"
+  
+  sed -i "s|ReadWritePaths=/opt/veil-vps-node|ReadWritePaths=${ALLOWED_RW_PATHS}|g" "$TMP_SERVICE"
+  if [[ -n "$ALLOWED_RO_PATHS" ]]; then
+    # Insert ReadOnlyPaths after ReadWritePaths
+    sed -i "/ReadWritePaths=/a ReadOnlyPaths=${ALLOWED_RO_PATHS}" "$TMP_SERVICE"
+  fi
   
   if [[ -n "$SUPP_GROUPS" ]]; then
     # Add SupplementaryGroups to the [Service] section
@@ -510,7 +539,7 @@ if [[ -d apps/veil-vps-node/web ]]; then
   fi
   quic_bind_value="${VEIL_VPS_QUIC_BIND:-0.0.0.0:5000}"
   quic_port="${quic_bind_value##*:}"
-  quic_cert_path="${VEIL_VPS_QUIC_CERT_PATH:-${PREFIX}/data/quic_cert.der}"
+  quic_cert_path="${FINAL_CERT_PATH:-${VEIL_VPS_QUIC_CERT_PATH:-${PREFIX}/data/quic_cert.der}}"
   quic_cert_b64=""
   if [[ -f "${quic_cert_path}" ]]; then
     if command -v base64 >/dev/null 2>&1; then
