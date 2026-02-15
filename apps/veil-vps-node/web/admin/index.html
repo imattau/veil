@@ -265,6 +265,10 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
           Logs
         </a>
+        <a class="nav-item" data-tab="nostr">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+          Nostr
+        </a>
         <a class="nav-item" data-tab="identity">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           Identity
@@ -386,6 +390,34 @@
           </div>
         </section>
 
+        <!-- Nostr Tab -->
+        <section id="nostr" class="tab-content">
+          <h2>Nostr Bridge</h2>
+          <p class="text-muted text-small mb-4">Bridged Nostr events are automatically published to the VEIL network using the node's identity.</p>
+          
+          <div class="card mb-4">
+            <div id="nostrToggleContainer">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Relay Management</h3>
+            <p class="text-muted text-small mb-4">Configure the Nostr relays this node subscribes to for event ingestion.</p>
+            
+            <div class="flex gap-2 mb-4">
+              <input id="relayInput" type="text" placeholder="wss://relay.example.com">
+              <button class="btn btn-primary" id="addRelayBtn">Add Relay</button>
+            </div>
+
+            <div id="relayList" class="flex flex-col gap-2">
+              <div class="text-muted text-small">Loading relays...</div>
+            </div>
+            
+            <div id="nostrStatus" class="text-small text-muted mt-4">Bridge settings require a node restart to take effect.</div>
+          </div>
+        </section>
+
         <!-- Identity Tab -->
         <section id="identity" class="tab-content">
           <h2>Server Identity</h2>
@@ -452,6 +484,10 @@
       const toggleSettingsListEl = document.getElementById("toggleSettingsList");
       const logsListEl = document.getElementById("logsList");
       const refreshLogsBtn = document.getElementById("refreshLogsBtn");
+      const relayInput = document.getElementById("relayInput");
+      const addRelayBtn = document.getElementById("addRelayBtn");
+      const relayListEl = document.getElementById("relayList");
+      const nostrToggleContainer = document.getElementById("nostrToggleContainer");
       const serverNsecEl = document.getElementById("serverNsec");
       const serverHexEl = document.getElementById("serverHex");
       const identityStatusEl = document.getElementById("identityStatus");
@@ -508,6 +544,100 @@
         serverHexEl.value = body.server_secret_hex || "-";
       }
 
+      function renderNostrTab() {
+        // 1. Render Toggle
+        const config = TOGGLE_SETTINGS.find(s => s.key === "VEIL_VPS_NOSTR_BRIDGE_ENABLED");
+        nostrToggleContainer.innerHTML = "";
+        if (config) {
+          const div = document.createElement("div");
+          div.className = "toggle-item";
+          
+          const info = document.createElement("div");
+          info.innerHTML = `<div style="font-weight:600;">${config.label}</div><div class="text-small text-muted">${config.description}</div>`;
+          
+          const label = document.createElement("label");
+          label.className = "switch";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.checked = parseBoolValue(latestSettingsMap[config.key], config.defaultValue);
+          
+          input.addEventListener("change", async () => {
+            const newValue = input.checked ? "1" : "0";
+            const res = await upsertSetting(config.key, newValue);
+            if (res.ok) await refreshSettingsList();
+          });
+
+          const slider = document.createElement("span");
+          slider.className = "slider";
+          label.appendChild(input);
+          label.appendChild(slider);
+          
+          div.appendChild(info);
+          div.appendChild(label);
+          nostrToggleContainer.appendChild(div);
+        }
+
+        // 2. Render Relays
+        const relayStr = latestSettingsMap["VEIL_VPS_NOSTR_BRIDGE_RELAYS"] || "";
+        const relays = relayStr.split(',').map(r => r.trim()).filter(r => r.length > 0);
+        
+        relayListEl.innerHTML = "";
+        if (relays.length === 0) {
+          relayListEl.innerHTML = '<div class="text-muted text-small">No relays configured.</div>';
+        } else {
+          for (const relay of relays) {
+            const div = document.createElement("div");
+            div.className = "flex justify-between items-center p-2";
+            div.style.background = "rgba(255,255,255,0.03)";
+            div.style.borderRadius = "8px";
+            div.style.padding = "10px 16px";
+            div.style.border = "1px solid var(--border)";
+            
+            div.innerHTML = `
+              <div class="font-mono text-small">${relay}</div>
+              <button class="btn btn-secondary btn-sm" onclick="removeRelay('${relay}')">Remove</button>
+            `;
+            relayListEl.appendChild(div);
+          }
+        }
+      }
+
+      async function removeRelay(url) {
+        const relayStr = latestSettingsMap["VEIL_VPS_NOSTR_BRIDGE_RELAYS"] || "";
+        const relays = relayStr.split(',').map(r => r.trim()).filter(r => r.length > 0);
+        const filtered = relays.filter(r => r !== url);
+        const newValue = filtered.join(',');
+        
+        const res = await upsertSetting("VEIL_VPS_NOSTR_BRIDGE_RELAYS", newValue);
+        if (res.ok) {
+          await refreshSettingsList();
+        }
+      }
+
+      addRelayBtn.addEventListener("click", async () => {
+        const url = relayInput.value.trim();
+        if (!url) return;
+        if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+          alert("Relay URL must start with ws:// or wss://");
+          return;
+        }
+        
+        const relayStr = latestSettingsMap["VEIL_VPS_NOSTR_BRIDGE_RELAYS"] || "";
+        const relays = relayStr.split(',').map(r => r.trim()).filter(r => r.length > 0);
+        if (relays.includes(url)) {
+          relayInput.value = "";
+          return;
+        }
+        
+        relays.push(url);
+        const newValue = relays.join(',');
+        const res = await upsertSetting("VEIL_VPS_NOSTR_BRIDGE_RELAYS", newValue);
+        if (res.ok) {
+          relayInput.value = "";
+          await refreshSettingsList();
+        }
+      });
+
       function renderSettings(items) {
         latestSettingsMap = {};
         settingsTableBody.innerHTML = "";
@@ -527,6 +657,7 @@
           settingsTableBody.appendChild(tr);
         }
         renderToggleSettings();
+        renderNostrTab();
       }
 
       function parseBoolValue(rawValue, defaultValue) {
