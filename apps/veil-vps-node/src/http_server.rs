@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::routing::{delete, get, post};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use rand::RngCore;
 use serde::Deserialize;
@@ -42,9 +42,12 @@ pub fn build_router(state: VpsAppState) -> Router {
         .route("/admin-api/identity", get(admin_identity))
         .route("/admin-api/metrics", get(admin_metrics))
         .route("/admin-api/peers", get(admin_peers))
-        .route("/admin-api/settings", get(admin_settings_get))
-        .route("/admin-api/settings", post(admin_settings_set))
-        .route("/admin-api/settings", delete(admin_settings_delete))
+        .route(
+            "/admin-api/settings",
+            get(admin_settings_get)
+                .post(admin_settings_set)
+                .delete(admin_settings_delete),
+        )
         .route("/admin-api/logs", get(admin_logs))
         .route("/latest-posts", get(latest_posts))
         .route("/ws", get(ws_error_handler))
