@@ -39,7 +39,7 @@ class LiveStatusBanner extends StatelessWidget {
                       backgroundColor: VeilTheme.accentSubtle,
                       backgroundImage: avatarBytes != null ? MemoryImage(avatarBytes) : null,
                       child: avatarBytes == null 
-                        ? Text(displayName.substring(0, 1).toUpperCase())
+                        ? Text(displayName.isEmpty ? '?' : displayName.substring(0, 1).toUpperCase())
                         : null,
                     ),
                     Positioned(

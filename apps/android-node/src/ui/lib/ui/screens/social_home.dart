@@ -35,6 +35,8 @@ class _SocialHomeState extends State<SocialHome> {
   late final PreferencesController _preferencesController;
   int _currentIndex = 0;
   bool _hideBackupReminder = false;
+  final List<ScrollController> _scrollControllers =
+      List.generate(4, (_) => ScrollController());
 
   @override
   void initState() {
@@ -43,11 +45,28 @@ class _SocialHomeState extends State<SocialHome> {
     _messagingController = MessagingController(_service);
     _listController = ListController(_service);
     _preferencesController = PreferencesController(_service);
+    _service.addListener(_handleError);
     _service.start();
+  }
+
+  void _handleError() {
+    final error = _service.state.lastError;
+    if (error != null && error.isNotEmpty) {
+      _service.clearError();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error)),
+        );
+      }
+    }
   }
 
   @override
   void dispose() {
+    _service.removeListener(_handleError);
+    for (final sc in _scrollControllers) {
+      sc.dispose();
+    }
     _controller.dispose();
     _messagingController.dispose();
     _listController.dispose();
@@ -61,109 +80,115 @@ class _SocialHomeState extends State<SocialHome> {
     return ListenableBuilder(
       listenable: _service,
       builder: (context, _) {
-        final error = _service.state.lastError;
-        if (error != null && error.isNotEmpty) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(error)),
-              );
-              _service.clearError();
-            }
-          });
-        }
         return Scaffold(
           extendBody: true,
-      extendBodyBehindAppBar: true,
-      endDrawer: NetworkStatusDrawer(service: _service),
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(kToolbarHeight),
-        child: ClipRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: AppBar(
-              backgroundColor: VeilTheme.background.withOpacity(0.7),
-              title: Row(
-                children: [
-                  Image.asset('assets/veil_logo.png', height: 24),
-                  const SizedBox(width: 8),
-                  const Text('Social'),
-                ],
-              ),
-              actions: [
-                Builder(
-                  builder: (context) => Padding(
-                    padding: const EdgeInsets.only(right: 10),
-                    child: IconButton(
-                      tooltip: 'Network status',
-                      onPressed: () => Scaffold.of(context).openEndDrawer(),
-                      icon: NetworkPulse(service: _service),
-                    ),
+          extendBodyBehindAppBar: true,
+          endDrawer: NetworkStatusDrawer(service: _service),
+          appBar: PreferredSize(
+            preferredSize: const Size.fromHeight(kToolbarHeight),
+            child: ClipRect(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                child: AppBar(
+                  backgroundColor: VeilTheme.background.withOpacity(0.7),
+                  title: Row(
+                    children: [
+                      Image.asset('assets/veil_logo.png', height: 24),
+                      const SizedBox(width: 8),
+                      const Text('Social'),
+                    ],
                   ),
+                  actions: [
+                    Builder(
+                      builder: (context) => Padding(
+                        padding: const EdgeInsets.only(right: 10),
+                        child: IconButton(
+                          tooltip: 'Network status',
+                          onPressed: () =>
+                              Scaffold.of(context).openEndDrawer(),
+                          icon: NetworkPulse(service: _service),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: [
-          _FeedView(
-            controller: _controller,
-            listController: _listController,
-            showBackupReminder: !_hideBackupReminder,
-            onDismissReminder: () => setState(() => _hideBackupReminder = true),
-            onBackup: () => setState(() => _currentIndex = 3), // Profile tab
-          ),
-          ExploreView(service: _service),
-          InboxView(
-            controller: _messagingController,
-            socialController: _controller,
-          ),
-          ProfileView(
-            service: _service,
-            controller: _controller,
-            listController: _listController,
-            preferencesController: _preferencesController,
-          ),
-        ],
-      ),
-      bottomNavigationBar: ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-          child: BottomNavigationBar(
-            currentIndex: _currentIndex,
-            onTap: (i) => setState(() => _currentIndex = i),
-            type: BottomNavigationBarType.fixed,
-            backgroundColor: VeilTheme.background.withOpacity(0.7),
-            selectedItemColor: VeilTheme.accent,
-            unselectedItemColor: VeilTheme.textSecondary,
-            showSelectedLabels: true,
-            showUnselectedLabels: true,
-            items: const [
-              BottomNavigationBarItem(
-                icon: Icon(Icons.home_filled),
-                label: 'Home',
+          body: IndexedStack(
+            index: _currentIndex,
+            children: [
+              _FeedView(
+                controller: _controller,
+                listController: _listController,
+                showBackupReminder: !_hideBackupReminder,
+                onDismissReminder: () =>
+                    setState(() => _hideBackupReminder = true),
+                onBackup: () =>
+                    setState(() => _currentIndex = 3), // Profile tab
+                scrollController: _scrollControllers[0],
               ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.search),
-                label: 'Explore',
+              ExploreView(service: _service),
+              InboxView(
+                controller: _messagingController,
+                socialController: _controller,
               ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.mail_outline),
-                label: 'Inbox',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.person_outline),
-                label: 'Profile',
+              ProfileView(
+                service: _service,
+                controller: _controller,
+                listController: _listController,
+                preferencesController: _preferencesController,
               ),
             ],
           ),
-        ),
-      ),
-      floatingActionButton: _buildContextualFAB(),
-    );
+          bottomNavigationBar: ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+              child: BottomNavigationBar(
+                currentIndex: _currentIndex,
+                onTap: (i) {
+                  if (i == _currentIndex) {
+                    // Re-tap: scroll to top
+                    if (_scrollControllers[i].hasClients) {
+                      _scrollControllers[i].animateTo(
+                        0,
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeOut,
+                      );
+                    }
+                  } else {
+                    setState(() => _currentIndex = i);
+                  }
+                },
+                type: BottomNavigationBarType.fixed,
+                backgroundColor: VeilTheme.background.withOpacity(0.7),
+                selectedItemColor: VeilTheme.accent,
+                unselectedItemColor: VeilTheme.textSecondary,
+                showSelectedLabels: true,
+                showUnselectedLabels: true,
+                items: const [
+                  BottomNavigationBarItem(
+                    icon: Icon(Icons.home_filled),
+                    label: 'Home',
+                  ),
+                  BottomNavigationBarItem(
+                    icon: Icon(Icons.search),
+                    label: 'Explore',
+                  ),
+                  BottomNavigationBarItem(
+                    icon: Icon(Icons.mail_outline),
+                    label: 'Inbox',
+                  ),
+                  BottomNavigationBarItem(
+                    icon: Icon(Icons.person_outline),
+                    label: 'Profile',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          floatingActionButton: _buildContextualFAB(),
+        );
       },
     );
   }
@@ -237,6 +262,7 @@ class _SocialHomeState extends State<SocialHome> {
         ],
       ),
     );
+    controller.dispose();
 
     final channel = result?.replaceFirst(RegExp(r'^#'), '').trim() ?? '';
     if (channel.isEmpty || !mounted) return;
@@ -260,6 +286,7 @@ class _FeedView extends StatelessWidget {
   final VoidCallback onBackup;
   final VoidCallback onDismissReminder;
   final bool showBackupReminder;
+  final ScrollController scrollController;
 
   const _FeedView({
     required this.controller,
@@ -267,10 +294,16 @@ class _FeedView extends StatelessWidget {
     required this.onBackup,
     required this.onDismissReminder,
     required this.showBackupReminder,
+    required this.scrollController,
   });
 
   @override
   Widget build(BuildContext context) {
+    final topPad = MediaQuery.of(context).padding.top + kToolbarHeight + 16;
+    final bottomPad = kBottomNavigationBarHeight +
+        MediaQuery.of(context).padding.bottom +
+        80; // 80 accounts for FAB
+
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
@@ -285,7 +318,9 @@ class _FeedView extends StatelessWidget {
           return RefreshIndicator(
             onRefresh: controller.nodeService.refresh,
             child: SingleChildScrollView(
+              controller: scrollController,
               physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(16, topPad, 16, bottomPad),
               child: SizedBox(
                 height: MediaQuery.of(context).size.height * 0.7,
                 child: EmptyState(
@@ -304,7 +339,8 @@ class _FeedView extends StatelessWidget {
         return RefreshIndicator(
           onRefresh: controller.nodeService.refresh,
           child: ListView.builder(
-            padding: const EdgeInsets.all(16),
+            controller: scrollController,
+            padding: EdgeInsets.fromLTRB(16, topPad, 16, bottomPad),
             itemCount: feed.length + 1,
             itemBuilder: (context, index) {
               if (index == 0) {

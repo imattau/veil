@@ -27,7 +27,7 @@ fn run_swarm(peer_count: usize, min_success: usize, timeout: Duration) {
     let mut certs = Vec::new();
     for _ in 0..peer_count {
         let id = QuicIdentity::generate_self_signed("localhost").expect("identity");
-        certs.push(id.cert_der.clone());
+        certs.push(id.cert_chain_der[0].clone());
         identities.push(id);
     }
 

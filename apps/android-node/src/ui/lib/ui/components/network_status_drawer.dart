@@ -25,9 +25,9 @@ class NetworkStatusDrawer extends StatelessWidget {
                 .where((detail) => detail['connected'] == true)
                 .length;
 
-            final quicConnected = lanes['quic']?['connected'] == true;
-            final wsConnected = lanes['websocket']?['connected'] == true;
-            final torConnected = lanes['tor']?['connected'] == true;
+            final quicConnected = details.any((d) => d['transport'] == 'quic' && d['connected'] == true);
+            final wsConnected = details.any((d) => d['transport'] == 'websocket' && d['connected'] == true);
+            final torConnected = details.any((d) => d['transport'] == 'tor' && d['connected'] == true);
 
             final queue = (status['queue'] as Map?) ?? const {};
             final cache = (status['cache'] as Map?) ?? const {};

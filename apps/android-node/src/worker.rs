@@ -39,6 +39,14 @@ impl QueueWorker {
     pub async fn run(self) {
         let mut worker = self;
         let base_tick = Duration::from_millis(worker.config.tick_ms.max(50));
+        
+        // Initial subscription sync
+        {
+            let channels = worker.state.get_subscriptions();
+            let contacts = worker.state.contacts();
+            worker.protocol.sync_subscriptions(&channels, &contacts).await;
+        }
+
         loop {
             let mut busy = false;
             worker.step = worker.step.saturating_add(1);
@@ -83,6 +91,11 @@ impl QueueWorker {
             if worker.step.is_multiple_of(50) {
                 worker.protocol.persist_cache_state().await;
                 worker.state.persist();
+                
+                // Sync subscriptions from UI state to ProtocolEngine
+                let channels = worker.state.get_subscriptions();
+                let contacts = worker.state.contacts();
+                worker.protocol.sync_subscriptions(&channels, &contacts).await;
             }
             let details = worker.protocol.lane_details().await;
             worker.state.mark_lane_details(details);

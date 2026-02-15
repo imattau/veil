@@ -400,8 +400,7 @@ impl NodeState {
         let signer = NostrSigner::from_secret(secret_key)
             .map_err(|_| "secret key is not a valid Nostr secp256k1 secret".to_string())?;
         let public_key = signer.public_key();
-        let mut encrypt_key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut encrypt_key);
+        let encrypt_key = veil_crypto::keys::derive_encrypt_key(&secret_key);
         let identity = NodeIdentity {
             public_key,
             secret_key,
@@ -1030,8 +1029,7 @@ fn generate_identity() -> NodeIdentity {
         }
     };
     let public_key = signer.public_key();
-    let mut encrypt_key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut encrypt_key);
+    let encrypt_key = veil_crypto::keys::derive_encrypt_key(&secret_key);
     NodeIdentity {
         public_key,
         secret_key,

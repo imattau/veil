@@ -252,6 +252,43 @@ impl ProtocolEngine {
         runtime.state.subscriptions.contains(&tag)
     }
 
+    pub async fn sync_subscriptions(&self, channels: &[String], contacts: &[crate::api::ContactBundle]) {
+        let mut tags = Vec::new();
+        let my_pubkey = *self.identity_pubkey.lock().await;
+
+        // 1. Add discovery tag
+        tags.push(discovery_tag(self.config.discovery_namespace));
+
+        // 2. For each channel name, derive tags for self and all contacts
+        for channel in channels {
+            // If it looks like a hex tag, add it directly
+            if channel.len() == 64 {
+                if let Ok(bytes) = hex::decode(channel) {
+                    if let Ok(tag) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                        tags.push(tag);
+                        continue;
+                    }
+                }
+            }
+
+            // Otherwise treat as channel name
+            tags.push(veil_core::tags::derive_channel_feed_tag(&my_pubkey, self.config.namespace, channel));
+            for contact in contacts {
+                if let Ok(bytes) = hex::decode(&contact.pubkey_hex) {
+                    if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                        tags.push(veil_core::tags::derive_channel_feed_tag(&pubkey, self.config.namespace, channel));
+                    }
+                }
+            }
+        }
+
+        let mut runtime = self.inner.lock().await;
+        runtime.state.subscriptions.clear();
+        for tag in tags {
+            runtime.state.subscriptions.insert(tag);
+        }
+    }
+
     pub async fn update_identity(&self, pubkey: [u8; 32], signer: NostrSigner) {
         let mut runtime = self.inner.lock().await;
         runtime.signer = Some(signer);
@@ -414,12 +451,23 @@ impl ProtocolEngine {
                     {
                         if let Ok((object, _)) = decode_object_cbor_prefix(&reconstructed) {
                             let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
-                            if let Ok(decrypted_payload) = cipher.decrypt(
+                            
+                            // Try primary encrypt_key, fallback to public zero-key
+                            let decrypted_payload = cipher.decrypt(
                                 &runtime.encrypt_key,
                                 object.nonce,
                                 &aad,
                                 &object.ciphertext,
-                            ) {
+                            ).or_else(|_| {
+                                cipher.decrypt(
+                                    &[0u8; 32],
+                                    object.nonce,
+                                    &aad,
+                                    &object.ciphertext,
+                                )
+                            }).ok();
+
+                            if let Some(decrypted_payload) = decrypted_payload {
                                 // Direct match on wire_root?
                                 if target_root == root {
                                     return Some(decrypted_payload);
@@ -490,8 +538,23 @@ impl ProtocolEngine {
             };
 
             let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
-            if let Ok(decrypted_payload) =
-                cipher.decrypt(&runtime.encrypt_key, object.nonce, &aad, &object.ciphertext)
+            
+            // Try primary encrypt_key, fallback to public zero-key
+            let decrypted_payload = cipher.decrypt(
+                &runtime.encrypt_key,
+                object.nonce,
+                &aad,
+                &object.ciphertext,
+            ).or_else(|_| {
+                cipher.decrypt(
+                    &[0u8; 32],
+                    object.nonce,
+                    &aad,
+                    &object.ciphertext,
+                )
+            }).ok();
+
+            if let Some(decrypted_payload) = decrypted_payload
             {
                 // 2a. Match on ObjectV1.object_root (the payload hash)
                 if object.object_root == root {
