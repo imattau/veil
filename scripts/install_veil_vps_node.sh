@@ -490,13 +490,45 @@ if [[ -f docs/runbooks/veil-vps-node.service ]]; then
           SUPP_GROUPS="$FILE_GROUP"
         fi
       fi
+      
+      if [[ -n "$SUPP_GROUPS" ]]; then
+        # Add the user to the group on the system for easier debugging and access
+        usermod -a -G "$SUPP_GROUPS" "$RUN_USER" || true
+        echo "Added system user '$RUN_USER' to group '$SUPP_GROUPS' for certificate access."
+      fi
+    fi
+    
+    # Check parent directory permissions for the certificate
+    local check_path="$FINAL_CERT_PATH"
+    local blockage_found=0
+    while [[ "$check_path" != "/" && "$check_path" != "." ]]; do
+      check_path=$(dirname "$check_path")
+      local perms
+      perms=$(stat -c '%a' "$check_path" 2>/dev/null || true)
+      if [[ -n "$perms" && ("$perms" == "700" || "$perms" == "750") ]]; then
+          local owner
+          owner=$(stat -c '%U' "$check_path" 2>/dev/null || true)
+          local group
+          group=$(stat -c '%G' "$check_path" 2>/dev/null || true)
+          
+          if [[ "$owner" != "$RUN_USER" ]]; then
+             if [[ "$perms" == "700" ]] || [[ "$perms" == "750" && "$group" != "$SUPP_GROUPS" ]]; then
+                echo "WARNING: Parent directory $check_path has restrictive permissions ($perms) owned by $owner:$group."
+                echo "         This may block the service user '$RUN_USER' from reaching the certificate."
+                blockage_found=1
+             fi
+          fi
+      fi
+    done
+    if [[ "$blockage_found" == "1" ]]; then
+       echo "SUGGESTION: Try 'chmod 755' on the directories above if the service fails to start."
     fi
     
     # Check if the certificates are readable by the service user
     if ! sudo -u "$RUN_USER" test -r "$FINAL_CERT_PATH" 2>/dev/null; then
       echo "WARNING: Selected certificate is NOT readable by service user '$RUN_USER': $FINAL_CERT_PATH"
       if [[ -n "$SUPP_GROUPS" ]]; then
-        echo "Check if '$RUN_USER' needs to be in group '$SUPP_GROUPS' or if permissions are too restrictive."
+        echo "Check if '$RUN_USER' has been added to group '$SUPP_GROUPS' (installer tried this) or if permissions are too restrictive."
       else
         echo "Check path permissions (all parent directories must be searchable)."
       fi
