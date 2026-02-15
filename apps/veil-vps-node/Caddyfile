@@ -25,6 +25,10 @@
         reverse_proxy veil-vps-node:9090
     }
 
+    handle /discovery* {
+        reverse_proxy veil-vps-node:9090
+    }
+
     handle /admin-api* {
         reverse_proxy veil-vps-node:9090
     }

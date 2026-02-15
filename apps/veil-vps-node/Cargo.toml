@@ -35,6 +35,7 @@ veil-transport-quic = { path = "../../crates/veil-transport-quic" }
 veil-transport-websocket = { path = "../../crates/veil-transport-websocket" }
 veil-transport-tor = { path = "../../crates/veil-transport-tor" }
 veil-transport-ble = { path = "../../crates/veil-transport-ble", optional = true }
+veil-android-node = { path = "../android-node" }
 signal-hook = "0.3"
 
 [features]
@@ -44,4 +45,3 @@ ble-btleplug = ["ble", "veil-transport-ble/btleplug"]
 
 [dev-dependencies]
 tempfile = "3"
-veil-android-node = { path = "../android-node" }

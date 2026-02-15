@@ -271,6 +271,10 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
           Nostr
         </a>
+        <a class="nav-item" data-tab="policy">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          Policy
+        </a>
         <a class="nav-item" data-tab="identity">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           Identity
@@ -420,6 +424,48 @@
           </div>
         </section>
 
+        <!-- Policy Tab -->
+        <section id="policy" class="tab-content">
+          <h2>Web-of-Trust Policy</h2>
+          <p class="text-muted text-small mb-4">Manage trust tiers for publishers. Higher trust tiers receive higher forwarding quotas and larger storage budgets.</p>
+          
+          <div class="admin-stats mb-4">
+            <div class="stat-card">
+              <div class="text-muted text-small">Trusted</div>
+              <div class="font-mono" style="font-size: 1.5rem; font-weight: 700; color: var(--success);" id="policyTrusted">-</div>
+            </div>
+            <div class="stat-card">
+              <div class="text-muted text-small">Muted</div>
+              <div class="font-mono" style="font-size: 1.5rem; font-weight: 700; color: #fbbf24;" id="policyMuted">-</div>
+            </div>
+            <div class="stat-card">
+              <div class="text-muted text-small">Blocked</div>
+              <div class="font-mono" style="font-size: 1.5rem; font-weight: 700; color: var(--error);" id="policyBlocked">-</div>
+            </div>
+            <div class="stat-card">
+              <div class="text-muted text-small">Endorsements</div>
+              <div class="font-mono" style="font-size: 1.5rem; font-weight: 700;" id="policyEndorsements">-</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Manage Pubkey</h3>
+            <div class="flex gap-2 mb-4">
+              <input id="policyPubkeyInput" type="text" placeholder="64-char hex pubkey">
+              <select id="policyActionSelect" class="btn btn-secondary" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border); color: white;">
+                <option value="trust">Trust</option>
+                <option value="untrust">Untrust</option>
+                <option value="mute">Mute</option>
+                <option value="unmute">Unmute</option>
+                <option value="block">Block</option>
+                <option value="unblock">Unblock</option>
+              </select>
+              <button class="btn btn-primary" id="applyPolicyBtn">Apply</button>
+            </div>
+            <div id="policyStatus" class="text-small text-muted">Ready.</div>
+          </div>
+        </section>
+
         <!-- Identity Tab -->
         <section id="identity" class="tab-content">
           <h2>Server Identity</h2>
@@ -496,6 +542,15 @@
       const copyNsecBtn = document.getElementById("copyNsecBtn");
       const copyHexBtn = document.getElementById("copyHexBtn");
 
+      const policyTrustedEl = document.getElementById("policyTrusted");
+      const policyMutedEl = document.getElementById("policyMuted");
+      const policyBlockedEl = document.getElementById("policyBlocked");
+      const policyEndorsementsEl = document.getElementById("policyEndorsements");
+      const policyPubkeyInput = document.getElementById("policyPubkeyInput");
+      const policyActionSelect = document.getElementById("policyActionSelect");
+      const applyPolicyBtn = document.getElementById("applyPolicyBtn");
+      const policyStatusEl = document.getElementById("policyStatus");
+
       const TOGGLE_SETTINGS = [
         { key: "VEIL_VPS_OPEN_RELAY", label: "Open Relay", group: "Network", description: "Accept all tags/peers.", defaultValue: false, restartRequired: true },
         { key: "VEIL_VPS_NOSTR_BRIDGE_ENABLED", label: "Nostr Bridge", group: "Nostr", description: "Ingest Nostr events.", defaultValue: false, restartRequired: true },
@@ -532,11 +587,57 @@
             await refreshSettingsList();
             await refreshIdentityExport();
             await refreshLogs();
+            await refreshPolicySummary();
           }
         } catch (_) {
           console.error("Status check failed");
         }
       }
+
+      async function refreshPolicySummary() {
+        try {
+          const res = await fetchAdmin("/admin-api/policy");
+          if (!res.ok) return;
+          const body = await res.json();
+          policyTrustedEl.textContent = body.trusted ?? "-";
+          policyMutedEl.textContent = body.muted ?? "-";
+          policyBlockedEl.textContent = body.blocked ?? "-";
+          policyEndorsementsEl.textContent = body.endorsements ?? "-";
+        } catch (err) {
+          console.error("Failed to refresh policy summary:", err);
+        }
+      }
+
+      applyPolicyBtn.addEventListener("click", async () => {
+        const pubkey = policyPubkeyInput.value.trim();
+        const action = policyActionSelect.value;
+        if (!pubkey || pubkey.length !== 64) {
+          alert("Enter a valid 64-character hex pubkey.");
+          return;
+        }
+        
+        policyStatusEl.textContent = `Applying ${action} to ${pubkey.substring(0,8)}...`;
+        try {
+          const res = await fetch(`/admin-api/policy/${action}`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token()}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ pubkey_hex: pubkey }),
+          });
+          if (res.ok) {
+            policyStatusEl.textContent = `Successfully applied ${action}.`;
+            policyPubkeyInput.value = "";
+            await refreshPolicySummary();
+          } else {
+            const body = await res.json().catch(() => ({}));
+            policyStatusEl.textContent = body.error || `Failed to apply ${action}.`;
+          }
+        } catch (err) {
+          policyStatusEl.textContent = "Network error while applying policy.";
+        }
+      });
 
       async function refreshIdentityExport() {
         const res = await fetchAdmin("/admin-api/identity");

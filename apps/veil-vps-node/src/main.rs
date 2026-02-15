@@ -1224,6 +1224,13 @@ async fn main() {
         cfg.wot_policy.block(pseudo);
     }
 
+    let discovery_namespace = Namespace(4096);
+    let discovery_tag = veil_android_node::discovery_tag(discovery_namespace);
+    state.subscriptions.insert(discovery_tag);
+
+    let runtime_config = Arc::new(Mutex::new(cfg));
+    let discovery_table: Arc<Mutex<HashMap<String, veil_android_node::ContactBundle>>> = Arc::new(Mutex::new(HashMap::new()));
+
     let quic_bind_addr = match quic_bind.parse() {
         Ok(addr) => addr,
         Err(err) => {
@@ -1380,7 +1387,7 @@ async fn main() {
         state,
         fast_adapter,
         fallback_adapter,
-        cfg,
+        runtime_config.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         veil_crypto::keys::derive_encrypt_key(&node_key),
         XChaCha20Poly1305Cipher,
         NostrVerifier,
@@ -1455,9 +1462,11 @@ async fn main() {
             metrics: Arc::clone(&metrics),
             peer_snapshot: Arc::clone(&peer_snapshot),
             feed_history: Arc::clone(&feed_history),
+            discovery_table: Arc::clone(&discovery_table),
             admin_auth: Arc::clone(&admin_auth),
             shutdown: Arc::clone(&shutdown),
             log_buffer: Arc::clone(&log_buffer),
+            runtime_config: Arc::clone(&runtime_config),
         };
         let router = http_server::build_router(app_state);
         let bind_addr: std::net::SocketAddr =
@@ -1485,6 +1494,16 @@ async fn main() {
             break;
         }
         let metrics_ref = Arc::clone(&metrics);
+        metrics_ref
+            .nostr_bridge_relays_configured
+            .store(nostr_bridge_relays.len() as u64, Ordering::Relaxed);
+
+        // Sync runtime config from Mutex
+        {
+            let cfg = runtime_config.lock().unwrap_or_else(|e| e.into_inner());
+            runtime.config = cfg.clone();
+        }
+
         let discovered_fast_snapshot = runtime.fast_adapter.snapshot_seen();
         let discovered_fallback_snapshot = runtime.fallback_adapter.snapshot_seen();
         let fast_peer_list = merge_peers(&fast_peers, &discovered_fast_snapshot, max_dynamic_peers);
@@ -1504,10 +1523,10 @@ async fn main() {
                             item.source_event_id,
                             item.payload.len()
                         );
-                        metrics
+                        metrics_ref
                             .nostr_bridge_events_total
                             .fetch_add(1, Ordering::Relaxed);
-                        metrics
+                        metrics_ref
                             .nostr_bridge_payload_bytes_total
                             .fetch_add(item.payload.len() as u64, Ordering::Relaxed);
                         
@@ -1555,6 +1574,7 @@ async fn main() {
         }
 
         let feed_history_ref: Arc<Mutex<VecDeque<serde_json::Value>>> = Arc::clone(&feed_history);
+        let discovery_table_ref: Arc<Mutex<HashMap<String, veil_android_node::ContactBundle>>> = Arc::clone(&discovery_table);
         let _ = runtime.tick_with_callbacks(
             now_step,
             &fast_peer_list,
@@ -1564,6 +1584,18 @@ async fn main() {
                     metrics_ref.delivered.fetch_add(1, Ordering::Relaxed);
                     metrics_ref.delivered_total.fetch_add(1, Ordering::Relaxed);
                     
+                    // Handle Discovery
+                    if let Ok(msg) = serde_json::from_slice::<veil_android_node::DiscoveryMessage>(payload) {
+                        if let Some(contact) = msg.contact {
+                            let mut guard = discovery_table_ref.lock().unwrap_or_else(|e| e.into_inner());
+                            guard.insert(contact.peer_id.clone(), contact);
+                        }
+                        for contact in msg.contacts {
+                            let mut guard = discovery_table_ref.lock().unwrap_or_else(|e| e.into_inner());
+                            guard.insert(contact.peer_id.clone(), contact);
+                        }
+                    }
+
                     // Attempt to parse feed bundles for public display
                     if let Ok(bundle) = serde_json::from_slice::<veil_schema_feed::FeedBundle>(payload) {
                         let mut guard = feed_history_ref.lock().unwrap_or_else(|e| e.into_inner());
