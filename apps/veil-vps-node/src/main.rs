@@ -1372,6 +1372,10 @@ async fn main() {
         }
     }
 
+    let bridge_namespace = Namespace(nostr_bridge_namespace);
+    let bridge_tag = derive_channel_feed_tag(&node_pubkey, bridge_namespace, &nostr_bridge_channel);
+    state.subscriptions.insert(bridge_tag);
+
     let mut runtime = NodeRuntime::new(
         state,
         fast_adapter,
@@ -1407,8 +1411,6 @@ async fn main() {
     } else {
         None
     };
-    let bridge_namespace = Namespace(nostr_bridge_namespace);
-    let bridge_tag = derive_channel_feed_tag(&node_pubkey, bridge_namespace, &nostr_bridge_channel);
 
     let mut last_snapshot = Instant::now();
     let mut last_health_log = Instant::now();
@@ -1508,6 +1510,16 @@ async fn main() {
                         metrics
                             .nostr_bridge_payload_bytes_total
                             .fetch_add(item.payload.len() as u64, Ordering::Relaxed);
+                        
+                        // Add to local feed history for immediate display
+                        if let Ok(bundle) = serde_json::from_slice::<veil_schema_feed::FeedBundle>(&item.payload) {
+                            let mut guard = feed_history.lock().unwrap_or_else(|e| e.into_inner());
+                            if guard.len() >= 50 {
+                                guard.pop_front();
+                            }
+                            guard.push_back(serde_json::to_value(bundle).unwrap_or_default());
+                        }
+
                         bridge_batcher.enqueue(item.payload);
                     }
                     Err(_) => break,
