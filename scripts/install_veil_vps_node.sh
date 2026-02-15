@@ -460,8 +460,20 @@ if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   ALLOWED_RW_PATHS="${PREFIX}"
   ALLOWED_RO_PATHS=""
   SUPP_GROUPS=""
+  PROTECT_HOME="true"
   
   if [[ "$FINAL_CERT_PATH" != "${PREFIX}"* ]]; then
+    # If cert is in /root or /home, we must disable ProtectHome
+    if [[ "$FINAL_CERT_PATH" == "/root/"* ]] || [[ "$FINAL_CERT_PATH" == "/home/"* ]]; then
+      PROTECT_HOME="false"
+      echo "Cert is in a home directory; setting ProtectHome=false in service."
+    fi
+    # Caddy in /var/lib can sometimes be affected by ProtectHome depending on distro
+    if [[ "$FINAL_CERT_PATH" == "/var/lib/caddy/"* ]]; then
+      PROTECT_HOME="read-only"
+      echo "Cert is in /var/lib/caddy; setting ProtectHome=read-only in service."
+    fi
+
     CERT_DIR=$(dirname "$FINAL_CERT_PATH")
     if [[ -d "$CERT_DIR" ]]; then
       ALLOWED_RO_PATHS="${CERT_DIR}"
@@ -541,6 +553,7 @@ if [[ -f docs/runbooks/veil-vps-node.service ]]; then
   fi
   
   sed -i "s|ReadWritePaths=/opt/veil-vps-node|ReadWritePaths=${ALLOWED_RW_PATHS}|g" "$TMP_SERVICE"
+  sed -i "s|ProtectHome=true|ProtectHome=${PROTECT_HOME}|g" "$TMP_SERVICE"
   if [[ -n "$ALLOWED_RO_PATHS" ]]; then
     # Insert ReadOnlyPaths after ReadWritePaths
     sed -i "/ReadWritePaths=/a ReadOnlyPaths=${ALLOWED_RO_PATHS}" "$TMP_SERVICE"
