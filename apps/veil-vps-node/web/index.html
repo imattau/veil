@@ -162,6 +162,51 @@
         border: 1px solid var(--border);
       }
 
+      .post-card {
+        background: rgba(2, 6, 23, 0.4);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .post-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.85rem;
+      }
+
+      .post-author {
+        color: var(--accent-2);
+        font-family: ui-monospace, monospace;
+        font-weight: 600;
+      }
+
+      .post-channel {
+        background: rgba(249, 115, 22, 0.15);
+        color: var(--accent);
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+
+      .post-text {
+        font-size: 0.95rem;
+        line-height: 1.5;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .post-footer {
+        font-size: 0.75rem;
+        color: var(--muted);
+        margin-top: auto;
+      }
+
       footer {
         text-align: center;
         color: var(--muted);
@@ -209,6 +254,12 @@
         <a class="button secondary" href="/admin/" style="margin-left: 8px; text-decoration: none;">
           Open Admin
         </a>
+      </section>
+      <section class="card" style="grid-column: 1 / -1;">
+        <h2>Live Feed</h2>
+        <div id="postsList" style="display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));">
+          <div class="muted">Waiting for posts…</div>
+        </div>
       </section>
       <section class="card">
         <h2>Node Stats</h2>
@@ -348,10 +399,73 @@
       const nostrRateEl = document.getElementById("nostrRateValue");
       const nostrAvgEl = document.getElementById("nostrAvgValue");
       const statsStatusEl = document.getElementById("statsStatus");
+      const postsListEl = document.getElementById("postsList");
       let lastNostrSample = null;
 
       function fmtInt(value) {
         return Number.isFinite(value) ? Math.round(value).toLocaleString() : "-";
+      }
+
+      function renderPosts(posts) {
+        if (!posts || posts.length === 0) {
+          postsListEl.innerHTML = '<div class="muted">No public posts yet.</div>';
+          return;
+        }
+        
+        postsListEl.innerHTML = '';
+        for (const post of posts) {
+          // Supports "post" kind in FeedBundle
+          if (post.kind !== 'post') continue;
+          
+          const card = document.createElement('div');
+          card.className = 'post-card';
+          
+          const header = document.createElement('div');
+          header.className = 'post-header';
+          
+          const author = document.createElement('span');
+          author.className = 'post-author';
+          const pubkey = post.author_pubkey_hex || 'unknown';
+          author.textContent = pubkey.substring(0, 8);
+          author.title = pubkey;
+          
+          const channel = document.createElement('span');
+          channel.className = 'post-channel';
+          channel.textContent = `#${post.channel_id || 'general'}`;
+          
+          header.appendChild(author);
+          header.appendChild(channel);
+          
+          const text = document.createElement('div');
+          text.className = 'post-text';
+          text.textContent = post.text || '';
+          
+          const footer = document.createElement('div');
+          footer.className = 'post-footer';
+          const date = new Date(post.meta.created_at * 1000);
+          footer.textContent = date.toLocaleString();
+          
+          card.appendChild(header);
+          card.appendChild(text);
+          card.appendChild(footer);
+          postsListEl.appendChild(card);
+        }
+        
+        if (postsListEl.children.length === 0) {
+          postsListEl.innerHTML = '<div class="muted">No public posts found.</div>';
+        }
+      }
+
+      async function pollPosts() {
+        try {
+          const res = await fetchText("/latest-posts");
+          if (res.ok) {
+            const body = JSON.parse(res.text);
+            renderPosts(body.posts);
+          }
+        } catch (err) {
+          console.error("Failed to poll posts:", err);
+        }
       }
 
       function parseMetricsText(text) {
@@ -380,6 +494,7 @@
 
       async function pollStats() {
         try {
+          pollPosts();
           const [health, metrics, peers] = await Promise.all([
             fetchText("/health"),
             fetchText("/metrics"),

@@ -3630,6 +3630,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bech32",
+ "ciborium",
  "clap",
  "config",
  "dotenvy",

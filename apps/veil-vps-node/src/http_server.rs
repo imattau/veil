@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -22,6 +23,7 @@ use veil_crypto::signing::{NostrSigner, Signer};
 pub struct VpsAppState {
     pub metrics: Arc<MetricsState>,
     pub peer_snapshot: Arc<Mutex<Vec<String>>>,
+    pub feed_history: Arc<Mutex<VecDeque<serde_json::Value>>>,
     pub admin_auth: Arc<AdminAuthState>,
     pub shutdown: Arc<AtomicBool>,
     pub log_buffer: Arc<LogBuffer>,
@@ -44,6 +46,7 @@ pub fn build_router(state: VpsAppState) -> Router {
         .route("/admin-api/settings", post(admin_settings_set))
         .route("/admin-api/settings", delete(admin_settings_delete))
         .route("/admin-api/logs", get(admin_logs))
+        .route("/latest-posts", get(latest_posts))
         .route("/ws", get(ws_error_handler))
         .layer(CorsLayer::permissive())
         .with_state(state)
@@ -432,4 +435,10 @@ async fn admin_logs(State(state): State<VpsAppState>, headers: HeaderMap) -> imp
     }
     let entries = state.log_buffer.get_all();
     (StatusCode::OK, Json(json!({ "ok": true, "logs": entries })))
+}
+
+async fn latest_posts(State(state): State<VpsAppState>) -> impl IntoResponse {
+    let history = state.feed_history.lock().unwrap_or_else(|e| e.into_inner());
+    let posts: Vec<_> = history.iter().rev().cloned().collect();
+    Json(json!({ "ok": true, "posts": posts }))
 }

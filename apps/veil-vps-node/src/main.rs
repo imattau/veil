@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -657,6 +657,7 @@ fn load_or_create_node_key(path: &Path) -> Result<[u8; 32], String> {
 pub struct MetricsState {
     pub ticks: AtomicU64,
     pub delivered: AtomicU64,
+    pub delivered_total: AtomicU64,
     pub send_failures: AtomicU64,
     pub ack_clears: AtomicU64,
     pub last_fast_outbound_ok: AtomicU64,
@@ -1424,6 +1425,7 @@ async fn main() {
     let _ = flag::register(SIGTERM, Arc::clone(&shutdown));
     let _ = flag::register(SIGINT, Arc::clone(&shutdown));
     let peer_snapshot: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let feed_history: Arc<Mutex<VecDeque<serde_json::Value>>> = Arc::new(Mutex::new(VecDeque::with_capacity(50)));
     if let Err(err) = AdminAuthState::bootstrap_session_db(&admin_session_db_path) {
         error!("fatal: admin auth bootstrap failed: {err}");
         std::process::exit(1);
@@ -1450,6 +1452,7 @@ async fn main() {
         let app_state = http_server::VpsAppState {
             metrics: Arc::clone(&metrics),
             peer_snapshot: Arc::clone(&peer_snapshot),
+            feed_history: Arc::clone(&feed_history),
             admin_auth: Arc::clone(&admin_auth),
             shutdown: Arc::clone(&shutdown),
             log_buffer: Arc::clone(&log_buffer),
@@ -1532,13 +1535,34 @@ async fn main() {
             );
         }
 
+        let feed_history_ref: Arc<Mutex<VecDeque<serde_json::Value>>> = Arc::clone(&feed_history);
         let _ = runtime.tick_with_callbacks(
             now_step,
             &fast_peer_list,
             &fallback_peer_list,
             NodeRuntimeCallbacks {
-                on_delivered: Some(&mut |_root, _payload| {
+                on_delivered: Some(&mut |_root, payload| {
                     metrics_ref.delivered.fetch_add(1, Ordering::Relaxed);
+                    metrics_ref.delivered_total.fetch_add(1, Ordering::Relaxed);
+                    
+                    // Attempt to parse feed bundles for public display
+                    if let Ok(bundle) = serde_json::from_slice::<veil_schema_feed::FeedBundle>(payload) {
+                        let mut guard = feed_history_ref.lock().unwrap_or_else(|e| e.into_inner());
+                        if guard.len() >= 50 {
+                            guard.pop_front();
+                        }
+                        guard.push_back(serde_json::to_value(bundle).unwrap_or_default());
+                    } else if let Ok(batch) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload) {
+                        for item in batch {
+                            if let Ok(bundle) = serde_json::from_slice::<veil_schema_feed::FeedBundle>(&item) {
+                                let mut guard = feed_history_ref.lock().unwrap_or_else(|e| e.into_inner());
+                                if guard.len() >= 50 {
+                                    guard.pop_front();
+                                }
+                                guard.push_back(serde_json::to_value(bundle).unwrap_or_default());
+                            }
+                        }
+                    }
                 }),
                 on_send_failure: Some(&mut |count| {
                     metrics_ref
