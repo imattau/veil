@@ -565,7 +565,12 @@
           input.addEventListener("change", async () => {
             const newValue = input.checked ? "1" : "0";
             const res = await upsertSetting(config.key, newValue);
-            if (res.ok) await refreshSettingsList();
+            if (res.ok) {
+              await refreshSettingsList();
+            } else {
+              input.checked = !input.checked;
+              alert("Failed to update bridge status");
+            }
           });
 
           const slider = document.createElement("span");
@@ -584,7 +589,7 @@
         
         relayListEl.innerHTML = "";
         if (relays.length === 0) {
-          relayListEl.innerHTML = '<div class="text-muted text-small">No relays configured.</div>';
+          relayListEl.innerHTML = '<div class="text-muted text-small">No relays configured in database overrides. Node is using defaults or is empty.</div>';
         } else {
           for (const relay of relays) {
             const div = document.createElement("div");
@@ -594,16 +599,23 @@
             div.style.padding = "10px 16px";
             div.style.border = "1px solid var(--border)";
             
-            div.innerHTML = `
-              <div class="font-mono text-small">${relay}</div>
-              <button class="btn btn-secondary btn-sm" onclick="removeRelay('${relay}')">Remove</button>
-            `;
+            const relayText = document.createElement("div");
+            relayText.className = "font-mono text-small";
+            relayText.textContent = relay;
+
+            const removeBtn = document.createElement("button");
+            removeBtn.className = "btn btn-secondary btn-sm";
+            removeBtn.textContent = "Remove";
+            removeBtn.onclick = () => window.removeRelay(relay);
+            
+            div.appendChild(relayText);
+            div.appendChild(removeBtn);
             relayListEl.appendChild(div);
           }
         }
       }
 
-      async function removeRelay(url) {
+      window.removeRelay = async function(url) {
         const relayStr = latestSettingsMap["VEIL_VPS_NOSTR_BRIDGE_RELAYS"] || "";
         const relays = relayStr.split(',').map(r => r.trim()).filter(r => r.length > 0);
         const filtered = relays.filter(r => r !== url);
@@ -612,8 +624,10 @@
         const res = await upsertSetting("VEIL_VPS_NOSTR_BRIDGE_RELAYS", newValue);
         if (res.ok) {
           await refreshSettingsList();
+        } else {
+          alert("Failed to remove relay");
         }
-      }
+      };
 
       addRelayBtn.addEventListener("click", async () => {
         const url = relayInput.value.trim();
@@ -636,6 +650,8 @@
         if (res.ok) {
           relayInput.value = "";
           await refreshSettingsList();
+        } else {
+          alert("Failed to add relay");
         }
       });
 
