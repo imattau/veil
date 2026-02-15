@@ -4,237 +4,444 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>VEIL Node Admin</title>
+    <link rel="icon" href="../veil_logo.png" />
+    <link rel="stylesheet" href="../style.css" />
     <style>
       :root {
-        --bg: #0b1220;
-        --panel: #111827;
-        --text: #e5e7eb;
-        --muted: #9ca3af;
-        --border: #1f2937;
-        --accent: #22d3ee;
+        --sidebar-width: 240px;
       }
-      * { box-sizing: border-box; }
+
       body {
-        margin: 0;
-        font-family: "Space Grotesk", "Segoe UI", sans-serif;
-        color: var(--text);
-        background: radial-gradient(900px 600px at 10% -10%, rgba(34, 211, 238, 0.2), transparent), var(--bg);
+        display: flex;
+        min-height: 100vh;
+        overflow: hidden;
       }
-      main {
-        max-width: 920px;
-        margin: 0 auto;
-        padding: 24px;
+
+      /* Sidebar */
+      .sidebar {
+        width: var(--sidebar-width);
+        background: rgba(15, 23, 42, 0.8);
+        backdrop-filter: blur(20px);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        padding: 24px 0;
+        z-index: 100;
       }
-      .card {
-        background: linear-gradient(160deg, rgba(17, 24, 39, 0.95), rgba(17, 24, 39, 0.75));
-        border: 1px solid var(--border);
-        border-radius: 14px;
-        padding: 16px;
-        margin-bottom: 16px;
+
+      .sidebar-brand {
+        padding: 0 24px 32px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
       }
-      h1, h2 { margin: 0 0 10px; }
-      .muted { color: var(--muted); }
-      input {
-        width: 100%;
-        padding: 10px;
-        border-radius: 8px;
-        border: 1px solid var(--border);
-        background: #0b1324;
-        color: var(--text);
-      }
-      button {
-        margin-top: 10px;
-        padding: 10px 12px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        color: var(--text);
-        background: #0c1a2a;
+
+      .nav-item {
+        padding: 12px 24px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: var(--text-muted);
+        text-decoration: none;
+        transition: all 0.2s;
         cursor: pointer;
+        border-left: 3px solid transparent;
+        font-weight: 500;
       }
-      button.primary {
-        background: linear-gradient(135deg, var(--accent), #3b82f6);
-        color: #0b1220;
-        border: none;
-        font-weight: 600;
+
+      .nav-item:hover {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--text-main);
       }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 10px;
+
+      .nav-item.active {
+        background: rgba(34, 211, 238, 0.1);
+        color: var(--secondary);
+        border-left-color: var(--secondary);
       }
-      .stat {
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 10px;
-        background: rgba(2, 6, 23, 0.55);
+
+      /* Main Content */
+      .main-wrapper {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
       }
-      .label { color: var(--muted); font-size: 0.8rem; }
-      .value { margin-top: 4px; font-family: ui-monospace, Menlo, Consolas, monospace; }
-      #adminPanel { display: none; }
-      #status { margin-top: 8px; color: var(--muted); }
-      .row { display: flex; gap: 8px; flex-wrap: wrap; }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-family: ui-monospace, Menlo, Consolas, monospace;
-        font-size: 0.85rem;
-      }
-      th, td {
-        text-align: left;
-        border-bottom: 1px solid var(--border);
-        padding: 8px 6px;
-      }
-      th { color: var(--muted); }
-      .toggle-grid {
-        display: grid;
-        gap: 10px;
-      }
-      .toggle-item {
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 10px;
-        background: rgba(2, 6, 23, 0.55);
-      }
-      .toggle-group {
-        margin-top: 8px;
-      }
-      .toggle-group-title {
-        font-weight: 700;
-        margin-bottom: 8px;
-      }
-      .toggle-header {
+
+      header.admin-header {
+        height: 72px;
+        padding: 0 32px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 10px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(2, 6, 23, 0.3);
       }
-      .toggle-key {
-        font-family: ui-monospace, Menlo, Consolas, monospace;
-        font-size: 0.78rem;
-        color: var(--muted);
-        margin-top: 4px;
+
+      .content-area {
+        flex: 1;
+        overflow-y: auto;
+        padding: 32px;
       }
-      .badge {
-        display: inline-block;
-        margin-top: 6px;
-        font-size: 0.72rem;
-        color: #fcd34d;
-        border: 1px solid rgba(252, 211, 77, 0.35);
-        background: rgba(120, 53, 15, 0.3);
-        border-radius: 999px;
-        padding: 2px 8px;
+
+      .tab-content {
+        display: none;
+        animation: fadeIn 0.3s ease-out;
       }
-      .log-entry { margin-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 2px; }
-      .log-time { color: var(--muted); margin-right: 8px; font-size: 0.75rem; }
-      .log-level { font-weight: 700; margin-right: 8px; width: 50px; display: inline-block; }
-      .log-level-ERROR { color: #f87171; }
+
+      .tab-content.active {
+        display: block;
+      }
+
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      /* Stats Grid */
+      .admin-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 20px;
+      }
+
+      .stat-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: 20px;
+      }
+
+      /* Login Overlay */
+      #loginOverlay {
+        position: fixed;
+        inset: 0;
+        background: var(--bg-dark);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+      }
+
+      .login-card {
+        width: 100%;
+        max-width: 400px;
+      }
+
+      /* Log Viewer */
+      .log-viewer {
+        background: rgba(0, 0, 0, 0.4);
+        border-radius: var(--radius-md);
+        padding: 16px;
+        font-family: ui-monospace, monospace;
+        font-size: 0.8rem;
+        height: 500px;
+        overflow-y: auto;
+        border: 1px solid var(--border);
+      }
+
+      .log-entry {
+        margin-bottom: 4px;
+        display: flex;
+        gap: 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        padding-bottom: 2px;
+      }
+
+      .log-time { color: var(--text-muted); min-width: 80px; }
+      .log-level { font-weight: 700; width: 50px; }
+      .log-level-ERROR { color: var(--error); }
       .log-level-WARN { color: #fbbf24; }
-      .log-level-INFO { color: #34d399; }
-      .log-level-DEBUG { color: #60a5fa; }
-      .log-target { color: var(--accent); margin-right: 8px; opacity: 0.8; font-size: 0.75rem; }
+      .log-level-INFO { color: var(--success); }
+      .log-target { color: var(--secondary); opacity: 0.7; }
+
+      /* Settings Table */
+      .settings-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .settings-table th {
+        text-align: left;
+        padding: 12px;
+        color: var(--text-muted);
+        border-bottom: 1px solid var(--border);
+        font-size: 0.85rem;
+      }
+
+      .settings-table td {
+        padding: 12px;
+        border-bottom: 1px solid var(--border);
+        font-family: ui-monospace, monospace;
+        font-size: 0.85rem;
+      }
+
+      .settings-table tr:hover {
+        background: rgba(255, 255, 255, 0.02);
+        cursor: pointer;
+      }
+
+      .toggle-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border);
+      }
+
+      .switch {
+        position: relative;
+        display: inline-block;
+        width: 44px;
+        height: 22px;
+      }
+
+      .switch input { opacity: 0; width: 0; height: 0; }
+
+      .slider {
+        position: absolute;
+        cursor: pointer;
+        inset: 0;
+        background-color: #334155;
+        transition: .2s;
+        border-radius: 34px;
+      }
+
+      .slider:before {
+        position: absolute;
+        content: "";
+        height: 16px;
+        width: 16px;
+        left: 3px;
+        bottom: 3px;
+        background-color: white;
+        transition: .2s;
+        border-radius: 50%;
+      }
+
+      input:checked + .slider { background-color: var(--secondary); }
+      input:checked + .slider:before { transform: translateX(22px); }
     </style>
   </head>
   <body>
-    <main>
-      <div class="card">
-        <h1>VEIL Admin</h1>
-        <div class="muted">Login with the VPS node Nostr identity (`nsec` or 32-byte hex secret).</div>
-      </div>
+    <!-- Login Modal -->
+    <div id="loginOverlay">
+      <div class="card login-card text-center">
+        <img src="../veil_logo.png" height="48" style="margin-bottom: 24px;">
+        <h2>Admin Login</h2>
+        <p class="text-muted text-small mb-4">Authenticate with the node identity secret.</p>
+        
+        <div id="serverPubkeyLogin" class="font-mono text-small mb-4" style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; word-break: break-all;">
+          Loading server pubkey...
+        </div>
 
-      <div class="card" id="loginPanel">
-        <h2>Authentication</h2>
-        <div class="muted" id="serverPubkey">Server pubkey: loading…</div>
-        <input id="secretInput" type="password" placeholder="nsec1... or hex secret" autocomplete="off" />
-        <div class="row">
-          <button class="primary" id="loginBtn">Login</button>
-          <button id="logoutBtn" type="button">Logout</button>
-        </div>
-        <div id="status">Not authenticated.</div>
+        <input id="secretInput" type="password" placeholder="nsec1... or hex secret" class="mb-4">
+        
+        <button class="btn btn-primary w-full" id="loginBtn">Login</button>
+        <div id="loginStatus" class="text-small mt-2 text-muted">Not authenticated.</div>
       </div>
+    </div>
 
-      <div class="card" id="adminPanel">
-        <h2>Admin Stats</h2>
-        <div class="row" style="margin-bottom: 10px;">
-          <button id="restartNodeBtn" type="button">Restart Node</button>
-        </div>
-        <div class="grid">
-          <div class="stat"><div class="label">Ticks</div><div class="value" id="ticks">-</div></div>
-          <div class="stat"><div class="label">Delivered</div><div class="value" id="delivered">-</div></div>
-          <div class="stat"><div class="label">Fast Inbound</div><div class="value" id="fastIn">-</div></div>
-          <div class="stat"><div class="label">Fallback Inbound</div><div class="value" id="fallbackIn">-</div></div>
-          <div class="stat"><div class="label">Fast Outbound Err</div><div class="value" id="fastErr">-</div></div>
-          <div class="stat"><div class="label">Fallback Outbound Err</div><div class="value" id="fallbackErr">-</div></div>
-          <div class="stat"><div class="label">Nostr Events</div><div class="value" id="nostrEvents">-</div></div>
-          <div class="stat"><div class="label">Nostr Bytes</div><div class="value" id="nostrBytes">-</div></div>
-          <div class="stat"><div class="label">Peers</div><div class="value" id="peers">-</div></div>
-        </div>
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <img src="../veil_logo.png" height="24">
+        <span style="font-weight: 700; letter-spacing: 0.05em;">ADMIN</span>
       </div>
+      
+      <nav>
+        <a class="nav-item active" data-tab="dashboard">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          Dashboard
+        </a>
+        <a class="nav-item" data-tab="settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </a>
+        <a class="nav-item" data-tab="logs">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          Logs
+        </a>
+        <a class="nav-item" data-tab="identity">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          Identity
+        </a>
+      </nav>
 
-      <div class="card" id="settingsPanel" style="display: none;">
-        <h2>Node Settings</h2>
-        <div class="muted">Changes are persisted immediately, but most settings apply after node restart.</div>
-        <div style="margin-top: 10px;" class="row">
-          <input id="settingKeyInput" type="text" placeholder="VEIL_VPS_..." style="flex: 1; min-width: 260px;" />
-          <input id="settingValueInput" type="text" placeholder="value" style="flex: 2; min-width: 260px;" />
-        </div>
-        <div class="row">
-          <button class="primary" id="saveSettingBtn">Save setting</button>
-          <button id="deleteSettingBtn" type="button">Delete setting</button>
-          <button id="refreshSettingsBtn" type="button">Refresh list</button>
-        </div>
-        <div id="settingsStatus" class="muted" style="margin-top: 8px;">Idle.</div>
-        <div style="margin-top: 10px; max-height: 320px; overflow: auto;">
-          <table>
-            <thead>
-              <tr><th>Key</th><th>Value</th></tr>
-            </thead>
-            <tbody id="settingsTableBody"></tbody>
-          </table>
-        </div>
+      <div style="margin-top: auto; padding: 0 24px;">
+        <button class="btn btn-secondary w-full" id="logoutBtn">Logout</button>
       </div>
+    </aside>
 
-      <div class="card" id="toggleSettingsPanel" style="display: none;">
-        <h2>Toggle Settings</h2>
-        <div class="muted">Boolean settings with instant on/off controls. Restart badge means service restart needed to apply.</div>
-        <div id="toggleSettingsStatus" class="muted" style="margin-top: 8px;">Idle.</div>
-        <div id="toggleSettingsList" class="toggle-grid" style="margin-top: 10px;"></div>
-      </div>
+    <!-- Main Wrapper -->
+    <div class="main-wrapper">
+      <header class="admin-header">
+        <div class="flex items-center gap-4">
+          <div class="badge badge-blue">Server Online</div>
+          <div class="text-small text-muted font-mono" id="currentPubkeyHeader">...</div>
+        </div>
+        <div class="flex items-center gap-4">
+          <button class="btn btn-sm btn-secondary" id="restartNodeBtn">Restart Node</button>
+          <a href="/" class="btn btn-sm btn-secondary">Go to Site</a>
+        </div>
+      </header>
 
-      <div class="card" id="logsPanel" style="display: none;">
-        <div class="toggle-header">
-          <h2>Server Logs</h2>
-          <button id="refreshLogsBtn" type="button">Refresh Logs</button>
-        </div>
-        <div id="logsStatus" class="muted" style="margin-top: 8px;">Idle.</div>
-        <div id="logsList" style="margin-top: 10px; max-height: 400px; overflow: auto; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; font-family: ui-monospace, monospace; font-size: 0.8rem; white-space: pre-wrap;"></div>
-      </div>
+      <div class="content-area">
+        <!-- Dashboard Tab -->
+        <section id="dashboard" class="tab-content active">
+          <h2>Node Statistics</h2>
+          <div class="admin-stats mb-4">
+            <div class="stat-card">
+              <div class="text-muted text-small">Total Delivered</div>
+              <div class="font-mono" style="font-size: 1.5rem; font-weight: 700; color: var(--secondary);" id="ticks">-</div>
+            </div>
+            <div class="stat-card">
+              <div class="text-muted text-small">In-memory Delivered</div>
+              <div class="font-mono" style="font-size: 1.5rem; font-weight: 700;" id="delivered">-</div>
+            </div>
+            <div class="stat-card">
+              <div class="text-muted text-small">Nostr Bridged</div>
+              <div class="font-mono" style="font-size: 1.5rem; font-weight: 700;" id="nostrEvents">-</div>
+            </div>
+            <div class="stat-card">
+              <div class="text-muted text-small">Peers</div>
+              <div class="font-mono" style="font-size: 1.5rem; font-weight: 700;" id="peers">-</div>
+            </div>
+          </div>
 
-      <div class="card" id="identityPanel" style="display: none;">
-        <h2>Server Identity Export</h2>
-        <div class="muted">Keep this secret offline. Anyone with this key can control node identity.</div>
-        <div style="margin-top: 10px;">
-          <div class="label">nsec</div>
-          <div class="value" id="serverNsec">-</div>
-          <button id="copyNsecBtn" type="button">Copy nsec</button>
-        </div>
-        <div style="margin-top: 12px;">
-          <div class="label">Secret (hex)</div>
-          <div class="value" id="serverHex">-</div>
-          <button id="copyHexBtn" type="button">Copy hex</button>
-        </div>
-        <div class="muted" id="identityStatus" style="margin-top: 8px;">Locked.</div>
+          <div class="grid grid-2">
+            <div class="card">
+              <h3>Inbound Traffic</h3>
+              <div class="flex justify-between font-mono mb-4">
+                <span class="text-muted">Fast (QUIC)</span>
+                <span id="fastIn">0</span>
+              </div>
+              <div class="flex justify-between font-mono">
+                <span class="text-muted">Fallback</span>
+                <span id="fallbackIn">0</span>
+              </div>
+            </div>
+            <div class="card">
+              <h3>Error Rates</h3>
+              <div class="flex justify-between font-mono mb-4">
+                <span class="text-muted">Fast Outbound</span>
+                <span id="fastErr" class="text-error">0</span>
+              </div>
+              <div class="flex justify-between font-mono">
+                <span class="text-muted">Fallback Outbound</span>
+                <span id="fallbackErr" class="text-error">0</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Settings Tab -->
+        <section id="settings" class="tab-content">
+          <div class="flex justify-between items-center mb-4">
+            <h2>Node Configuration</h2>
+            <button class="btn btn-sm btn-secondary" id="refreshSettingsBtn">Refresh List</button>
+          </div>
+
+          <div class="card">
+            <h3>Quick Toggles</h3>
+            <p class="text-muted text-small mb-4">Boolean settings applied after restart.</p>
+            <div id="toggleSettingsList" class="grid grid-2" style="gap: 16px;">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Environment Overrides</h3>
+            <div class="grid grid-2 mb-4" style="gap: 16px;">
+              <input id="settingKeyInput" type="text" placeholder="VEIL_VPS_KEY">
+              <input id="settingValueInput" type="text" placeholder="Value">
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-primary" id="saveSettingBtn">Save Override</button>
+              <button class="btn btn-secondary" id="deleteSettingBtn">Delete</button>
+            </div>
+            <div id="settingsStatus" class="text-small text-muted mt-2">Idle.</div>
+
+            <div class="mt-4" style="max-height: 400px; overflow-y: auto;">
+              <table class="settings-table">
+                <thead><tr><th>Key</th><th>Value</th></tr></thead>
+                <tbody id="settingsTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Logs Tab -->
+        <section id="logs" class="tab-content">
+          <div class="flex justify-between items-center mb-4">
+            <h2>Server Logs</h2>
+            <button class="btn btn-sm btn-primary" id="refreshLogsBtn">Refresh Logs</button>
+          </div>
+          <div id="logsStatus" class="text-small text-muted mb-2">Idle.</div>
+          <div id="logsList" class="log-viewer">
+            <!-- Populated by JS -->
+          </div>
+        </section>
+
+        <!-- Identity Tab -->
+        <section id="identity" class="tab-content">
+          <h2>Server Identity</h2>
+          <div class="card">
+            <div class="badge badge-orange mb-4">Sensitive Data</div>
+            <p class="text-muted text-small mb-4">Keep this secret offline. This key controls the node's network identity and encryption path.</p>
+            
+            <div class="mb-4">
+              <div class="text-small text-muted mb-2">Nostr Secret (nsec)</div>
+              <div class="flex gap-2">
+                <input id="serverNsec" type="password" readonly class="font-mono">
+                <button class="btn btn-secondary btn-sm" id="copyNsecBtn">Copy</button>
+              </div>
+            </div>
+
+            <div class="mb-4">
+              <div class="text-small text-muted mb-2">Secret Key (Hex)</div>
+              <div class="flex gap-2">
+                <input id="serverHex" type="password" readonly class="font-mono">
+                <button class="btn btn-secondary btn-sm" id="copyHexBtn">Copy</button>
+              </div>
+            </div>
+            
+            <div id="identityStatus" class="text-small text-muted">Securely loaded.</div>
+          </div>
+        </section>
       </div>
-    </main>
+    </div>
 
     <script>
-      const serverPubkeyEl = document.getElementById("serverPubkey");
-      const statusEl = document.getElementById("status");
-      const adminPanelEl = document.getElementById("adminPanel");
+      // Navigation
+      const navItems = document.querySelectorAll('.nav-item');
+      const tabContents = document.querySelectorAll('.tab-content');
+
+      navItems.forEach(item => {
+        item.addEventListener('click', () => {
+          const tabId = item.getAttribute('data-tab');
+          
+          navItems.forEach(nav => nav.classList.remove('active'));
+          item.classList.add('active');
+          
+          tabContents.forEach(content => {
+            content.classList.remove('active');
+            if (content.id === tabId) content.classList.add('active');
+          });
+        });
+      });
+
+      // API Logic
+      const serverPubkeyLoginEl = document.getElementById("serverPubkeyLogin");
+      const currentPubkeyHeader = document.getElementById("currentPubkeyHeader");
+      const adminPanelEl = document.getElementById("loginOverlay");
       const restartNodeBtn = document.getElementById("restartNodeBtn");
       const loginBtn = document.getElementById("loginBtn");
       const logoutBtn = document.getElementById("logoutBtn");
       const secretInput = document.getElementById("secretInput");
-      const settingsPanelEl = document.getElementById("settingsPanel");
       const settingKeyInput = document.getElementById("settingKeyInput");
       const settingValueInput = document.getElementById("settingValueInput");
       const saveSettingBtn = document.getElementById("saveSettingBtn");
@@ -242,42 +449,25 @@
       const refreshSettingsBtn = document.getElementById("refreshSettingsBtn");
       const settingsStatusEl = document.getElementById("settingsStatus");
       const settingsTableBody = document.getElementById("settingsTableBody");
-      const toggleSettingsPanelEl = document.getElementById("toggleSettingsPanel");
-      const toggleSettingsStatusEl = document.getElementById("toggleSettingsStatus");
       const toggleSettingsListEl = document.getElementById("toggleSettingsList");
-      const logsPanelEl = document.getElementById("logsPanel");
-      const logsStatusEl = document.getElementById("logsStatus");
       const logsListEl = document.getElementById("logsList");
       const refreshLogsBtn = document.getElementById("refreshLogsBtn");
-      const identityPanelEl = document.getElementById("identityPanel");
       const serverNsecEl = document.getElementById("serverNsec");
       const serverHexEl = document.getElementById("serverHex");
       const identityStatusEl = document.getElementById("identityStatus");
       const copyNsecBtn = document.getElementById("copyNsecBtn");
       const copyHexBtn = document.getElementById("copyHexBtn");
+
       const TOGGLE_SETTINGS = [
-        { key: "VEIL_VPS_OPEN_RELAY", label: "Open Relay", group: "Network", description: "Accept/follow non-blocked peers and tags.", defaultValue: false, restartRequired: true },
-        { key: "VEIL_VPS_NOSTR_BRIDGE_ENABLED", label: "Nostr Bridge", group: "Nostr", description: "Ingest Nostr relay events into VEIL.", defaultValue: false, restartRequired: true },
-        { key: "VEIL_VPS_ADAPTIVE_LANE_SCORING", label: "Adaptive Lane Scoring", group: "Network", description: "Auto-tune transport lane preference.", defaultValue: true, restartRequired: true },
-        { key: "VEIL_VPS_PROBABILISTIC_FORWARDING", label: "Probabilistic Forwarding", group: "Network", description: "Reduce forwarding of over-replicated shards.", defaultValue: true, restartRequired: true },
-        { key: "VEIL_VPS_BLOOM_EXCHANGE", label: "Bloom Exchange", group: "Transport", description: "Exchange Bloom filters for shard dedupe.", defaultValue: true, restartRequired: true },
+        { key: "VEIL_VPS_OPEN_RELAY", label: "Open Relay", group: "Network", description: "Accept all tags/peers.", defaultValue: false, restartRequired: true },
+        { key: "VEIL_VPS_NOSTR_BRIDGE_ENABLED", label: "Nostr Bridge", group: "Nostr", description: "Ingest Nostr events.", defaultValue: false, restartRequired: true },
+        { key: "VEIL_VPS_ADAPTIVE_LANE_SCORING", label: "Adaptive Lane Scoring", group: "Network", description: "Auto-tune preference.", defaultValue: true, restartRequired: true },
+        { key: "VEIL_VPS_PROBABILISTIC_FORWARDING", label: "Probabilistic Forwarding", group: "Network", description: "Reduce floods.", defaultValue: true, restartRequired: true },
+        { key: "VEIL_VPS_BLOOM_EXCHANGE", label: "Bloom Exchange", group: "Transport", description: "Filter shard dedupe.", defaultValue: true, restartRequired: true },
       ];
       let latestSettingsMap = {};
 
-      function token() {
-        return localStorage.getItem("veil_admin_token") || "";
-      }
-
-      function parseMetricsText(text) {
-        const out = {};
-        for (const rawLine of text.split("\n")) {
-          const line = rawLine.trim();
-          if (!line || line.startsWith("#")) continue;
-          const parts = line.split(/\s+/);
-          if (parts.length >= 2) out[parts[0]] = parts[1];
-        }
-        return out;
-      }
+      function token() { return localStorage.getItem("veil_admin_token") || ""; }
 
       async function fetchAdmin(path) {
         return fetch(path, {
@@ -287,21 +477,18 @@
       }
 
       function setLoggedIn(isLoggedIn) {
-        adminPanelEl.style.display = isLoggedIn ? "block" : "none";
-        settingsPanelEl.style.display = isLoggedIn ? "block" : "none";
-        toggleSettingsPanelEl.style.display = isLoggedIn ? "block" : "none";
-        logsPanelEl.style.display = isLoggedIn ? "block" : "none";
-        identityPanelEl.style.display = isLoggedIn ? "block" : "none";
+        adminPanelEl.style.display = isLoggedIn ? "none" : "flex";
       }
 
       async function refreshStatus() {
         try {
           const res = await fetchAdmin("/admin-api/status");
           const body = await res.json();
-          serverPubkeyEl.textContent = `Server pubkey: ${body.server_pubkey || "unknown"}`;
+          const pubkey = body.server_pubkey || "unknown";
+          serverPubkeyLoginEl.textContent = `Server: ${pubkey}`;
+          currentPubkeyHeader.textContent = pubkey.substring(0, 16) + '...';
           const ok = Boolean(body.ok);
           setLoggedIn(ok);
-          statusEl.textContent = ok ? "Authenticated." : "Not authenticated.";
           if (ok) {
             await refreshAdminStats();
             await refreshSettingsList();
@@ -309,21 +496,16 @@
             await refreshLogs();
           }
         } catch (_) {
-          statusEl.textContent = "Status check failed.";
+          console.error("Status check failed");
         }
       }
 
       async function refreshIdentityExport() {
-        identityStatusEl.textContent = "Loading identity export…";
         const res = await fetchAdmin("/admin-api/identity");
         const body = await res.json().catch(() => ({}));
-        if (!res.ok || !body.ok) {
-          identityStatusEl.textContent = body.error || "Failed to load identity export.";
-          return;
-        }
-        serverNsecEl.textContent = body.server_secret_nsec || "-";
-        serverHexEl.textContent = body.server_secret_hex || "-";
-        identityStatusEl.textContent = "Loaded.";
+        if (!res.ok || !body.ok) return;
+        serverNsecEl.value = body.server_secret_nsec || "-";
+        serverHexEl.value = body.server_secret_hex || "-";
       }
 
       function renderSettings(items) {
@@ -368,92 +550,53 @@
 
       function renderToggleSettings() {
         toggleSettingsListEl.innerHTML = "";
-        const groups = {};
         for (const config of TOGGLE_SETTINGS) {
-          const groupName = config.group || "Other";
-          if (!groups[groupName]) {
-            groups[groupName] = [];
-          }
-          groups[groupName].push(config);
-        }
-        for (const groupName of Object.keys(groups)) {
-          const section = document.createElement("div");
-          section.className = "toggle-group";
-          const sectionTitle = document.createElement("div");
-          sectionTitle.className = "toggle-group-title";
-          sectionTitle.textContent = groupName;
-          section.appendChild(sectionTitle);
-
-          for (const config of groups[groupName]) {
-          const wrapper = document.createElement("div");
-          wrapper.className = "toggle-item";
-
-          const header = document.createElement("div");
-          header.className = "toggle-header";
-
-          const titleWrap = document.createElement("div");
-          const title = document.createElement("div");
-          title.textContent = config.label;
-          title.style.fontWeight = "600";
-          const desc = document.createElement("div");
-          desc.className = "muted";
-          desc.style.fontSize = "0.82rem";
-          desc.textContent = config.description;
-          const key = document.createElement("div");
-          key.className = "toggle-key";
-          key.textContent = config.key;
-          titleWrap.appendChild(title);
-          titleWrap.appendChild(desc);
-          titleWrap.appendChild(key);
-          if (config.restartRequired) {
-            const badge = document.createElement("span");
-            badge.className = "badge";
-            badge.textContent = "Restart required";
-            titleWrap.appendChild(badge);
-          }
-
+          const div = document.createElement("div");
+          div.className = "toggle-item";
+          
+          const info = document.createElement("div");
+          info.innerHTML = `<div style="font-weight:600;">${config.label}</div><div class="text-small text-muted">${config.description}</div>`;
+          
+          const label = document.createElement("label");
+          label.className = "switch";
           const input = document.createElement("input");
           input.type = "checkbox";
-          input.style.width = "20px";
-          input.style.height = "20px";
           input.checked = parseBoolValue(latestSettingsMap[config.key], config.defaultValue);
+          
           input.addEventListener("change", async () => {
             const newValue = input.checked ? "1" : "0";
-            const previous = !input.checked;
-            toggleSettingsStatusEl.textContent = `Saving ${config.key}=${newValue}…`;
             const res = await upsertSetting(config.key, newValue);
-            const body = await res.json().catch(() => ({}));
-            if (!res.ok || !body.ok) {
-              input.checked = previous;
-              toggleSettingsStatusEl.textContent = body.error || `Failed to save ${config.key}.`;
-              return;
-            }
-            latestSettingsMap[config.key] = newValue;
-            toggleSettingsStatusEl.textContent = config.restartRequired
-              ? `Saved ${config.key}=${newValue}. Restart node to apply.`
-              : `Saved ${config.key}=${newValue}.`;
-            await refreshSettingsList();
+            if (res.ok) await refreshSettingsList();
           });
 
-          header.appendChild(titleWrap);
-          header.appendChild(input);
-          wrapper.appendChild(header);
-          section.appendChild(wrapper);
-          }
-          toggleSettingsListEl.appendChild(section);
+          const slider = document.createElement("span");
+          slider.className = "slider";
+          label.appendChild(input);
+          label.appendChild(slider);
+          
+          div.appendChild(info);
+          div.appendChild(label);
+          toggleSettingsListEl.appendChild(div);
         }
       }
 
       async function refreshSettingsList() {
-        settingsStatusEl.textContent = "Loading settings…";
         const res = await fetchAdmin("/admin-api/settings");
         const body = await res.json().catch(() => ({}));
-        if (!res.ok || !body.ok || !Array.isArray(body.items)) {
-          settingsStatusEl.textContent = body.error || "Failed to load settings.";
-          return;
+        if (res.ok && body.ok && Array.isArray(body.items)) {
+          renderSettings(body.items);
         }
-        renderSettings(body.items);
-        settingsStatusEl.textContent = `Loaded ${body.items.length} settings.`;
+      }
+
+      function parseMetricsText(text) {
+        const out = {};
+        for (const rawLine of text.split("\n")) {
+          const line = rawLine.trim();
+          if (!line || line.startsWith("#")) continue;
+          const parts = line.split(/\s+/);
+          if (parts.length >= 2) out[parts[0]] = parts[1];
+        }
+        return out;
       }
 
       async function refreshAdminStats() {
@@ -461,41 +604,28 @@
           fetchAdmin("/admin-api/metrics"),
           fetchAdmin("/admin-api/peers?limit=1000"),
         ]);
-        if (!metricsRes.ok || !peersRes.ok) {
-          statusEl.textContent = "Admin data fetch failed.";
-          return;
-        }
+        if (!metricsRes.ok || !peersRes.ok) return;
         const metrics = parseMetricsText(await metricsRes.text());
-        const peersCount = (await peersRes.text())
-          .split("\n")
-          .map((v) => v.trim())
-          .filter((v) => v.length > 0).length;
+        const peersCount = (await peersRes.text()).split("\n").filter(v => v.trim()).length;
 
-        document.getElementById("ticks").textContent = metrics.veil_ticks_total || "-";
-        document.getElementById("delivered").textContent = metrics.veil_delivered_total || "-";
-        document.getElementById("fastIn").textContent = metrics.veil_fast_inbound || "-";
-        document.getElementById("fallbackIn").textContent = metrics.veil_fallback_inbound || "-";
-        document.getElementById("fastErr").textContent = metrics.veil_fast_outbound_err || "-";
-        document.getElementById("fallbackErr").textContent = metrics.veil_fallback_outbound_err || "-";
+        document.getElementById("ticks").textContent = Number(metrics.veil_delivered_total || 0).toLocaleString();
+        document.getElementById("delivered").textContent = Number(metrics.veil_delivered_total || 0).toLocaleString();
+        document.getElementById("fastIn").textContent = metrics.veil_fast_inbound || "0";
+        document.getElementById("fallbackIn").textContent = metrics.veil_fallback_inbound || "0";
+        document.getElementById("fastErr").textContent = metrics.veil_fast_outbound_err || "0";
+        document.getElementById("fallbackErr").textContent = metrics.veil_fallback_outbound_err || "0";
         document.getElementById("nostrEvents").textContent = metrics.veil_nostr_bridge_events_total || "0";
-        document.getElementById("nostrBytes").textContent = metrics.veil_nostr_bridge_payload_bytes_total || "0";
         document.getElementById("peers").textContent = String(peersCount);
       }
 
       async function refreshLogs() {
-        logsStatusEl.textContent = "Loading logs…";
         try {
           const res = await fetchAdmin("/admin-api/logs");
           const body = await res.json().catch(() => ({}));
-          if (!res.ok || !body.ok || !Array.isArray(body.logs)) {
-            logsStatusEl.textContent = body.error || "Failed to load logs.";
-            return;
+          if (res.ok && body.ok && Array.isArray(body.logs)) {
+            renderLogs(body.logs);
           }
-          renderLogs(body.logs);
-          logsStatusEl.textContent = `Loaded ${body.logs.length} entries.`;
-        } catch (err) {
-          logsStatusEl.textContent = "Failed to fetch logs.";
-        }
+        } catch (err) {}
       }
 
       function renderLogs(logs) {
@@ -503,156 +633,75 @@
         for (const entry of logs) {
           const div = document.createElement("div");
           div.className = "log-entry";
-          
           const timeStr = new Date(entry.timestamp).toISOString().split('T')[1].split('Z')[0];
-          
-          const timeSpan = document.createElement("span");
-          timeSpan.className = "log-time";
-          timeSpan.textContent = timeStr;
-          
-          const levelSpan = document.createElement("span");
-          levelSpan.className = `log-level log-level-${entry.level}`;
-          levelSpan.textContent = entry.level.padEnd(5);
-          
-          const targetSpan = document.createElement("span");
-          targetSpan.className = "log-target";
-          targetSpan.textContent = entry.target;
-
-          const msgSpan = document.createElement("span");
-          msgSpan.textContent = entry.message;
-          
-          div.appendChild(timeSpan);
-          div.appendChild(levelSpan);
-          div.appendChild(targetSpan);
-          div.appendChild(msgSpan);
-          
+          div.innerHTML = `<span class="log-time">${timeStr}</span><span class="log-level log-level-${entry.level}">${entry.level}</span><span class="log-target">${entry.target}</span><span>${entry.message}</span>`;
           logsListEl.appendChild(div);
         }
-        // Auto-scroll to bottom
         logsListEl.scrollTop = logsListEl.scrollHeight;
       }
 
       loginBtn.addEventListener("click", async () => {
         const secret = secretInput.value.trim();
-        if (!secret) {
-          statusEl.textContent = "Enter the node identity secret first.";
-          return;
-        }
-        statusEl.textContent = "Logging in…";
+        if (!secret) return;
         const res = await fetch("/admin-api/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ secret }),
         });
         const body = await res.json().catch(() => ({}));
-        if (!res.ok || !body.ok || !body.token) {
-          statusEl.textContent = body.error || "Login failed.";
-          setLoggedIn(false);
-          return;
+        if (res.ok && body.ok && body.token) {
+          localStorage.setItem("veil_admin_token", body.token);
+          secretInput.value = "";
+          await refreshStatus();
+        } else {
+          document.getElementById("loginStatus").textContent = body.error || "Login failed.";
         }
-        localStorage.setItem("veil_admin_token", body.token);
-        secretInput.value = "";
-        statusEl.textContent = "Authenticated.";
-        await refreshStatus();
       });
 
       logoutBtn.addEventListener("click", async () => {
-        try {
-          await fetch("/admin-api/logout", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token()}` },
-          });
-        } catch (_) {
-          // best-effort server logout
-        }
+        await fetch("/admin-api/logout", { method: "POST", headers: { Authorization: `Bearer ${token()}` } }).catch(() => {});
         localStorage.removeItem("veil_admin_token");
         setLoggedIn(false);
-        statusEl.textContent = "Logged out.";
       });
 
       saveSettingBtn.addEventListener("click", async () => {
         const key = settingKeyInput.value.trim();
         const value = settingValueInput.value.trim();
-        if (!key) {
-          settingsStatusEl.textContent = "Key is required.";
-          return;
-        }
-        settingsStatusEl.textContent = "Saving…";
+        if (!key) return;
         const res = await upsertSetting(key, value);
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok || !body.ok) {
-          settingsStatusEl.textContent = body.error || "Save failed.";
-          return;
+        if (res.ok) {
+          settingsStatusEl.textContent = `Saved ${key}.`;
+          await refreshSettingsList();
         }
-        settingsStatusEl.textContent = `Saved ${key}.`;
-        await refreshSettingsList();
       });
 
       deleteSettingBtn.addEventListener("click", async () => {
         const key = settingKeyInput.value.trim();
-        if (!key) {
-          settingsStatusEl.textContent = "Key is required.";
-          return;
-        }
-        settingsStatusEl.textContent = "Deleting…";
+        if (!key) return;
         const res = await fetch(`/admin-api/settings?key=${encodeURIComponent(key)}`, {
           method: "DELETE",
           headers: { Authorization: `Bearer ${token()}` },
         });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok || !body.ok) {
-          settingsStatusEl.textContent = body.error || "Delete failed.";
-          return;
+        if (res.ok) {
+          settingValueInput.value = "";
+          await refreshSettingsList();
         }
-        settingValueInput.value = "";
-        settingsStatusEl.textContent = `Deleted ${key}.`;
-        await refreshSettingsList();
       });
 
-      refreshSettingsBtn.addEventListener("click", async () => {
-        await refreshSettingsList();
-      });
-
-      refreshLogsBtn.addEventListener("click", async () => {
-        await refreshLogs();
-      });
-
-      copyNsecBtn.addEventListener("click", async () => {
-        const value = serverNsecEl.textContent || "";
-        if (!value || value === "-") return;
-        await navigator.clipboard.writeText(value);
-        identityStatusEl.textContent = "nsec copied.";
-      });
-
-      copyHexBtn.addEventListener("click", async () => {
-        const value = serverHexEl.textContent || "";
-        if (!value || value === "-") return;
-        await navigator.clipboard.writeText(value);
-        identityStatusEl.textContent = "hex secret copied.";
-      });
+      refreshSettingsBtn.addEventListener("click", refreshSettingsList);
+      refreshLogsBtn.addEventListener("click", refreshLogs);
+      copyNsecBtn.addEventListener("click", () => { navigator.clipboard.writeText(serverNsecEl.value); identityStatusEl.textContent = "Copied!"; });
+      copyHexBtn.addEventListener("click", () => { navigator.clipboard.writeText(serverHexEl.value); identityStatusEl.textContent = "Copied!"; });
 
       restartNodeBtn.addEventListener("click", async () => {
-        const ok = confirm("Restart VEIL VPS node now? Unsaved in-memory work may be interrupted.");
-        if (!ok) return;
-        statusEl.textContent = "Restart requested…";
-        const res = await fetch("/admin-api/restart", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token()}` },
-        });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok || !body.ok) {
-          statusEl.textContent = body.error || "Restart request failed.";
-          return;
+        if (confirm("Restart Node?")) {
+          const res = await fetch("/admin-api/restart", { method: "POST", headers: { Authorization: `Bearer ${token()}` } });
+          if (res.ok) alert("Restart requested.");
         }
-        statusEl.textContent = "Restart requested. Waiting for node to come back…";
       });
 
       refreshStatus();
-      setInterval(() => {
-        if (adminPanelEl.style.display === "block") {
-          refreshAdminStats().catch(() => {});
-        }
-      }, 5000);
+      setInterval(() => { if (token()) refreshAdminStats(); }, 5000);
     </script>
   </body>
 </html>
