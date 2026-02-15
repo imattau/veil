@@ -9,23 +9,11 @@
         reverse_proxy veil-vps-node:8080
     }
 
-    handle /health* {
-        reverse_proxy veil-vps-node:9090
-    }
-
-    handle /metrics* {
-        reverse_proxy veil-vps-node:9090
-    }
-
-    handle /peers* {
+    handle /health* /metrics* /peers* /latest-posts* {
         reverse_proxy veil-vps-node:9090
     }
 
     handle /admin-api* {
-        reverse_proxy veil-vps-node:9090
-    }
-
-    handle /latest-posts* {
         reverse_proxy veil-vps-node:9090
     }
 

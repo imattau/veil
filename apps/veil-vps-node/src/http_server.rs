@@ -50,6 +50,7 @@ pub fn build_router(state: VpsAppState) -> Router {
         )
         .route("/admin-api/logs", get(admin_logs))
         .route("/latest-posts", get(latest_posts))
+        .route("/latest-posts/", get(latest_posts))
         .route("/ws", get(ws_error_handler))
         .layer(CorsLayer::permissive())
         .with_state(state)
@@ -443,5 +444,6 @@ async fn admin_logs(State(state): State<VpsAppState>, headers: HeaderMap) -> imp
 async fn latest_posts(State(state): State<VpsAppState>) -> impl IntoResponse {
     let history = state.feed_history.lock().unwrap_or_else(|e| e.into_inner());
     let posts: Vec<_> = history.iter().rev().cloned().collect();
+    tracing::info!("api: latest_posts called, returning {} posts", posts.len());
     Json(json!({ "ok": true, "posts": posts }))
 }
