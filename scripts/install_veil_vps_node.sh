@@ -499,16 +499,13 @@ if [[ -f docs/runbooks/veil-vps-node.service ]]; then
     fi
     
     # Check parent directory permissions for the certificate
-    local check_path="$FINAL_CERT_PATH"
-    local blockage_found=0
+    check_path="$FINAL_CERT_PATH"
+    blockage_found=0
     while [[ "$check_path" != "/" && "$check_path" != "." ]]; do
       check_path=$(dirname "$check_path")
-      local perms
       perms=$(stat -c '%a' "$check_path" 2>/dev/null || true)
       if [[ -n "$perms" && ("$perms" == "700" || "$perms" == "750") ]]; then
-          local owner
           owner=$(stat -c '%U' "$check_path" 2>/dev/null || true)
-          local group
           group=$(stat -c '%G' "$check_path" 2>/dev/null || true)
           
           if [[ "$owner" != "$RUN_USER" ]]; then
