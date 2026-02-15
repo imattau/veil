@@ -186,6 +186,7 @@ async fn relay_loop(
     let mut connect_attempts: u32 = 0;
     loop {
         connect_attempts = connect_attempts.saturating_add(1);
+        tracing::info!("nostr bridge: connecting to {relay} (attempt {connect_attempts})");
         let connect = connect_async(relay.as_str()).await;
         let (mut ws, _) = match connect {
             Ok(ok) => {

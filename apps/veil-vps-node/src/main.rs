@@ -1517,7 +1517,11 @@ async fn main() {
                             if guard.len() >= 50 {
                                 guard.pop_front();
                             }
-                            guard.push_back(serde_json::to_value(bundle).unwrap_or_default());
+                            let mut value = serde_json::to_value(bundle).unwrap_or_default();
+                            if let Some(obj) = value.as_object_mut() {
+                                obj.insert("source_relay".to_string(), serde_json::Value::String(item.source_relay.clone()));
+                            }
+                            guard.push_back(value);
                         }
 
                         bridge_batcher.enqueue(item.payload);

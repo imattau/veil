@@ -168,13 +168,13 @@ impl VpsConfig {
             }
         }
 
-        builder = builder.add_source(Environment::with_prefix("VEIL_VPS").try_parsing(true));
-
         if let Ok(legacy) = std::env::var("VEIL_VPS_NOSTR_RELAYS") {
             if !legacy.trim().is_empty() {
-                builder = builder.set_override("nostr_bridge_relays", legacy)?;
+                builder = builder.set_default("nostr_bridge_relays", legacy)?;
             }
         }
+
+        builder = builder.add_source(Environment::with_prefix("VEIL_VPS").try_parsing(true));
 
         builder.build()?.try_deserialize()
     }

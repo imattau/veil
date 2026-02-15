@@ -251,11 +251,23 @@
           author.textContent = pubkey.substring(0, 8);
           author.title = pubkey;
           
+          const relayInfo = post.source_relay ? ` (via ${post.source_relay.split('://')[1].split('/')[0]})` : '';
+          const authorContainer = document.createElement('div');
+          authorContainer.appendChild(author);
+          if (relayInfo) {
+            const relaySpan = document.createElement('span');
+            relaySpan.className = 'text-muted';
+            relaySpan.style.fontSize = '0.7rem';
+            relaySpan.textContent = relayInfo;
+            relaySpan.title = `Relay: ${post.source_relay}`;
+            authorContainer.appendChild(relaySpan);
+          }
+          
           const channel = document.createElement('span');
           channel.className = 'badge badge-blue';
           channel.textContent = `#${post.channel_id || 'general'}`;
           
-          header.appendChild(author);
+          header.appendChild(authorContainer);
           header.appendChild(channel);
           
           const text = document.createElement('div');
