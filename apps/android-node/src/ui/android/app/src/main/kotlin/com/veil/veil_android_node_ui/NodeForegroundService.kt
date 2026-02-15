@@ -124,7 +124,7 @@ class NodeForegroundService : Service() {
             env["VEIL_NODE_QUIC_SERVER_NAME"] = "localhost"
             env["VEIL_NODE_QUIC_PUBLIC"] = "127.0.0.1:9000"
             env["VEIL_NODE_WS"] = "wss://veilnode.3nostr.com/ws"
-            env["VEIL_NODE_WS_PEERS"] = "wss://veilnode.3nostr.com/ws,ws://veilnode.3nostr.com/ws"
+            env["VEIL_NODE_WS_PEERS"] = "wss://veilnode.3nostr.com/ws"
             env["VEIL_NODE_FAST_PEERS"] = "quic://veilnode.3nostr.com:5000"
             env["VEIL_NODE_TOKEN"] = token
             env["VEIL_NODE_STATE_KEY_HEX"] = stateKeyHex

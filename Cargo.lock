@@ -3600,7 +3600,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "veil-transport",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]

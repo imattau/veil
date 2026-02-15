@@ -11,7 +11,6 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use quinn::{ClientConfig, Endpoint, ServerConfig};
-use rustls::RootCertStore;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use thiserror::Error;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
@@ -495,21 +494,12 @@ fn build_server_config(identity: &QuicIdentity) -> Result<ServerConfig, QuicAdap
 }
 
 fn build_client_config(trusted_certs_der: &[Vec<u8>]) -> Result<ClientConfig, QuicAdapterError> {
-    if std::env::var_os("VEIL_QUIC_INSECURE").is_some() {
-        return build_insecure_client_config();
-    }
     if !trusted_certs_der.is_empty() {
         return build_pinned_client_config(trusted_certs_der);
     }
-    let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let mut tls = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    tls.alpn_protocols = alpn_protocols();
-    let quic_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
-        .map_err(|_| QuicAdapterError::InvalidIdentity)?;
-    Ok(ClientConfig::new(Arc::new(quic_tls)))
+    // VEIL nodes use self-signed certs; CA validation never succeeds.
+    // Accept any peer cert and rely on protocol-level identity verification.
+    build_insecure_client_config()
 }
 
 fn build_pinned_client_config(
