@@ -725,6 +725,14 @@ impl ProtocolEngine {
         }
         Ok((fast, fallback))
     }
+
+    #[cfg(test)]
+    pub(crate) async fn dynamic_peer_snapshot(&self) -> (Vec<String>, Vec<String>) {
+        (
+            self.dynamic_fast_peers.lock().await.clone(),
+            self.dynamic_fallback_peers.lock().await.clone(),
+        )
+    }
 }
 
 fn normalize_dynamic_peer_id(value: &str) -> Option<String> {

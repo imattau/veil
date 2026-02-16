@@ -49,6 +49,8 @@ pub enum WebSocketAdapterError {
     Closed,
     #[error("outbound queue is full")]
     QueueFull,
+    #[error("peer mismatch for configured websocket target")]
+    PeerMismatch,
     #[error("payload exceeds max payload hint ({hint} bytes)")]
     PayloadTooLarge { hint: usize },
     #[error("server bind failed: {0}")]
@@ -163,16 +165,8 @@ impl TransportAdapter for WebSocketAdapter {
     type Error = WebSocketAdapterError;
 
     fn send(&mut self, peer: &Self::Peer, bytes: &[u8]) -> Result<(), Self::Error> {
-        // Only send if the peer matches our target URL or if the peer is our local peer_id
-        // (which sometimes happens in loopback/sim scenarios).
-        // Actually, most callers will pass the relay URL as the peer.
         if peer != &self.outbound_tx_url && peer != "any" {
-            // If it doesn't match, we just return Ok(()) or ignore?
-            // TransportAdapter::send failure usually means "this adapter can't do it".
-            // But we don't have a "NotSupported" error here.
-            // Let's just return Ok(()) to avoid erroring out the whole multi-lane send
-            // if we are just not the right lane.
-            return Ok(());
+            return Err(WebSocketAdapterError::PeerMismatch);
         }
 
         if let Some(hint) = self.max_payload_hint {
@@ -620,10 +614,23 @@ async fn run_server_worker(
 #[cfg(test)]
 mod tests {
     use super::WebSocketServerAdapterConfig;
+    use super::{WebSocketAdapter, WebSocketAdapterConfig, WebSocketAdapterError};
+    use veil_transport::adapter::TransportAdapter;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn server_adapter_accepts_multiple_clients() {
         let server_cfg = WebSocketServerAdapterConfig::new("127.0.0.1:0");
         let _server = super::WebSocketServerAdapter::listen(server_cfg).expect("server listen");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn client_adapter_rejects_mismatched_peer() {
+        let mut config = WebSocketAdapterConfig::new("ws://127.0.0.1:65534/ws", "peer-a");
+        config.reconnect = false;
+        let mut adapter = WebSocketAdapter::connect(config).expect("client connect");
+        let err = adapter
+            .send(&"ws://127.0.0.1:65535/ws".to_string(), b"payload")
+            .expect_err("mismatched peer should fail");
+        assert!(matches!(err, WebSocketAdapterError::PeerMismatch));
     }
 }

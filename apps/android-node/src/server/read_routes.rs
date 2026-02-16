@@ -82,7 +82,7 @@ pub(super) async fn events_ws(
                 serde_json::to_string(&status_event).unwrap_or_default(),
             ))
             .await;
-        while let Ok(event) = rx.recv().await {
+        while let Some(event) = recv_broadcast_loss_tolerant(&mut rx).await {
             let payload = match serde_json::to_string(&event) {
                 Ok(value) => value,
                 Err(_) => continue,
@@ -98,7 +98,49 @@ pub(super) async fn events_ws(
     })
 }
 
+async fn recv_broadcast_loss_tolerant<T: Clone>(
+    rx: &mut tokio::sync::broadcast::Receiver<T>,
+) -> Option<T> {
+    loop {
+        match rx.recv().await {
+            Ok(event) => return Some(event),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                tracing::debug!(
+                    skipped,
+                    "events websocket receiver lagged; dropping stale events"
+                );
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+        }
+    }
+}
+
 #[derive(Debug, serde::Deserialize)]
 pub(super) struct EventsQuery {
     since: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recv_broadcast_loss_tolerant;
+    use tokio::sync::broadcast;
+
+    #[tokio::test]
+    async fn recv_broadcast_loss_tolerant_skips_lagged_messages() {
+        let (tx, mut rx) = broadcast::channel(1);
+        let _ = tx.send("first".to_string());
+        let _ = tx.send("latest".to_string());
+
+        let next = recv_broadcast_loss_tolerant(&mut rx).await;
+        assert_eq!(next.as_deref(), Some("latest"));
+    }
+
+    #[tokio::test]
+    async fn recv_broadcast_loss_tolerant_returns_none_when_channel_closed() {
+        let (tx, mut rx) = broadcast::channel::<String>(1);
+        drop(tx);
+
+        let next = recv_broadcast_loss_tolerant(&mut rx).await;
+        assert!(next.is_none());
+    }
 }

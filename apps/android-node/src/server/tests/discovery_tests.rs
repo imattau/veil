@@ -2,7 +2,8 @@ use super::*;
 
 #[tokio::test]
 async fn discovery_announce_returns_neighbors() {
-    let app = build_router(test_state());
+    let state = test_state();
+    let app = build_router(state.clone());
     let contact = ContactBundle {
         peer_id: "peer-b".to_string(),
         ws_url: None,
@@ -31,6 +32,11 @@ async fn discovery_announce_returns_neighbors() {
         .unwrap_or_else(|_| Bytes::new());
     let parsed: DiscoveryAnnounceResponse = serde_json::from_slice(&bytes).unwrap();
     assert!(parsed.accepted);
+    let (fast, _) = state.protocol.dynamic_peer_snapshot().await;
+    assert!(
+        fast.iter().any(|peer| peer == "127.0.0.1:9002"),
+        "announced peer should be registered for transport"
+    );
 }
 
 #[tokio::test]

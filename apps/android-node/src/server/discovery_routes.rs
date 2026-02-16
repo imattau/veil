@@ -20,6 +20,7 @@ pub(super) async fn discovery_announce(
     let Some(contact) = sanitize_discovery_contact(request.contact) else {
         return bad_request("invalid_contact", "contact is invalid");
     };
+    state.protocol.add_contact(&contact).await;
     let response = handle_discovery_announce(
         &state.node,
         DiscoveryAnnounceRequest {

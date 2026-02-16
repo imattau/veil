@@ -268,6 +268,12 @@ impl LanDiscoveryWorker {
         let config = self.config.clone();
         let state = Arc::clone(&self.state);
         let protocol = Arc::clone(&self.protocol);
+        let runtime_handle = tokio::runtime::Handle::try_current().ok();
+        if runtime_handle.is_none() {
+            tracing::warn!(
+                "LAN discovery started without runtime handle; protocol lane sync is disabled"
+            );
+        }
         thread::spawn(move || {
             let socket = match UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], config.port))) {
                 Ok(sock) => sock,
@@ -300,7 +306,12 @@ impl LanDiscoveryWorker {
                         contact.lan_addrs.push(addr.to_string());
                         if let Some(contact) = sanitize_contact(contact) {
                             state.add_contact(contact.clone());
-                            drop(protocol.add_contact(&contact));
+                            if let Some(handle) = runtime_handle.as_ref() {
+                                let protocol = Arc::clone(&protocol);
+                                handle.spawn(async move {
+                                    protocol.add_contact(&contact).await;
+                                });
+                            }
                         }
                     }
                 }
