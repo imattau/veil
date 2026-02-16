@@ -17,6 +17,11 @@ use crate::state::NodeState;
 use veil_core::Namespace;
 
 const DISCOVERY_MAX_CONTACTS: usize = 64;
+const DISCOVERY_LOOKUP_DEFAULT_LIMIT: usize = 16;
+const DISCOVERY_MAX_PEER_ID_LEN: usize = 128;
+const DISCOVERY_MAX_ENDPOINT_LEN: usize = 1024;
+const DISCOVERY_MAX_LAN_ADDRS: usize = 8;
+const DISCOVERY_MAX_LAN_ADDR_LEN: usize = 256;
 const DISCOVERY_TAG_SEED: &[u8] = b"veil-discovery";
 
 #[derive(Debug, Clone)]
@@ -25,6 +30,7 @@ pub struct DiscoveryConfig {
     pub gossip_interval: Duration,
     pub max_gossip_contacts: usize,
     pub transport_enabled: bool,
+    pub auth_token: Option<String>,
 }
 
 impl Default for DiscoveryConfig {
@@ -34,6 +40,7 @@ impl Default for DiscoveryConfig {
             gossip_interval: Duration::from_secs(12),
             max_gossip_contacts: 24,
             transport_enabled: true,
+            auth_token: None,
         }
     }
 }
@@ -175,13 +182,21 @@ impl DiscoveryWorker {
                 let state = Arc::clone(&self.state);
                 let protocol = Arc::clone(&self.protocol);
                 let http = self.http.clone();
+                let auth_token = self.config.auth_token.clone();
                 handles.push(tokio::spawn(async move {
                     let url = join_discovery_endpoint(&target, "discovery/gossip");
-                    match http.post(&url).json(&payload).send().await {
+                    let request =
+                        with_auth_header(http.post(&url).json(&payload), auth_token.as_deref());
+                    match request.send().await {
                         Ok(resp) => {
                             if let Ok(parsed) = resp.json::<DiscoveryGossipResponse>().await {
                                 let mut new_contacts = 0;
-                                for contact in parsed.contacts {
+                                for contact in parsed
+                                    .contacts
+                                    .into_iter()
+                                    .filter_map(sanitize_contact)
+                                    .take(DISCOVERY_MAX_CONTACTS)
+                                {
                                     state.add_contact(contact.clone());
                                     let _ = protocol.add_contact(&contact).await;
                                     new_contacts += 1;
@@ -284,8 +299,10 @@ impl LanDiscoveryWorker {
                         }
                         let mut contact = announce.into_contact();
                         contact.lan_addrs.push(addr.to_string());
-                        state.add_contact(contact.clone());
-                        drop(protocol.add_contact(&contact));
+                        if let Some(contact) = sanitize_contact(contact) {
+                            state.add_contact(contact.clone());
+                            drop(protocol.add_contact(&contact));
+                        }
                     }
                 }
             }
@@ -408,7 +425,7 @@ async fn handle_discovery_message(
 ) -> Option<()> {
     match msg.kind {
         DiscoveryKind::Announce => {
-            let contact = msg.contact?;
+            let contact = sanitize_contact(msg.contact?)?;
             if contact.peer_id == protocol.peer_id() {
                 return None;
             }
@@ -439,13 +456,23 @@ async fn handle_discovery_message(
                     return None;
                 }
             }
-            for contact in msg.contacts {
+            for contact in msg
+                .contacts
+                .into_iter()
+                .filter_map(sanitize_contact)
+                .take(DISCOVERY_MAX_CONTACTS)
+            {
                 state.add_contact(contact.clone());
                 protocol.add_contact(&contact).await;
             }
         }
         DiscoveryKind::Gossip => {
-            for contact in msg.contacts {
+            for contact in msg
+                .contacts
+                .into_iter()
+                .filter_map(sanitize_contact)
+                .take(DISCOVERY_MAX_CONTACTS)
+            {
                 state.add_contact(contact.clone());
                 protocol.add_contact(&contact).await;
             }
@@ -481,8 +508,14 @@ pub fn handle_discovery_announce(
     request: DiscoveryAnnounceRequest,
     max_neighbors: usize,
 ) -> DiscoveryAnnounceResponse {
-    state.add_contact(request.contact.clone());
-    let neighbors = state.discovery_lookup_contact(&request.contact, max_neighbors);
+    let Some(contact) = sanitize_contact(request.contact) else {
+        return DiscoveryAnnounceResponse {
+            accepted: false,
+            neighbors: Vec::new(),
+        };
+    };
+    state.add_contact(contact.clone());
+    let neighbors = state.discovery_lookup_contact(&contact, max_neighbors);
     DiscoveryAnnounceResponse {
         accepted: true,
         neighbors,
@@ -493,7 +526,10 @@ pub fn handle_discovery_lookup(
     state: &NodeState,
     request: DiscoveryLookupRequest,
 ) -> DiscoveryLookupResponse {
-    let limit = request.limit.unwrap_or(16);
+    let limit = request
+        .limit
+        .unwrap_or(DISCOVERY_LOOKUP_DEFAULT_LIMIT)
+        .min(DISCOVERY_MAX_CONTACTS);
     let mut result = Vec::new();
     if let Some(peer_id) = request.peer_id.as_deref() {
         result = state.discovery_lookup_peer(peer_id, limit);
@@ -508,7 +544,12 @@ pub fn handle_discovery_gossip(
     request: DiscoveryGossipRequest,
     max_contacts: usize,
 ) -> DiscoveryGossipResponse {
-    for contact in request.contacts {
+    for contact in request
+        .contacts
+        .into_iter()
+        .filter_map(sanitize_contact)
+        .take(DISCOVERY_MAX_CONTACTS)
+    {
         state.add_contact(contact);
     }
     DiscoveryGossipResponse {
@@ -563,6 +604,59 @@ pub fn build_self_contact(node: &NodeState, protocol: &ProtocolEngine) -> Contac
 fn join_discovery_endpoint(base: &str, path: &str) -> String {
     let trimmed = base.trim_end_matches('/');
     format!("{trimmed}/{path}")
+}
+
+fn with_auth_header(
+    builder: reqwest::RequestBuilder,
+    token: Option<&str>,
+) -> reqwest::RequestBuilder {
+    match token.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => builder.header("x-veil-token", value),
+        None => builder,
+    }
+}
+
+fn sanitize_contact(mut contact: ContactBundle) -> Option<ContactBundle> {
+    let peer_id = contact.peer_id.trim();
+    if peer_id.is_empty() || peer_id.len() > DISCOVERY_MAX_PEER_ID_LEN {
+        return None;
+    }
+    if !valid_pubkey_hex(&contact.pubkey_hex) {
+        return None;
+    }
+    contact.peer_id = peer_id.to_string();
+    contact.ws_url = sanitize_endpoint(contact.ws_url);
+    contact.quic_addr = sanitize_endpoint(contact.quic_addr);
+    contact.rpc_url = sanitize_endpoint(contact.rpc_url);
+    contact.lan_addrs = contact
+        .lan_addrs
+        .into_iter()
+        .filter_map(|addr| {
+            let trimmed = addr.trim();
+            if trimmed.is_empty() || trimmed.len() > DISCOVERY_MAX_LAN_ADDR_LEN {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .take(DISCOVERY_MAX_LAN_ADDRS)
+        .collect();
+    Some(contact)
+}
+
+fn sanitize_endpoint(value: Option<String>) -> Option<String> {
+    value.and_then(|entry| {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() || trimmed.len() > DISCOVERY_MAX_ENDPOINT_LEN {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn valid_pubkey_hex(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn contact_key(contact: &ContactBundle) -> [u8; 32] {
@@ -694,5 +788,103 @@ mod tests {
         let decoded: DiscoveryMessage = serde_json::from_slice(&encoded).unwrap();
         assert!(matches!(decoded.kind, DiscoveryKind::Announce));
         assert!(decoded.contact.is_some());
+    }
+
+    #[test]
+    fn sanitize_contact_rejects_invalid_pubkey() {
+        let contact = make_contact("peer-x", "zzzz");
+        assert!(sanitize_contact(contact).is_none());
+    }
+
+    #[test]
+    fn discovery_announce_rejects_invalid_contact() {
+        let state = NodeState::new("test");
+        let request = DiscoveryAnnounceRequest {
+            contact: ContactBundle {
+                peer_id: "peer-x".to_string(),
+                ws_url: None,
+                quic_addr: None,
+                pubkey_hex: "abcd".to_string(),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            },
+        };
+        let response = handle_discovery_announce(&state, request, 16);
+        assert!(!response.accepted);
+        assert!(response.neighbors.is_empty());
+        assert!(state.contacts().is_empty());
+    }
+
+    #[test]
+    fn discovery_gossip_limits_and_filters_contacts() {
+        let state = NodeState::new("test");
+        let mut contacts = vec![ContactBundle {
+            peer_id: String::new(),
+            ws_url: Some("ws://invalid".to_string()),
+            quic_addr: None,
+            pubkey_hex: "ff".repeat(32),
+            rpc_url: None,
+            lan_addrs: vec!["".to_string()],
+        }];
+        for i in 0..(DISCOVERY_MAX_CONTACTS + 20) {
+            contacts.push(ContactBundle {
+                peer_id: format!("peer-{i}"),
+                ws_url: Some(" ws://example.com/ws ".to_string()),
+                quic_addr: Some(" 127.0.0.1:9444 ".to_string()),
+                pubkey_hex: format!("{:064x}", i + 1),
+                rpc_url: Some(" https://example.com/rpc ".to_string()),
+                lan_addrs: vec![" ".to_string(), "10.0.0.1:9333".to_string()],
+            });
+        }
+        let response = handle_discovery_gossip(&state, DiscoveryGossipRequest { contacts }, 256);
+        assert_eq!(state.contacts().len(), DISCOVERY_MAX_CONTACTS);
+        assert_eq!(response.contacts.len(), DISCOVERY_MAX_CONTACTS);
+        assert!(state
+            .contacts()
+            .iter()
+            .all(|contact| valid_pubkey_hex(&contact.pubkey_hex)));
+    }
+
+    #[test]
+    fn discovery_lookup_caps_requested_limit() {
+        let state = NodeState::new("test");
+        for i in 0..(DISCOVERY_MAX_CONTACTS + 40) {
+            state.add_contact(ContactBundle {
+                peer_id: format!("peer-{i}"),
+                ws_url: None,
+                quic_addr: None,
+                pubkey_hex: format!("{:064x}", i + 1),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            });
+        }
+        let response = handle_discovery_lookup(
+            &state,
+            DiscoveryLookupRequest {
+                peer_id: Some("peer-z".to_string()),
+                pubkey_hex: None,
+                limit: Some(usize::MAX),
+            },
+        );
+        assert_eq!(response.contacts.len(), DISCOVERY_MAX_CONTACTS);
+    }
+
+    #[test]
+    fn with_auth_header_sets_token_header() {
+        let client = reqwest::Client::new();
+        let request = with_auth_header(client.post("http://example.com"), Some("secret-token"))
+            .build()
+            .expect("request");
+        let header = request.headers().get("x-veil-token").expect("header");
+        assert_eq!(header, "secret-token");
+    }
+
+    #[test]
+    fn with_auth_header_skips_empty_token() {
+        let client = reqwest::Client::new();
+        let request = with_auth_header(client.post("http://example.com"), Some("  "))
+            .build()
+            .expect("request");
+        assert!(request.headers().get("x-veil-token").is_none());
     }
 }

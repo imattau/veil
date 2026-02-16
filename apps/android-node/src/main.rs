@@ -232,6 +232,7 @@ async fn main() {
             .as_deref()
             .map(|value| value != "0")
             .unwrap_or(true),
+        auth_token: Some(token.clone()),
     };
     let lan_config = LanDiscoveryConfig {
         enabled: std::env::var("VEIL_LAN_DISCOVERY").ok().as_deref() == Some("1"),

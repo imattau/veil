@@ -9,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use base64::Engine;
+use subtle::ConstantTimeEq;
 use tracing::info;
 use uuid::Uuid;
 use veil_core::ObjectRoot;
@@ -45,6 +46,13 @@ use crate::secure_message::{
 use crate::state::NodeState;
 use crate::ProtocolEngine;
 use veil_schema_feed::{BundleMeta, DirectMessageBundle, FeedBundle, GroupMessageBundle};
+
+mod messaging;
+
+use self::messaging::{
+    publish_direct_message, publish_direct_message_text, publish_group_message,
+    publish_group_message_text, share_group_key,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -122,6 +130,7 @@ pub async fn serve(addr: SocketAddr, state: AppState) {
 }
 
 const MAX_RAW_PAYLOAD_BYTES: usize = 600 * 1024;
+const MAX_UPLOAD_PAYLOAD_BYTES: usize = 12 * 1024 * 1024;
 const MAX_BUNDLE_JSON_BYTES: usize = 600 * 1024;
 const MAX_CHANNEL_LEN: usize = 64;
 const MAX_NAME_LEN: usize = 64;
@@ -196,7 +205,7 @@ async fn publish_object(
         Ok(bytes) => bytes,
         Err(_) => return bad_request("invalid_base64", "payload must be base64 encoded"),
     };
-    if payload.len() > MAX_RAW_PAYLOAD_BYTES {
+    if payload.len() > MAX_UPLOAD_PAYLOAD_BYTES {
         return bad_request("payload_too_large", "payload exceeds max size");
     }
     let content_root = veil_fec::sharder::derive_object_root(&payload);
@@ -238,16 +247,15 @@ async fn queue_raw_object_payload(
     state: &AppState,
     namespace: u16,
     payload: &[u8],
-) -> (Uuid, [u8; 32]) {
+) -> Result<(Uuid, [u8; 32]), String> {
     // Build the object immediately to get the wire_root
     let (encoded_object, wire_root): (Vec<u8>, ObjectRoot) = state
         .protocol
         .build_object(payload.to_vec(), namespace, 0)
-        .await
-        .unwrap_or_default();
+        .await?;
 
     // Inject into local cache so it's immediately fetchable
-    let _ = state.protocol.inject_object(encoded_object.clone()).await;
+    state.protocol.inject_object(encoded_object.clone()).await?;
 
     let wrapped_payload = serde_json::json!({
         "kind": "raw_object_b64",
@@ -259,7 +267,7 @@ async fn queue_raw_object_payload(
         namespace,
         payload: wrapped_payload,
     });
-    (message_id, wire_root)
+    Ok((message_id, wire_root))
 }
 
 async fn identity(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -473,334 +481,6 @@ async fn publish_reaction(
         author_pubkey_hex: pubkey_hex,
     })
     .into_response()
-}
-
-async fn publish_direct_message(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<DirectMessagePublishRequest>,
-) -> Response {
-    if !authorized(&headers, &state.auth_token) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let identity = state.node.identity();
-    let mut bundle = request.bundle;
-    let pubkey_hex = identity.public_key_hex();
-    if bundle.author_pubkey_hex.is_empty() {
-        bundle.author_pubkey_hex = pubkey_hex.clone();
-    } else if bundle.author_pubkey_hex != pubkey_hex {
-        return bad_request("author_mismatch", "author pubkey does not match identity");
-    }
-    if !valid_channel(&bundle.channel_id) {
-        return bad_request("invalid_channel", "channel_id is invalid");
-    }
-    if !valid_pubkey_hex(&bundle.recipient_pubkey_hex) {
-        return bad_request("invalid_recipient", "recipient pubkey invalid");
-    }
-    let feed_bundle = FeedBundle::DirectMessage(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
-        Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
-    };
-    if payload.len() > MAX_BUNDLE_JSON_BYTES {
-        return bad_request("bundle_too_large", "bundle exceeds max size");
-    }
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
-    Json(DirectMessagePublishResponse {
-        message_id,
-        queued: true,
-        author_pubkey_hex: pubkey_hex,
-    })
-    .into_response()
-}
-
-async fn publish_direct_message_text(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<DirectMessageTextPublishRequest>,
-) -> Response {
-    if !authorized(&headers, &state.auth_token) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if !valid_channel(&request.channel_id) {
-        return bad_request("invalid_channel", "channel_id is invalid");
-    }
-    if !valid_pubkey_hex(&request.recipient_pubkey_hex) {
-        return bad_request("invalid_recipient", "recipient pubkey invalid");
-    }
-    if request.text.trim().is_empty() {
-        return bad_request("invalid_text", "text is empty");
-    }
-    if request.text.len() > MAX_TEXT_LEN {
-        return bad_request("text_too_long", "text too long");
-    }
-    let identity = state.node.identity();
-    let pubkey_hex = identity.public_key_hex();
-    let encrypted_payload = match encrypt_direct_message_payload(
-        identity.secret_key,
-        &pubkey_hex,
-        &request.recipient_pubkey_hex,
-        request.text.as_bytes(),
-    ) {
-        Ok(value) => value,
-        Err(err) => return bad_request("encrypt_failed", &err),
-    };
-    let (_object_msg, object_root) =
-        queue_raw_object_payload(&state, request.namespace, &encrypted_payload).await;
-    let bundle = DirectMessageBundle {
-        meta: BundleMeta {
-            version: 1,
-            created_at: current_unix_seconds(),
-        },
-        channel_id: request.channel_id,
-        author_pubkey_hex: pubkey_hex.clone(),
-        recipient_pubkey_hex: request.recipient_pubkey_hex,
-        ciphertext_root: object_root.into(),
-        reply_to_root: request.reply_to_root,
-    };
-    let feed_bundle = FeedBundle::DirectMessage(bundle);
-    let payload = match serde_json::to_vec(&feed_bundle) {
-        Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
-    };
-    if payload.len() > MAX_BUNDLE_JSON_BYTES {
-        return bad_request("bundle_too_large", "bundle exceeds max size");
-    }
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
-    Json(DirectMessagePublishResponse {
-        message_id,
-        queued: true,
-        author_pubkey_hex: pubkey_hex,
-    })
-    .into_response()
-}
-
-async fn publish_group_message(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<GroupMessagePublishRequest>,
-) -> Response {
-    if !authorized(&headers, &state.auth_token) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let identity = state.node.identity();
-    let mut bundle = request.bundle;
-    let pubkey_hex = identity.public_key_hex();
-    if bundle.author_pubkey_hex.is_empty() {
-        bundle.author_pubkey_hex = pubkey_hex.clone();
-    } else if bundle.author_pubkey_hex != pubkey_hex {
-        return bad_request("author_mismatch", "author pubkey does not match identity");
-    }
-    if !valid_channel(&bundle.channel_id) {
-        return bad_request("invalid_channel", "channel_id is invalid");
-    }
-    if bundle.group_id.trim().is_empty() || bundle.group_id.len() > MAX_GROUP_ID_LEN {
-        return bad_request("invalid_group", "group_id invalid");
-    }
-    let feed_bundle = FeedBundle::GroupMessage(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
-        Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
-    };
-    if payload.len() > MAX_BUNDLE_JSON_BYTES {
-        return bad_request("bundle_too_large", "bundle exceeds max size");
-    }
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
-    Json(GroupMessagePublishResponse {
-        message_id,
-        queued: true,
-        author_pubkey_hex: pubkey_hex,
-    })
-    .into_response()
-}
-
-async fn publish_group_message_text(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<GroupMessageTextPublishRequest>,
-) -> Response {
-    if !authorized(&headers, &state.auth_token) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if !valid_channel(&request.channel_id) {
-        return bad_request("invalid_channel", "channel_id is invalid");
-    }
-    if request.group_id.trim().is_empty() || request.group_id.len() > MAX_GROUP_ID_LEN {
-        return bad_request("invalid_group", "group_id invalid");
-    }
-    if request.text.trim().is_empty() {
-        return bad_request("invalid_text", "text is empty");
-    }
-    if request.text.len() > MAX_TEXT_LEN {
-        return bad_request("text_too_long", "text too long");
-    }
-    let identity = state.node.identity();
-    let pubkey_hex = identity.public_key_hex();
-    for member in &request.member_pubkeys {
-        if !valid_pubkey_hex(member) {
-            return bad_request("invalid_member", "member pubkey invalid");
-        }
-    }
-    let (key_id, group_key) = state.node.ensure_group_key(&request.group_id);
-    if !request.member_pubkeys.is_empty() {
-        let _ = queue_group_key_shares(
-            &state,
-            request.namespace,
-            &request.group_id,
-            &pubkey_hex,
-            identity.secret_key,
-            &key_id,
-            group_key,
-            &request.member_pubkeys,
-        )
-        .await;
-    }
-    let encrypted_payload = match encrypt_group_message_payload(
-        &request.group_id,
-        &key_id,
-        group_key,
-        request.text.as_bytes(),
-    ) {
-        Ok(value) => value,
-        Err(err) => return bad_request("encrypt_failed", &err),
-    };
-    let (_object_msg, object_root) =
-        queue_raw_object_payload(&state, request.namespace, &encrypted_payload).await;
-    let bundle = GroupMessageBundle {
-        meta: BundleMeta {
-            version: 1,
-            created_at: current_unix_seconds(),
-        },
-        channel_id: request.channel_id,
-        author_pubkey_hex: pubkey_hex.clone(),
-        group_id: request.group_id,
-        ciphertext_root: object_root.into(),
-        reply_to_root: request.reply_to_root,
-    };
-    let feed_bundle = FeedBundle::GroupMessage(bundle);
-    let payload = match serde_json::to_vec(&feed_bundle) {
-        Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
-    };
-    if payload.len() > MAX_BUNDLE_JSON_BYTES {
-        return bad_request("bundle_too_large", "bundle exceeds max size");
-    }
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
-    Json(GroupMessagePublishResponse {
-        message_id,
-        queued: true,
-        author_pubkey_hex: pubkey_hex,
-    })
-    .into_response()
-}
-
-async fn share_group_key(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<GroupKeyShareRequest>,
-) -> Response {
-    if !authorized(&headers, &state.auth_token) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if !valid_channel(&request.channel_id) {
-        return bad_request("invalid_channel", "channel_id is invalid");
-    }
-    if request.group_id.trim().is_empty() || request.group_id.len() > MAX_GROUP_ID_LEN {
-        return bad_request("invalid_group", "group_id invalid");
-    }
-    if request.member_pubkeys.is_empty() {
-        return bad_request("invalid_members", "member_pubkeys is empty");
-    }
-    for member in &request.member_pubkeys {
-        if !valid_pubkey_hex(member) {
-            return bad_request("invalid_member", "member pubkey invalid");
-        }
-    }
-    let identity = state.node.identity();
-    let pubkey_hex = identity.public_key_hex();
-    let (key_id, group_key) = if request.rotate_key {
-        state.node.rotate_group_key(&request.group_id)
-    } else {
-        state.node.ensure_group_key(&request.group_id)
-    };
-    let shares = queue_group_key_shares(
-        &state,
-        request.namespace,
-        &request.group_id,
-        &pubkey_hex,
-        identity.secret_key,
-        &key_id,
-        group_key,
-        &request.member_pubkeys,
-    )
-    .await;
-    Json(GroupKeyShareResponse {
-        queued: true,
-        key_id,
-        shares,
-    })
-    .into_response()
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn queue_group_key_shares(
-    state: &AppState,
-    namespace: u16,
-    group_id: &str,
-    sender_pubkey_hex: &str,
-    sender_secret: [u8; 32],
-    key_id: &str,
-    group_key: [u8; 32],
-    member_pubkeys: &[String],
-) -> usize {
-    let mut shares = 0usize;
-    for member in member_pubkeys {
-        if member == sender_pubkey_hex {
-            continue;
-        }
-        let payload = match encrypt_group_key_share_payload(
-            sender_secret,
-            sender_pubkey_hex,
-            member,
-            group_id,
-            key_id,
-            group_key,
-        ) {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        let _ = queue_raw_object_payload(state, namespace, &payload).await;
-        shares += 1;
-    }
-    shares
 }
 
 async fn publish_media(
@@ -1776,11 +1456,15 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
     if token.trim().is_empty() {
         return false;
     }
-    headers
+    let provided = headers
         .get("x-veil-token")
         .and_then(|value| value.to_str().ok())
-        .map(|value| value == token)
-        .unwrap_or(false)
+        .map(str::as_bytes);
+    let expected = token.as_bytes();
+    match provided {
+        Some(value) if value.len() == expected.len() => value.ct_eq(expected).into(),
+        _ => false,
+    }
 }
 
 fn bad_request(code: &str, message: &str) -> Response {
@@ -1866,6 +1550,22 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn rejects_wrong_token() {
+        let app = build_router(test_state());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/status")
+                    .header("x-veil-token", "wrong")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -3016,6 +2716,82 @@ mod tests {
             .unwrap_or_else(|_| Bytes::new());
         let parsed: GroupKeyShareResponse = serde_json::from_slice(&bytes).unwrap();
         assert!(parsed.queued);
+    }
+
+    #[tokio::test]
+    async fn group_key_share_route_rejects_self_only_members() {
+        let state = test_state();
+        let self_pubkey_hex = state.node.identity().public_key_hex();
+        let app = build_router(state);
+        let body = serde_json::to_string(&GroupKeyShareRequest {
+            namespace: 32,
+            channel_id: "group".to_string(),
+            group_id: "group-alpha".to_string(),
+            member_pubkeys: vec![self_pubkey_hex],
+            rotate_key: false,
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/group_key/share")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .method("POST")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: ErrorResponse = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.code, "invalid_members");
+    }
+
+    #[tokio::test]
+    async fn group_key_share_route_deduplicates_member_pubkeys() {
+        let state = test_state();
+        let self_pubkey_hex = state.node.identity().public_key_hex();
+        let app = build_router(state);
+        let member_pubkey_hex = hex::encode(
+            veil_crypto::signing::NostrSigner::from_secret([4u8; 32])
+                .expect("valid secret")
+                .public_key(),
+        );
+        let body = serde_json::to_string(&GroupKeyShareRequest {
+            namespace: 32,
+            channel_id: "group".to_string(),
+            group_id: "group-alpha".to_string(),
+            member_pubkeys: vec![
+                self_pubkey_hex,
+                member_pubkey_hex.clone(),
+                member_pubkey_hex.to_ascii_uppercase(),
+            ],
+            rotate_key: true,
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/group_key/share")
+                    .header("content-type", "application/json")
+                    .header("x-veil-token", "secret")
+                    .method("POST")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap_or_else(|_| Bytes::new());
+        let parsed: GroupKeyShareResponse = serde_json::from_slice(&bytes).unwrap();
+        assert!(parsed.queued);
+        assert_eq!(parsed.shares, 1);
     }
 
     #[tokio::test]
