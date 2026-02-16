@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use serde::{Deserialize, Serialize};
+use tokio::task::JoinSet;
 
 use crate::api::{
     ContactBundle, DiscoveryAnnounceRequest, DiscoveryAnnounceResponse, DiscoveryGossipRequest,
@@ -23,6 +24,7 @@ const DISCOVERY_MAX_BATCH_MESSAGES: usize = 64;
 const DISCOVERY_MAX_PAYLOAD_BYTES: usize = 256 * 1024;
 const DISCOVERY_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 const DISCOVERY_MAX_HTTP_TARGETS: usize = 64;
+const DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP: usize = 8;
 const DISCOVERY_MAX_ENDPOINT_LEN: usize = 1024;
 const DISCOVERY_MAX_LAN_ADDRS: usize = 8;
 const DISCOVERY_MAX_LAN_ADDR_LEN: usize = 256;
@@ -170,14 +172,15 @@ impl DiscoveryWorker {
                 contact_count
             );
 
-            let mut handles = Vec::new();
+            let mut handles = JoinSet::new();
+            let max_in_flight = bounded_http_gossip_concurrency(target_count);
             for target in http_targets {
                 let payload = payload.clone();
                 let state = Arc::clone(&self.state);
                 let protocol = Arc::clone(&self.protocol);
                 let http = self.http.clone();
                 let auth_token = self.config.auth_token.clone();
-                handles.push(tokio::spawn(async move {
+                handles.spawn(async move {
                     let url = join_discovery_endpoint(&target, "discovery/gossip");
                     let request =
                         with_auth_header(http.post(&url).json(&payload), auth_token.as_deref());
@@ -208,11 +211,12 @@ impl DiscoveryWorker {
                             tracing::warn!("HTTP gossip failed with {}: {}", target, e);
                         }
                     }
-                }));
+                });
+                while handles.len() >= max_in_flight {
+                    let _ = handles.join_next().await;
+                }
             }
-            for handle in handles {
-                let _ = handle.await;
-            }
+            while handles.join_next().await.is_some() {}
         } else {
             tracing::warn!(
                 "No discovery targets available (bootstrap_urls empty and no known RPC peers)"
@@ -649,19 +653,40 @@ fn normalize_reply_to_peer_id(value: &str) -> Option<String> {
 }
 
 fn collect_http_targets(bootstrap_urls: &[String], contacts: &[ContactBundle]) -> Vec<String> {
-    let mut targets = bootstrap_urls.to_vec();
+    let mut targets = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    let mut push_target = |candidate: &str| {
+        if targets.len() >= DISCOVERY_MAX_HTTP_TARGETS {
+            return;
+        }
+        if !(candidate.starts_with("http://") || candidate.starts_with("https://")) {
+            return;
+        }
+        if seen.insert(candidate.to_string()) {
+            targets.push(candidate.to_string());
+        }
+    };
+
+    // Keep bootstrap endpoints sticky at the front so known seeds remain reachable
+    // even when many contact-provided RPC URLs are present.
+    for target in bootstrap_urls {
+        push_target(target);
+    }
     for contact in contacts {
         if let Some(rpc_url) = &contact.rpc_url {
-            targets.push(rpc_url.clone());
+            push_target(rpc_url);
         }
     }
-    targets.retain(|url| url.starts_with("http://") || url.starts_with("https://"));
-    targets.sort();
-    targets.dedup();
-    if targets.len() > DISCOVERY_MAX_HTTP_TARGETS {
-        targets.truncate(DISCOVERY_MAX_HTTP_TARGETS);
-    }
     targets
+}
+
+fn bounded_http_gossip_concurrency(targets: usize) -> usize {
+    if targets == 0 {
+        0
+    } else {
+        targets.min(DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP)
+    }
 }
 
 fn sanitize_contact(mut contact: ContactBundle) -> Option<ContactBundle> {
@@ -1094,10 +1119,11 @@ mod tests {
 
     #[test]
     fn collect_http_targets_filters_dedups_and_caps() {
-        let mut bootstrap = vec![
+        let bootstrap = vec![
             "wss://example.invalid/ws".to_string(),
             "https://seed-a.example".to_string(),
             "https://seed-a.example".to_string(),
+            "http://seed-b.example".to_string(),
         ];
         let mut contacts = Vec::new();
         for i in 0..(DISCOVERY_MAX_HTTP_TARGETS + 20) {
@@ -1126,11 +1152,25 @@ mod tests {
             .all(|url| url.starts_with("http://") || url.starts_with("https://")));
         let unique: std::collections::HashSet<_> = targets.iter().collect();
         assert_eq!(unique.len(), targets.len());
+        assert_eq!(
+            targets.first().map(String::as_str),
+            Some("https://seed-a.example")
+        );
+        assert!(targets.iter().any(|url| url == "http://seed-b.example"));
+        assert!(targets.iter().any(|url| url == "http://peer-0.example"));
+    }
 
-        bootstrap.push("http://a.example".to_string());
-        let ordered = collect_http_targets(&bootstrap, &[]);
-        let mut sorted = ordered.clone();
-        sorted.sort();
-        assert_eq!(ordered, sorted);
+    #[test]
+    fn bounded_http_gossip_concurrency_caps_parallelism() {
+        assert_eq!(bounded_http_gossip_concurrency(0), 0);
+        assert_eq!(bounded_http_gossip_concurrency(1), 1);
+        assert_eq!(
+            bounded_http_gossip_concurrency(DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP),
+            DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP
+        );
+        assert_eq!(
+            bounded_http_gossip_concurrency(DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP + 50),
+            DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP
+        );
     }
 }
