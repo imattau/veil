@@ -1,14 +1,16 @@
-use std::collections::HashMap;
-use std::net::{SocketAddr, UdpSocket};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
-use rand::seq::SliceRandom;
-use rand::thread_rng;
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinSet;
 
+use self::contact_validation::{
+    bounded_gossip_contacts as bounded_gossip_contacts_impl,
+    normalize_reply_to_peer_id as normalize_reply_to_peer_id_impl,
+    sanitize_contact as sanitize_contact_impl,
+};
+use self::http_targets::{bounded_http_gossip_concurrency, collect_http_targets};
+pub use self::table::{DiscoveryStateHandle, DiscoveryTable};
 use crate::api::{
     ContactBundle, DiscoveryAnnounceRequest, DiscoveryAnnounceResponse, DiscoveryGossipRequest,
     DiscoveryGossipResponse, DiscoveryLookupRequest, DiscoveryLookupResponse,
@@ -23,12 +25,17 @@ const DISCOVERY_MAX_PEER_ID_LEN: usize = 128;
 const DISCOVERY_MAX_BATCH_MESSAGES: usize = 64;
 const DISCOVERY_MAX_PAYLOAD_BYTES: usize = 256 * 1024;
 const DISCOVERY_MAX_MESSAGE_BYTES: usize = 64 * 1024;
-const DISCOVERY_MAX_HTTP_TARGETS: usize = 64;
-const DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP: usize = 8;
 const DISCOVERY_MAX_ENDPOINT_LEN: usize = 1024;
 const DISCOVERY_MAX_LAN_ADDRS: usize = 8;
 const DISCOVERY_MAX_LAN_ADDR_LEN: usize = 256;
 const DISCOVERY_TAG_SEED: &[u8] = b"veil-discovery";
+
+mod contact_validation;
+mod http_targets;
+mod lan;
+mod lookup_keys;
+mod message_handlers;
+mod table;
 
 #[derive(Debug, Clone)]
 pub struct DiscoveryConfig {
@@ -65,46 +72,6 @@ impl Default for LanDiscoveryConfig {
             port: 9333,
             announce_interval: Duration::from_secs(5),
         }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct DiscoveryTable {
-    contacts: HashMap<String, ContactBundle>,
-}
-
-impl DiscoveryTable {
-    pub fn upsert(&mut self, contact: ContactBundle) {
-        self.contacts.insert(contact.peer_id.clone(), contact);
-    }
-
-    pub fn lookup(&self, key: &[u8; 32], limit: usize) -> Vec<ContactBundle> {
-        let mut contacts: Vec<_> = self
-            .contacts
-            .values()
-            .cloned()
-            .map(|contact| {
-                let ckey = contact_key(&contact);
-                let distance = xor_distance(key, &ckey);
-                (distance, contact)
-            })
-            .collect();
-        contacts.sort_by(|a, b| a.0.cmp(&b.0));
-        contacts
-            .into_iter()
-            .take(limit)
-            .map(|(_, contact)| contact)
-            .collect()
-    }
-
-    pub fn sample(&self, max: usize) -> Vec<ContactBundle> {
-        let mut entries: Vec<_> = self.contacts.values().cloned().collect();
-        if entries.len() <= max {
-            return entries;
-        }
-        entries.shuffle(&mut thread_rng());
-        entries.truncate(max);
-        entries
     }
 }
 
@@ -238,92 +205,7 @@ impl DiscoveryWorker {
     }
 }
 
-#[derive(Clone)]
-pub struct LanDiscoveryWorker {
-    state: Arc<NodeState>,
-    protocol: Arc<ProtocolEngine>,
-    config: LanDiscoveryConfig,
-}
-
-impl LanDiscoveryWorker {
-    pub fn new(
-        state: Arc<NodeState>,
-        protocol: Arc<ProtocolEngine>,
-        config: LanDiscoveryConfig,
-    ) -> Self {
-        Self {
-            state,
-            protocol,
-            config,
-        }
-    }
-
-    pub fn start(self, self_contact: ContactBundle) {
-        if !self.config.enabled {
-            return;
-        }
-        let config = self.config.clone();
-        let state = Arc::clone(&self.state);
-        let protocol = Arc::clone(&self.protocol);
-        let runtime_handle = tokio::runtime::Handle::try_current().ok();
-        if runtime_handle.is_none() {
-            tracing::warn!(
-                "LAN discovery started without runtime handle; protocol lane sync is disabled"
-            );
-        }
-        thread::spawn(move || {
-            let socket = match UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], config.port))) {
-                Ok(sock) => sock,
-                Err(_) => return,
-            };
-            let _ = socket.set_broadcast(true);
-            let _ = socket.set_read_timeout(Some(Duration::from_millis(500)));
-            let mut last_announce = Instant::now() - config.announce_interval;
-            loop {
-                if last_announce.elapsed() >= config.announce_interval {
-                    let announce = LanAnnounce::from_contact(&self_contact);
-                    if let Ok(bytes) = serde_json::to_vec(&announce) {
-                        let _ = socket.send_to(
-                            &bytes,
-                            SocketAddr::from(([255, 255, 255, 255], config.port)),
-                        );
-                    }
-                    last_announce = Instant::now();
-                }
-                let mut buf = vec![0u8; 2048];
-                if let Ok((len, addr)) = socket.recv_from(&mut buf) {
-                    if len == 0 {
-                        continue;
-                    }
-                    if let Ok(announce) = serde_json::from_slice::<LanAnnounce>(&buf[..len]) {
-                        if announce.peer_id == self_contact.peer_id {
-                            continue;
-                        }
-                        let mut contact = announce.into_contact();
-                        contact.lan_addrs.push(addr.to_string());
-                        if let Some(contact) = sanitize_contact(contact) {
-                            state.add_contact(contact.clone());
-                            if let Some(handle) = runtime_handle.as_ref() {
-                                let protocol = Arc::clone(&protocol);
-                                handle.spawn(async move {
-                                    protocol.add_contact(&contact).await;
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LanAnnounce {
-    peer_id: String,
-    quic_addr: Option<String>,
-    ws_url: Option<String>,
-    pubkey_hex: String,
-}
+pub use self::lan::LanDiscoveryWorker;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -417,7 +299,15 @@ pub async fn handle_discovery_payload(
     }
     if payload.len() <= DISCOVERY_MAX_MESSAGE_BYTES {
         if let Ok(msg) = serde_json::from_slice::<DiscoveryMessage>(payload) {
-            return handle_discovery_message(state, protocol, msg).await;
+            return message_handlers::handle_discovery_message(
+                state,
+                protocol,
+                msg,
+                DISCOVERY_MAX_CONTACTS,
+                normalize_reply_to_peer_id,
+                sanitize_contact,
+            )
+            .await;
         }
     }
     if let Ok(items) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload) {
@@ -427,7 +317,15 @@ pub async fn handle_discovery_payload(
                 continue;
             }
             if let Ok(msg) = serde_json::from_slice::<DiscoveryMessage>(&item) {
-                let _ = handle_discovery_message(state, protocol, msg).await;
+                let _ = message_handlers::handle_discovery_message(
+                    state,
+                    protocol,
+                    msg,
+                    DISCOVERY_MAX_CONTACTS,
+                    normalize_reply_to_peer_id,
+                    sanitize_contact,
+                )
+                .await;
                 handled = true;
             }
         }
@@ -436,94 +334,6 @@ pub async fn handle_discovery_payload(
         }
     }
     None
-}
-
-async fn handle_discovery_message(
-    state: &NodeState,
-    protocol: &ProtocolEngine,
-    msg: DiscoveryMessage,
-) -> Option<()> {
-    match msg.kind {
-        DiscoveryKind::Announce => {
-            let contact = sanitize_contact(msg.contact?)?;
-            if contact.peer_id == protocol.peer_id() {
-                return None;
-            }
-            state.add_contact(contact.clone());
-            protocol.add_contact(&contact).await;
-            let neighbors = state.discovery_lookup_contact(&contact, 12);
-            let response = DiscoveryMessage::response(neighbors, Some(contact.peer_id));
-            let _ = protocol.publish_discovery(response).await;
-        }
-        DiscoveryKind::Lookup => {
-            let limit = 16;
-            let reply_to = msg
-                .reply_to
-                .as_deref()
-                .and_then(normalize_reply_to_peer_id)?;
-            let contacts = if let Some(peer_id) = msg.target_peer_id.as_deref() {
-                state.discovery_lookup_peer(peer_id, limit)
-            } else if let Some(pubkey_hex) = msg.target_pubkey.as_deref() {
-                state.discovery_lookup_pubkey(pubkey_hex, limit)
-            } else {
-                Vec::new()
-            };
-            if !contacts.is_empty() {
-                let response = DiscoveryMessage::response(contacts, Some(reply_to));
-                let _ = protocol.publish_discovery(response).await;
-            }
-        }
-        DiscoveryKind::Response => {
-            if let Some(target_peer_id) = msg.target_peer_id.as_deref() {
-                if target_peer_id != protocol.peer_id() {
-                    return None;
-                }
-            }
-            for contact in msg
-                .contacts
-                .into_iter()
-                .filter_map(sanitize_contact)
-                .take(DISCOVERY_MAX_CONTACTS)
-            {
-                state.add_contact(contact.clone());
-                protocol.add_contact(&contact).await;
-            }
-        }
-        DiscoveryKind::Gossip => {
-            for contact in msg
-                .contacts
-                .into_iter()
-                .filter_map(sanitize_contact)
-                .take(DISCOVERY_MAX_CONTACTS)
-            {
-                state.add_contact(contact.clone());
-                protocol.add_contact(&contact).await;
-            }
-        }
-    }
-    Some(())
-}
-
-impl LanAnnounce {
-    fn from_contact(contact: &ContactBundle) -> Self {
-        Self {
-            peer_id: contact.peer_id.clone(),
-            quic_addr: contact.quic_addr.clone(),
-            ws_url: contact.ws_url.clone(),
-            pubkey_hex: contact.pubkey_hex.clone(),
-        }
-    }
-
-    fn into_contact(self) -> ContactBundle {
-        ContactBundle {
-            peer_id: self.peer_id,
-            ws_url: self.ws_url,
-            quic_addr: self.quic_addr,
-            pubkey_hex: self.pubkey_hex,
-            rpc_url: None,
-            lan_addrs: Vec::new(),
-        }
-    }
 }
 
 pub fn handle_discovery_announce(
@@ -640,182 +450,25 @@ fn with_auth_header(
 }
 
 fn bounded_gossip_contacts(requested: usize) -> usize {
-    requested.max(1).min(DISCOVERY_MAX_CONTACTS)
+    bounded_gossip_contacts_impl(requested, DISCOVERY_MAX_CONTACTS)
 }
 
 fn normalize_reply_to_peer_id(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed.len() > DISCOVERY_MAX_PEER_ID_LEN {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
+    normalize_reply_to_peer_id_impl(value, DISCOVERY_MAX_PEER_ID_LEN)
 }
 
-fn collect_http_targets(bootstrap_urls: &[String], contacts: &[ContactBundle]) -> Vec<String> {
-    let mut targets = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-
-    let mut push_target = |candidate: &str| {
-        if targets.len() >= DISCOVERY_MAX_HTTP_TARGETS {
-            return;
-        }
-        if !(candidate.starts_with("http://") || candidate.starts_with("https://")) {
-            return;
-        }
-        if seen.insert(candidate.to_string()) {
-            targets.push(candidate.to_string());
-        }
-    };
-
-    // Keep bootstrap endpoints sticky at the front so known seeds remain reachable
-    // even when many contact-provided RPC URLs are present.
-    for target in bootstrap_urls {
-        push_target(target);
-    }
-    for contact in contacts {
-        if let Some(rpc_url) = &contact.rpc_url {
-            push_target(rpc_url);
-        }
-    }
-    targets
-}
-
-fn bounded_http_gossip_concurrency(targets: usize) -> usize {
-    if targets == 0 {
-        0
-    } else {
-        targets.min(DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP)
-    }
-}
-
-fn sanitize_contact(mut contact: ContactBundle) -> Option<ContactBundle> {
-    let peer_id = contact.peer_id.trim();
-    if peer_id.is_empty() || peer_id.len() > DISCOVERY_MAX_PEER_ID_LEN {
-        return None;
-    }
-    if !valid_pubkey_hex(&contact.pubkey_hex) {
-        return None;
-    }
-    contact.peer_id = peer_id.to_string();
-    contact.ws_url = sanitize_endpoint(contact.ws_url);
-    contact.quic_addr = sanitize_endpoint(contact.quic_addr);
-    contact.rpc_url = sanitize_endpoint(contact.rpc_url);
-    contact.lan_addrs = contact
-        .lan_addrs
-        .into_iter()
-        .filter_map(|addr| {
-            let trimmed = addr.trim();
-            if trimmed.is_empty() || trimmed.len() > DISCOVERY_MAX_LAN_ADDR_LEN {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        })
-        .take(DISCOVERY_MAX_LAN_ADDRS)
-        .collect();
-    Some(contact)
+fn sanitize_contact(contact: ContactBundle) -> Option<ContactBundle> {
+    sanitize_contact_impl(
+        contact,
+        DISCOVERY_MAX_PEER_ID_LEN,
+        DISCOVERY_MAX_ENDPOINT_LEN,
+        DISCOVERY_MAX_LAN_ADDR_LEN,
+        DISCOVERY_MAX_LAN_ADDRS,
+    )
 }
 
 pub fn sanitize_discovery_contact(contact: ContactBundle) -> Option<ContactBundle> {
     sanitize_contact(contact)
-}
-
-fn sanitize_endpoint(value: Option<String>) -> Option<String> {
-    value.and_then(|entry| {
-        let trimmed = entry.trim();
-        if trimmed.is_empty() || trimmed.len() > DISCOVERY_MAX_ENDPOINT_LEN {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
-}
-
-fn valid_pubkey_hex(value: &str) -> bool {
-    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
-}
-
-fn contact_key(contact: &ContactBundle) -> [u8; 32] {
-    if contact.pubkey_hex.len() == 64 {
-        if let Ok(bytes) = hex::decode(&contact.pubkey_hex) {
-            if bytes.len() == 32 {
-                let mut out = [0u8; 32];
-                out.copy_from_slice(&bytes);
-                return out;
-            }
-        }
-    }
-    blake3::hash(contact.peer_id.as_bytes()).into()
-}
-
-fn key_for_peer(peer_id: &str) -> [u8; 32] {
-    blake3::hash(peer_id.as_bytes()).into()
-}
-
-fn key_for_pubkey(pubkey_hex: &str) -> Option<[u8; 32]> {
-    if pubkey_hex.len() != 64 {
-        return None;
-    }
-    hex::decode(pubkey_hex).ok().and_then(|bytes| {
-        if bytes.len() == 32 {
-            let mut out = [0u8; 32];
-            out.copy_from_slice(&bytes);
-            Some(out)
-        } else {
-            None
-        }
-    })
-}
-
-fn xor_distance(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    for i in 0..32 {
-        out[i] = a[i] ^ b[i];
-    }
-    out
-}
-
-#[derive(Debug)]
-pub struct DiscoveryStateHandle {
-    table: Arc<Mutex<DiscoveryTable>>,
-}
-
-impl DiscoveryStateHandle {
-    pub fn new(table: Arc<Mutex<DiscoveryTable>>) -> Self {
-        Self { table }
-    }
-
-    pub fn upsert(&self, contact: ContactBundle) {
-        let mut table = self.table.lock().expect("discovery lock");
-        table.upsert(contact);
-    }
-
-    pub fn lookup_peer(&self, peer_id: &str, limit: usize) -> Vec<ContactBundle> {
-        let key = key_for_peer(peer_id);
-        let table = self.table.lock().expect("discovery lock");
-        table.lookup(&key, limit)
-    }
-
-    pub fn lookup_pubkey(&self, pubkey_hex: &str, limit: usize) -> Vec<ContactBundle> {
-        let key = match key_for_pubkey(pubkey_hex) {
-            Some(key) => key,
-            None => return Vec::new(),
-        };
-        let table = self.table.lock().expect("discovery lock");
-        table.lookup(&key, limit)
-    }
-
-    pub fn lookup_contact(&self, contact: &ContactBundle, limit: usize) -> Vec<ContactBundle> {
-        let key = contact_key(contact);
-        let table = self.table.lock().expect("discovery lock");
-        table.lookup(&key, limit)
-    }
-
-    pub fn sample(&self, max: usize) -> Vec<ContactBundle> {
-        let table = self.table.lock().expect("discovery lock");
-        table.sample(max)
-    }
 }
 
 #[cfg(test)]
@@ -831,27 +484,6 @@ mod tests {
             rpc_url: None,
             lan_addrs: Vec::new(),
         }
-    }
-
-    #[test]
-    fn discovery_lookup_orders_by_distance() {
-        let mut table = DiscoveryTable::default();
-        table.upsert(make_contact(
-            "alpha",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ));
-        table.upsert(make_contact(
-            "beta",
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        ));
-        table.upsert(make_contact(
-            "gamma",
-            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        ));
-        let key = key_for_peer("alpha");
-        let results = table.lookup(&key, 2);
-        assert_eq!(results.len(), 2);
-        assert!(results.iter().any(|c| c.peer_id == "alpha"));
     }
 
     #[test]
@@ -919,7 +551,8 @@ mod tests {
         assert!(state
             .contacts()
             .iter()
-            .all(|contact| valid_pubkey_hex(&contact.pubkey_hex)));
+            .all(|contact| contact.pubkey_hex.len() == 64
+                && contact.pubkey_hex.chars().all(|c| c.is_ascii_hexdigit())));
     }
 
     #[test]
@@ -1115,62 +748,5 @@ mod tests {
         assert_eq!(handled, Some(()));
         assert_eq!(state.contacts().len(), 1);
         assert!(state.contacts().iter().any(|c| c.peer_id == "peer-ok"));
-    }
-
-    #[test]
-    fn collect_http_targets_filters_dedups_and_caps() {
-        let bootstrap = vec![
-            "wss://example.invalid/ws".to_string(),
-            "https://seed-a.example".to_string(),
-            "https://seed-a.example".to_string(),
-            "http://seed-b.example".to_string(),
-        ];
-        let mut contacts = Vec::new();
-        for i in 0..(DISCOVERY_MAX_HTTP_TARGETS + 20) {
-            contacts.push(ContactBundle {
-                peer_id: format!("peer-{i}"),
-                ws_url: None,
-                quic_addr: None,
-                pubkey_hex: format!("{:064x}", i + 1),
-                rpc_url: Some(format!("http://peer-{i}.example")),
-                lan_addrs: Vec::new(),
-            });
-        }
-        contacts.push(ContactBundle {
-            peer_id: "peer-extra".to_string(),
-            ws_url: None,
-            quic_addr: None,
-            pubkey_hex: "11".repeat(32),
-            rpc_url: Some("quic://not-http".to_string()),
-            lan_addrs: Vec::new(),
-        });
-
-        let targets = collect_http_targets(&bootstrap, &contacts);
-        assert!(targets.len() <= DISCOVERY_MAX_HTTP_TARGETS);
-        assert!(targets
-            .iter()
-            .all(|url| url.starts_with("http://") || url.starts_with("https://")));
-        let unique: std::collections::HashSet<_> = targets.iter().collect();
-        assert_eq!(unique.len(), targets.len());
-        assert_eq!(
-            targets.first().map(String::as_str),
-            Some("https://seed-a.example")
-        );
-        assert!(targets.iter().any(|url| url == "http://seed-b.example"));
-        assert!(targets.iter().any(|url| url == "http://peer-0.example"));
-    }
-
-    #[test]
-    fn bounded_http_gossip_concurrency_caps_parallelism() {
-        assert_eq!(bounded_http_gossip_concurrency(0), 0);
-        assert_eq!(bounded_http_gossip_concurrency(1), 1);
-        assert_eq!(
-            bounded_http_gossip_concurrency(DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP),
-            DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP
-        );
-        assert_eq!(
-            bounded_http_gossip_concurrency(DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP + 50),
-            DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP
-        );
     }
 }
