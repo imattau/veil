@@ -19,6 +19,7 @@ use veil_core::Namespace;
 const DISCOVERY_MAX_CONTACTS: usize = 64;
 const DISCOVERY_LOOKUP_DEFAULT_LIMIT: usize = 16;
 const DISCOVERY_MAX_PEER_ID_LEN: usize = 128;
+const DISCOVERY_MAX_BATCH_MESSAGES: usize = 64;
 const DISCOVERY_MAX_ENDPOINT_LEN: usize = 1024;
 const DISCOVERY_MAX_LAN_ADDRS: usize = 8;
 const DISCOVERY_MAX_LAN_ADDR_LEN: usize = 256;
@@ -415,7 +416,7 @@ pub async fn handle_discovery_payload(
     }
     if let Ok(items) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload) {
         let mut handled = false;
-        for item in items {
+        for item in items.into_iter().take(DISCOVERY_MAX_BATCH_MESSAGES) {
             if let Ok(msg) = serde_json::from_slice::<DiscoveryMessage>(&item) {
                 let _ = handle_discovery_message(state, protocol, msg).await;
                 handled = true;
@@ -447,7 +448,10 @@ async fn handle_discovery_message(
         }
         DiscoveryKind::Lookup => {
             let limit = 16;
-            let reply_to = msg.reply_to.clone().unwrap_or_default();
+            let reply_to = msg
+                .reply_to
+                .as_deref()
+                .and_then(normalize_reply_to_peer_id)?;
             let contacts = if let Some(peer_id) = msg.target_peer_id.as_deref() {
                 state.discovery_lookup_peer(peer_id, limit)
             } else if let Some(pubkey_hex) = msg.target_pubkey.as_deref() {
@@ -628,6 +632,15 @@ fn with_auth_header(
 
 fn bounded_gossip_contacts(requested: usize) -> usize {
     requested.max(1).min(DISCOVERY_MAX_CONTACTS)
+}
+
+fn normalize_reply_to_peer_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > DISCOVERY_MAX_PEER_ID_LEN {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn sanitize_contact(mut contact: ContactBundle) -> Option<ContactBundle> {
@@ -938,5 +951,68 @@ mod tests {
             usize::MAX,
         );
         assert_eq!(response.contacts.len(), DISCOVERY_MAX_CONTACTS);
+    }
+
+    #[tokio::test]
+    async fn discovery_payload_batch_caps_message_count() {
+        let state = NodeState::new("test");
+        let identity = state.identity();
+        let protocol = ProtocolEngine::new(crate::default_protocol_config(
+            "ws://127.0.0.1:9/ws".to_string(),
+            "node-a".to_string(),
+            32,
+            identity.public_key,
+            identity.encrypt_key,
+            identity.signer(),
+        ))
+        .expect("protocol init");
+
+        let mut items = Vec::new();
+        for i in 0..(DISCOVERY_MAX_BATCH_MESSAGES + 20) {
+            let msg = DiscoveryMessage::gossip(vec![ContactBundle {
+                peer_id: format!("peer-{i}"),
+                ws_url: None,
+                quic_addr: Some(format!("127.0.0.1:{}", 9100 + i)),
+                pubkey_hex: format!("{:064x}", i + 1),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            }]);
+            items.push(serde_json::to_vec(&msg).expect("encode message"));
+        }
+        let mut payload = Vec::new();
+        ciborium::ser::into_writer(&items, &mut payload).expect("encode payload");
+
+        let handled = handle_discovery_payload(&state, &protocol, &payload).await;
+        assert_eq!(handled, Some(()));
+        assert_eq!(state.contacts().len(), DISCOVERY_MAX_BATCH_MESSAGES);
+    }
+
+    #[tokio::test]
+    async fn discovery_lookup_requires_reply_target() {
+        let state = NodeState::new("test");
+        state.add_contact(ContactBundle {
+            peer_id: "peer-target".to_string(),
+            ws_url: None,
+            quic_addr: Some("127.0.0.1:9200".to_string()),
+            pubkey_hex: "aa".repeat(32),
+            rpc_url: None,
+            lan_addrs: Vec::new(),
+        });
+        let identity = state.identity();
+        let protocol = ProtocolEngine::new(crate::default_protocol_config(
+            "ws://127.0.0.1:9/ws".to_string(),
+            "node-a".to_string(),
+            32,
+            identity.public_key,
+            identity.encrypt_key,
+            identity.signer(),
+        ))
+        .expect("protocol init");
+        let lookup =
+            DiscoveryMessage::lookup(Some("peer-target".to_string()), None, "   ".to_string());
+        let payload = serde_json::to_vec(&lookup).expect("encode lookup");
+
+        let handled = handle_discovery_payload(&state, &protocol, &payload).await;
+        assert_eq!(handled, None);
     }
 }
