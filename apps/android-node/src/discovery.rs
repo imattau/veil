@@ -20,6 +20,8 @@ const DISCOVERY_MAX_CONTACTS: usize = 64;
 const DISCOVERY_LOOKUP_DEFAULT_LIMIT: usize = 16;
 const DISCOVERY_MAX_PEER_ID_LEN: usize = 128;
 const DISCOVERY_MAX_BATCH_MESSAGES: usize = 64;
+const DISCOVERY_MAX_PAYLOAD_BYTES: usize = 256 * 1024;
+const DISCOVERY_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 const DISCOVERY_MAX_ENDPOINT_LEN: usize = 1024;
 const DISCOVERY_MAX_LAN_ADDRS: usize = 8;
 const DISCOVERY_MAX_LAN_ADDR_LEN: usize = 256;
@@ -411,12 +413,25 @@ pub async fn handle_discovery_payload(
     protocol: &ProtocolEngine,
     payload: &[u8],
 ) -> Option<()> {
-    if let Ok(msg) = serde_json::from_slice::<DiscoveryMessage>(payload) {
-        return handle_discovery_message(state, protocol, msg).await;
+    if payload.len() > DISCOVERY_MAX_PAYLOAD_BYTES {
+        tracing::debug!(
+            payload_len = payload.len(),
+            max_payload = DISCOVERY_MAX_PAYLOAD_BYTES,
+            "dropping oversized discovery payload"
+        );
+        return None;
+    }
+    if payload.len() <= DISCOVERY_MAX_MESSAGE_BYTES {
+        if let Ok(msg) = serde_json::from_slice::<DiscoveryMessage>(payload) {
+            return handle_discovery_message(state, protocol, msg).await;
+        }
     }
     if let Ok(items) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload) {
         let mut handled = false;
         for item in items.into_iter().take(DISCOVERY_MAX_BATCH_MESSAGES) {
+            if item.len() > DISCOVERY_MAX_MESSAGE_BYTES {
+                continue;
+            }
             if let Ok(msg) = serde_json::from_slice::<DiscoveryMessage>(&item) {
                 let _ = handle_discovery_message(state, protocol, msg).await;
                 handled = true;
@@ -1014,5 +1029,60 @@ mod tests {
 
         let handled = handle_discovery_payload(&state, &protocol, &payload).await;
         assert_eq!(handled, None);
+    }
+
+    #[tokio::test]
+    async fn discovery_payload_rejects_oversized_input() {
+        let state = NodeState::new("test");
+        let identity = state.identity();
+        let protocol = ProtocolEngine::new(crate::default_protocol_config(
+            "ws://127.0.0.1:9/ws".to_string(),
+            "node-a".to_string(),
+            32,
+            identity.public_key,
+            identity.encrypt_key,
+            identity.signer(),
+        ))
+        .expect("protocol init");
+        let oversized = vec![0x42; DISCOVERY_MAX_PAYLOAD_BYTES + 1];
+
+        let handled = handle_discovery_payload(&state, &protocol, &oversized).await;
+        assert_eq!(handled, None);
+        assert!(state.contacts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn discovery_payload_batch_skips_oversized_message_items() {
+        let state = NodeState::new("test");
+        let identity = state.identity();
+        let protocol = ProtocolEngine::new(crate::default_protocol_config(
+            "ws://127.0.0.1:9/ws".to_string(),
+            "node-a".to_string(),
+            32,
+            identity.public_key,
+            identity.encrypt_key,
+            identity.signer(),
+        ))
+        .expect("protocol init");
+
+        let valid = DiscoveryMessage::gossip(vec![ContactBundle {
+            peer_id: "peer-ok".to_string(),
+            ws_url: None,
+            quic_addr: Some("127.0.0.1:9300".to_string()),
+            pubkey_hex: "bb".repeat(32),
+            rpc_url: None,
+            lan_addrs: Vec::new(),
+        }]);
+        let mut items = Vec::new();
+        items.push(vec![0x55; DISCOVERY_MAX_MESSAGE_BYTES + 1]);
+        items.push(serde_json::to_vec(&valid).expect("encode valid"));
+
+        let mut payload = Vec::new();
+        ciborium::ser::into_writer(&items, &mut payload).expect("encode payload");
+
+        let handled = handle_discovery_payload(&state, &protocol, &payload).await;
+        assert_eq!(handled, Some(()));
+        assert_eq!(state.contacts().len(), 1);
+        assert!(state.contacts().iter().any(|c| c.peer_id == "peer-ok"));
     }
 }
