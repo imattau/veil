@@ -14,6 +14,7 @@ use quinn::{ClientConfig, Endpoint, ServerConfig};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use thiserror::Error;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
+use tokio::task::JoinSet;
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 
 fn alpn_protocols() -> Vec<Vec<u8>> {
@@ -37,6 +38,8 @@ fn alpn_protocols() -> Vec<Vec<u8>> {
         b"hq-29".to_vec(),
     ]
 }
+
+const QUIC_MAX_CONCURRENT_SEND_TASKS: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct QuicIdentity {
@@ -357,70 +360,28 @@ async fn run_quic_worker(
     };
     endpoint.set_default_client_config(client_cfg);
     let _ = startup_tx.send(Ok(()));
+    let mut outbound_tasks = JoinSet::new();
 
     loop {
         tokio::select! {
             _ = &mut shutdown_rx => break,
-            Some(msg) = outbound_rx.recv() => {
-                let endpoint = endpoint.clone();
-                let metrics = Arc::clone(&metrics);
-                let server_name = msg.server_name;
-                let connect_timeout = config.connect_timeout;
-                let send_timeout = config.send_timeout;
-                tokio::spawn(async move {
-                    metrics.send_attempts.fetch_add(1, Ordering::Relaxed);
-                    if debug {
-                        eprintln!("quic connecting to {}", msg.peer);
+            Some(join_result) = outbound_tasks.join_next(), if !outbound_tasks.is_empty() => {
+                if debug {
+                    if let Err(err) = join_result {
+                        eprintln!("quic send task join error: {err}");
                     }
-                    let connecting = endpoint.connect(msg.peer, &server_name);
-                    if let Ok(connecting) = connecting {
-                        let connection = tokio::time::timeout(connect_timeout, connecting).await;
-                        if let Ok(Ok(conn)) = connection {
-                            let send_task = async {
-                                let mut stream = conn.open_uni().await?;
-                                stream.write_all(&msg.bytes).await?;
-                                stream.finish()?;
-                                let _ = stream.stopped().await;
-                                Result::<(), quinn::WriteError>::Ok(())
-                            };
-                            let sent = tokio::time::timeout(send_timeout, send_task).await;
-                            if matches!(sent, Ok(Ok(()))) {
-                                metrics.send_success.fetch_add(1, Ordering::Relaxed);
-                            } else {
-                                metrics.send_errors.fetch_add(1, Ordering::Relaxed);
-                                if debug {
-                                    match sent {
-                                        Ok(Err(err)) => {
-                                            eprintln!("quic send error: {err}");
-                                        }
-                                        Err(err) => {
-                                            eprintln!("quic send timeout: {err}");
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-                        } else {
-                            metrics.send_errors.fetch_add(1, Ordering::Relaxed);
-                            if debug {
-                                match connection {
-                                    Ok(Err(err)) => {
-                                        eprintln!("quic connect error: {err}");
-                                    }
-                                    Err(err) => {
-                                        eprintln!("quic connect timeout: {err}");
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    } else if let Err(err) = connecting {
-                        metrics.send_errors.fetch_add(1, Ordering::Relaxed);
-                        if debug {
-                            eprintln!("quic connect builder error: {err}");
-                        }
-                    }
-                });
+                }
+            }
+            Some(msg) = outbound_rx.recv(), if outbound_tasks.len() < QUIC_MAX_CONCURRENT_SEND_TASKS => {
+                spawn_quic_send_task(
+                    &mut outbound_tasks,
+                    endpoint.clone(),
+                    Arc::clone(&metrics),
+                    msg,
+                    config.connect_timeout,
+                    config.send_timeout,
+                    debug,
+                );
             }
             maybe_incoming = endpoint.accept() => {
                 if let Some(incoming) = maybe_incoming {
@@ -474,6 +435,72 @@ async fn run_quic_worker(
     }
 
     running.store(false, Ordering::Relaxed);
+}
+
+fn spawn_quic_send_task(
+    outbound_tasks: &mut JoinSet<()>,
+    endpoint: Endpoint,
+    metrics: Arc<QuicAdapterMetricsInner>,
+    msg: OutboundMessage,
+    connect_timeout: Duration,
+    send_timeout: Duration,
+    debug: bool,
+) {
+    outbound_tasks.spawn(async move {
+        metrics.send_attempts.fetch_add(1, Ordering::Relaxed);
+        if debug {
+            eprintln!("quic connecting to {}", msg.peer);
+        }
+        let server_name = msg.server_name;
+        let connecting = endpoint.connect(msg.peer, &server_name);
+        if let Ok(connecting) = connecting {
+            let connection = tokio::time::timeout(connect_timeout, connecting).await;
+            if let Ok(Ok(conn)) = connection {
+                let send_task = async {
+                    let mut stream = conn.open_uni().await?;
+                    stream.write_all(&msg.bytes).await?;
+                    stream.finish()?;
+                    let _ = stream.stopped().await;
+                    Result::<(), quinn::WriteError>::Ok(())
+                };
+                let sent = tokio::time::timeout(send_timeout, send_task).await;
+                if matches!(sent, Ok(Ok(()))) {
+                    metrics.send_success.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    metrics.send_errors.fetch_add(1, Ordering::Relaxed);
+                    if debug {
+                        match sent {
+                            Ok(Err(err)) => {
+                                eprintln!("quic send error: {err}");
+                            }
+                            Err(err) => {
+                                eprintln!("quic send timeout: {err}");
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            } else {
+                metrics.send_errors.fetch_add(1, Ordering::Relaxed);
+                if debug {
+                    match connection {
+                        Ok(Err(err)) => {
+                            eprintln!("quic connect error: {err}");
+                        }
+                        Err(err) => {
+                            eprintln!("quic connect timeout: {err}");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        } else if let Err(err) = connecting {
+            metrics.send_errors.fetch_add(1, Ordering::Relaxed);
+            if debug {
+                eprintln!("quic connect builder error: {err}");
+            }
+        }
+    });
 }
 
 fn build_server_config(identity: &QuicIdentity) -> Result<ServerConfig, QuicAdapterError> {

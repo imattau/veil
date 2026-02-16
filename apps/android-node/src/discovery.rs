@@ -22,6 +22,7 @@ const DISCOVERY_MAX_PEER_ID_LEN: usize = 128;
 const DISCOVERY_MAX_BATCH_MESSAGES: usize = 64;
 const DISCOVERY_MAX_PAYLOAD_BYTES: usize = 256 * 1024;
 const DISCOVERY_MAX_MESSAGE_BYTES: usize = 64 * 1024;
+const DISCOVERY_MAX_HTTP_TARGETS: usize = 64;
 const DISCOVERY_MAX_ENDPOINT_LEN: usize = 1024;
 const DISCOVERY_MAX_LAN_ADDRS: usize = 8;
 const DISCOVERY_MAX_LAN_ADDR_LEN: usize = 256;
@@ -153,19 +154,8 @@ impl DiscoveryWorker {
 
     async fn gossip_once(&mut self) {
         let gossip_limit = bounded_gossip_contacts(self.config.max_gossip_contacts);
-        let mut all_targets = self.config.bootstrap_urls.clone();
         let contacts = self.state.contacts();
-        for contact in &contacts {
-            if let Some(rpc_url) = &contact.rpc_url {
-                all_targets.push(rpc_url.clone());
-            }
-        }
-        all_targets.sort();
-        all_targets.dedup();
-
-        // Only use http/https targets for reqwest
-        let mut http_targets = all_targets.clone();
-        http_targets.retain(|url| url.starts_with("http://") || url.starts_with("https://"));
+        let http_targets = collect_http_targets(&self.config.bootstrap_urls, &contacts);
 
         let target_count = http_targets.len();
         let contact_count = contacts.len();
@@ -658,6 +648,22 @@ fn normalize_reply_to_peer_id(value: &str) -> Option<String> {
     }
 }
 
+fn collect_http_targets(bootstrap_urls: &[String], contacts: &[ContactBundle]) -> Vec<String> {
+    let mut targets = bootstrap_urls.to_vec();
+    for contact in contacts {
+        if let Some(rpc_url) = &contact.rpc_url {
+            targets.push(rpc_url.clone());
+        }
+    }
+    targets.retain(|url| url.starts_with("http://") || url.starts_with("https://"));
+    targets.sort();
+    targets.dedup();
+    if targets.len() > DISCOVERY_MAX_HTTP_TARGETS {
+        targets.truncate(DISCOVERY_MAX_HTTP_TARGETS);
+    }
+    targets
+}
+
 fn sanitize_contact(mut contact: ContactBundle) -> Option<ContactBundle> {
     let peer_id = contact.peer_id.trim();
     if peer_id.is_empty() || peer_id.len() > DISCOVERY_MAX_PEER_ID_LEN {
@@ -1084,5 +1090,47 @@ mod tests {
         assert_eq!(handled, Some(()));
         assert_eq!(state.contacts().len(), 1);
         assert!(state.contacts().iter().any(|c| c.peer_id == "peer-ok"));
+    }
+
+    #[test]
+    fn collect_http_targets_filters_dedups_and_caps() {
+        let mut bootstrap = vec![
+            "wss://example.invalid/ws".to_string(),
+            "https://seed-a.example".to_string(),
+            "https://seed-a.example".to_string(),
+        ];
+        let mut contacts = Vec::new();
+        for i in 0..(DISCOVERY_MAX_HTTP_TARGETS + 20) {
+            contacts.push(ContactBundle {
+                peer_id: format!("peer-{i}"),
+                ws_url: None,
+                quic_addr: None,
+                pubkey_hex: format!("{:064x}", i + 1),
+                rpc_url: Some(format!("http://peer-{i}.example")),
+                lan_addrs: Vec::new(),
+            });
+        }
+        contacts.push(ContactBundle {
+            peer_id: "peer-extra".to_string(),
+            ws_url: None,
+            quic_addr: None,
+            pubkey_hex: "11".repeat(32),
+            rpc_url: Some("quic://not-http".to_string()),
+            lan_addrs: Vec::new(),
+        });
+
+        let targets = collect_http_targets(&bootstrap, &contacts);
+        assert!(targets.len() <= DISCOVERY_MAX_HTTP_TARGETS);
+        assert!(targets
+            .iter()
+            .all(|url| url.starts_with("http://") || url.starts_with("https://")));
+        let unique: std::collections::HashSet<_> = targets.iter().collect();
+        assert_eq!(unique.len(), targets.len());
+
+        bootstrap.push("http://a.example".to_string());
+        let ordered = collect_http_targets(&bootstrap, &[]);
+        let mut sorted = ordered.clone();
+        sorted.sort();
+        assert_eq!(ordered, sorted);
     }
 }
