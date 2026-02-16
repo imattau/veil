@@ -1,3 +1,4 @@
+use super::ingest_routes::queue_raw_object_payload;
 use super::*;
 use std::collections::HashSet;
 

@@ -30,6 +30,9 @@ use veil_core::ObjectRoot;
 use veil_fec::sharder::{derive_object_root, reconstruct_object_padded_with_mode};
 use veil_node::persistence::load_state_or_default;
 
+const MAX_DYNAMIC_PEER_ID_LEN: usize = 128;
+const MAX_DYNAMIC_ENDPOINT_LEN: usize = 1024;
+
 #[derive(Debug, Clone)]
 pub struct ProtocolConfig {
     pub ws_url: Option<String>,
@@ -347,27 +350,32 @@ impl ProtocolEngine {
     }
 
     pub async fn add_contact(&self, contact: &crate::api::ContactBundle) {
-        if let Some(quic_addr) = &contact.quic_addr {
+        if let Some(quic_addr) = contact
+            .quic_addr
+            .as_deref()
+            .and_then(normalize_dynamic_endpoint)
+        {
             let mut peers = self.dynamic_fast_peers.lock().await;
-            if !peers.contains(quic_addr) {
-                peers.push(quic_addr.clone());
+            if !peers.contains(&quic_addr) {
+                peers.push(quic_addr);
             }
         }
-        if let Some(ws_url) = &contact.ws_url {
+        if let Some(ws_url) = contact
+            .ws_url
+            .as_deref()
+            .and_then(normalize_dynamic_endpoint)
+        {
             let mut peers = self.dynamic_fallback_peers.lock().await;
-            if !peers.contains(ws_url) {
-                peers.push(ws_url.clone());
+            if !peers.contains(&ws_url) {
+                peers.push(ws_url);
             }
         }
-        if contact.pubkey_hex.len() == 64 {
-            if let Ok(bytes) = hex::decode(&contact.pubkey_hex) {
-                if bytes.len() == 32 {
-                    let mut key = [0u8; 32];
-                    key.copy_from_slice(&bytes);
-                    let mut map = self.dynamic_peer_map.lock().await;
-                    map.insert(contact.peer_id.clone(), key);
-                }
-            }
+        if let (Some(peer_id), Some(key)) = (
+            normalize_dynamic_peer_id(&contact.peer_id),
+            decode_peer_pubkey_hex(&contact.pubkey_hex),
+        ) {
+            let mut map = self.dynamic_peer_map.lock().await;
+            map.insert(peer_id, key);
         }
     }
 
@@ -377,24 +385,29 @@ impl ProtocolEngine {
         let mut peer_map = HashMap::<String, [u8; 32]>::new();
 
         for contact in contacts {
-            if let Some(quic_addr) = &contact.quic_addr {
-                if !quic_addr.trim().is_empty() && !fast.contains(quic_addr) {
-                    fast.push(quic_addr.clone());
+            if let Some(quic_addr) = contact
+                .quic_addr
+                .as_deref()
+                .and_then(normalize_dynamic_endpoint)
+            {
+                if !fast.contains(&quic_addr) {
+                    fast.push(quic_addr);
                 }
             }
-            if let Some(ws_url) = &contact.ws_url {
-                if !ws_url.trim().is_empty() && !fallback.contains(ws_url) {
-                    fallback.push(ws_url.clone());
+            if let Some(ws_url) = contact
+                .ws_url
+                .as_deref()
+                .and_then(normalize_dynamic_endpoint)
+            {
+                if !fallback.contains(&ws_url) {
+                    fallback.push(ws_url);
                 }
             }
-            if contact.pubkey_hex.len() == 64 {
-                if let Ok(bytes) = hex::decode(&contact.pubkey_hex) {
-                    if bytes.len() == 32 {
-                        let mut key = [0u8; 32];
-                        key.copy_from_slice(&bytes);
-                        peer_map.insert(contact.peer_id.clone(), key);
-                    }
-                }
+            if let (Some(peer_id), Some(key)) = (
+                normalize_dynamic_peer_id(&contact.peer_id),
+                decode_peer_pubkey_hex(&contact.pubkey_hex),
+            ) {
+                peer_map.insert(peer_id, key);
             }
         }
 
@@ -714,6 +727,37 @@ impl ProtocolEngine {
     }
 }
 
+fn normalize_dynamic_peer_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_DYNAMIC_PEER_ID_LEN {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn normalize_dynamic_endpoint(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_DYNAMIC_ENDPOINT_LEN {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn decode_peer_pubkey_hex(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 {
+        return None;
+    }
+    let bytes = hex::decode(value).ok()?;
+    if bytes.len() != 32 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&bytes);
+    Some(key)
+}
+
 pub fn default_protocol_config(
     ws_url: String,
     peer_id: String,
@@ -907,6 +951,7 @@ fn build_fallback_adapter(config: &ProtocolConfig) -> Result<FallbackAdapter, St
 #[cfg(test)]
 mod tests {
     use super::{default_protocol_config, erasure_mode_from_shards, ProtocolEngine};
+    use crate::api::ContactBundle;
     use veil_core::types::NAMESPACE_PUBLIC_FEED;
     use veil_core::{Epoch, Namespace, ObjectRoot};
     use veil_crypto::signing::{NostrSigner, Signer};
@@ -949,6 +994,96 @@ mod tests {
 
         let mode = erasure_mode_from_shards(&shards, ErasureCodingMode::HardenedNonSystematic);
         assert_eq!(mode, ErasureCodingMode::Systematic);
+    }
+
+    #[tokio::test]
+    async fn add_contact_normalizes_and_deduplicates_dynamic_endpoints() {
+        let signer = NostrSigner::from_secret([0x33; 32]).expect("valid secret");
+        let pubkey = signer.public_key();
+        let protocol = ProtocolEngine::new(default_protocol_config(
+            "ws://127.0.0.1:1/ws".to_string(),
+            "node-a".to_string(),
+            32,
+            pubkey,
+            [0xAA; 32],
+            signer,
+        ))
+        .expect("protocol init");
+
+        let contact = ContactBundle {
+            peer_id: " peer-a ".to_string(),
+            ws_url: Some(" ws://example.com/ws ".to_string()),
+            quic_addr: Some(" 127.0.0.1:9444 ".to_string()),
+            pubkey_hex: "11".repeat(32),
+            rpc_url: None,
+            lan_addrs: Vec::new(),
+        };
+        protocol.add_contact(&contact).await;
+
+        let duplicate = ContactBundle {
+            peer_id: "peer-a".to_string(),
+            ws_url: Some("ws://example.com/ws".to_string()),
+            quic_addr: Some("127.0.0.1:9444".to_string()),
+            pubkey_hex: "11".repeat(32),
+            rpc_url: None,
+            lan_addrs: Vec::new(),
+        };
+        protocol.add_contact(&duplicate).await;
+
+        let fast = protocol.dynamic_fast_peers.lock().await.clone();
+        let fallback = protocol.dynamic_fallback_peers.lock().await.clone();
+        let peer_map = protocol.dynamic_peer_map.lock().await.clone();
+
+        assert_eq!(fast, vec!["127.0.0.1:9444".to_string()]);
+        assert_eq!(fallback, vec!["ws://example.com/ws".to_string()]);
+        assert_eq!(peer_map.len(), 1);
+        assert!(peer_map.contains_key("peer-a"));
+    }
+
+    #[tokio::test]
+    async fn sync_contacts_filters_invalid_dynamic_entries() {
+        let signer = NostrSigner::from_secret([0x44; 32]).expect("valid secret");
+        let pubkey = signer.public_key();
+        let protocol = ProtocolEngine::new(default_protocol_config(
+            "ws://127.0.0.1:1/ws".to_string(),
+            "node-b".to_string(),
+            32,
+            pubkey,
+            [0xBB; 32],
+            signer,
+        ))
+        .expect("protocol init");
+
+        let too_long_endpoint = "x".repeat(super::MAX_DYNAMIC_ENDPOINT_LEN + 1);
+        let contacts = vec![
+            ContactBundle {
+                peer_id: " peer-a ".to_string(),
+                ws_url: Some(" ws://peer-a/ws ".to_string()),
+                quic_addr: Some(" 127.0.0.1:9555 ".to_string()),
+                pubkey_hex: "22".repeat(32),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            },
+            ContactBundle {
+                peer_id: " ".to_string(),
+                ws_url: Some(too_long_endpoint.clone()),
+                quic_addr: Some(too_long_endpoint),
+                pubkey_hex: "33".repeat(32),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            },
+        ];
+
+        protocol.sync_contacts(&contacts).await;
+
+        let fast = protocol.dynamic_fast_peers.lock().await.clone();
+        let fallback = protocol.dynamic_fallback_peers.lock().await.clone();
+        let peer_map = protocol.dynamic_peer_map.lock().await.clone();
+
+        assert_eq!(fast, vec!["127.0.0.1:9555".to_string()]);
+        assert_eq!(fallback, vec!["ws://peer-a/ws".to_string()]);
+        assert_eq!(peer_map.len(), 1);
+        assert!(peer_map.contains_key("peer-a"));
     }
 
     #[tokio::test]

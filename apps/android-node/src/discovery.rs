@@ -647,6 +647,10 @@ fn sanitize_contact(mut contact: ContactBundle) -> Option<ContactBundle> {
     Some(contact)
 }
 
+pub fn sanitize_discovery_contact(contact: ContactBundle) -> Option<ContactBundle> {
+    sanitize_contact(contact)
+}
+
 fn sanitize_endpoint(value: Option<String>) -> Option<String> {
     value.and_then(|entry| {
         let trimmed = entry.trim();

@@ -1,0 +1,12 @@
+pub(in crate::server) const MAX_RAW_PAYLOAD_BYTES: usize = 600 * 1024;
+pub(in crate::server) const MAX_UPLOAD_PAYLOAD_BYTES: usize = 12 * 1024 * 1024;
+pub(in crate::server) const MAX_BUNDLE_JSON_BYTES: usize = 600 * 1024;
+pub(in crate::server) const MAX_CHANNEL_LEN: usize = 64;
+pub(in crate::server) const MAX_NAME_LEN: usize = 64;
+pub(in crate::server) const MAX_TEXT_LEN: usize = 4096;
+pub(in crate::server) const MAX_BIO_LEN: usize = 1024;
+pub(in crate::server) const MAX_URL_LEN: usize = 1024;
+pub(in crate::server) const MAX_MIME_LEN: usize = 128;
+pub(in crate::server) const MAX_REASON_LEN: usize = 256;
+pub(in crate::server) const MAX_ACTION_LEN: usize = 32;
+pub(in crate::server) const MAX_GROUP_ID_LEN: usize = 64;
