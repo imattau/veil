@@ -25,7 +25,11 @@ class EmptyState extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 64, color: VeilTheme.textSecondary.withOpacity(0.2)),
+            Icon(
+              icon,
+              size: 64,
+              color: VeilTheme.textSecondary.withValues(alpha: 0.2),
+            ),
             const SizedBox(height: 24),
             Text(
               title,
@@ -49,10 +53,12 @@ class EmptyState extends StatelessWidget {
               ElevatedButton(
                 onPressed: onAction,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: VeilTheme.accent.withOpacity(0.1),
+                  backgroundColor: VeilTheme.accent.withValues(alpha: 0.1),
                   foregroundColor: VeilTheme.accent,
                   elevation: 0,
-                  side: BorderSide(color: VeilTheme.accent.withOpacity(0.5)),
+                  side: BorderSide(
+                    color: VeilTheme.accent.withValues(alpha: 0.5),
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(20),
                   ),

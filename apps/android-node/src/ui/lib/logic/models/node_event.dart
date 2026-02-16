@@ -49,8 +49,9 @@ class NodeEvent {
 
   // AppPreferences specific
   String? get appId => isAppPreferences ? data['app_id'] as String? : null;
-  Map<String, dynamic> get preferencesJson =>
-      isAppPreferences ? (data['settings_json'] as Map<String, dynamic>? ?? {}) : {};
+  Map<String, dynamic> get preferencesJson => isAppPreferences
+      ? (data['settings_json'] as Map<String, dynamic>? ?? {})
+      : {};
 
   // Post specific
   String? get postText => isPost ? data['text'] as String? : null;

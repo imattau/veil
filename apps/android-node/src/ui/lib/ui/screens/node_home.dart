@@ -23,6 +23,9 @@ class NodeHome extends StatefulWidget {
 class _NodeHomeState extends State<NodeHome> {
   final NodeService _service = NodeService();
   Timer? _poller;
+  String? _lastShownErrorKey;
+  DateTime? _lastShownErrorAt;
+  static const Duration _errorToastCooldown = Duration(seconds: 20);
 
   @override
   void initState() {
@@ -56,13 +59,19 @@ class _NodeHomeState extends State<NodeHome> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text('Public Key:'),
-            SelectableText(result['public_key_hex'],
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+            SelectableText(
+              result['public_key_hex'],
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
             const SizedBox(height: 12),
-            const Text('Secret Key (KEEP PRIVATE!):',
-                style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
-            SelectableText(result['secret_key_hex'],
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
+            const Text(
+              'Secret Key (KEEP PRIVATE!):',
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+            ),
+            SelectableText(
+              result['secret_key_hex'],
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+            ),
           ],
         ),
         actions: [
@@ -113,10 +122,13 @@ class _NodeHomeState extends State<NodeHome> {
       builder: (context, _) {
         final error = _service.state.lastError;
         if (error != null && error.isNotEmpty) {
+          final shouldShow = _shouldShowErrorToast(error);
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(error)),
-            );
+            if (shouldShow && mounted) {
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(SnackBar(content: Text(error)));
+            }
             _service.clearError();
           });
         }
@@ -134,6 +146,7 @@ class _NodeHomeState extends State<NodeHome> {
                 const SizedBox(height: 16),
                 ServiceControls(
                   busy: _service.state.busy,
+                  running: _service.state.running,
                   onStart: _service.start,
                   onStop: _service.stop,
                   onRefresh: _service.refresh,
@@ -153,10 +166,8 @@ class _NodeHomeState extends State<NodeHome> {
                 const SizedBox(height: 16),
                 PublishCard(
                   busy: _service.state.busy,
-                  onPublish: (payload) => _service.publishRaw(
-                    payload: payload,
-                    namespace: 32,
-                  ),
+                  onPublish: (payload) =>
+                      _service.publishRaw(payload: payload, namespace: 32),
                 ),
                 const SizedBox(height: 16),
                 PolicyCard(
@@ -185,5 +196,28 @@ class _NodeHomeState extends State<NodeHome> {
         );
       },
     );
+  }
+
+  bool _shouldShowErrorToast(String message) {
+    final now = DateTime.now();
+    final key = _errorToastKey(message);
+    if (_lastShownErrorKey == key &&
+        _lastShownErrorAt != null &&
+        now.difference(_lastShownErrorAt!) < _errorToastCooldown) {
+      return false;
+    }
+    _lastShownErrorKey = key;
+    _lastShownErrorAt = now;
+    return true;
+  }
+
+  String _errorToastKey(String message) {
+    if (message.startsWith('Publish failed')) return 'publish_failed';
+    if (message.startsWith('Publish dropped')) return 'publish_dropped';
+    if (message.startsWith('Cannot reach node')) return 'cannot_reach_node';
+    final normalized = message
+        .replaceAll(RegExp(r'\(attempt \d+\)'), '(attempt)')
+        .replaceAll(RegExp(r'retry in \d+ms'), 'retry in Xms');
+    return normalized;
   }
 }

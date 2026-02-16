@@ -127,6 +127,7 @@ class NodeForegroundService : Service() {
             env["VEIL_NODE_WS_PEERS"] = "wss://veilnode.3nostr.com/ws"
             env["VEIL_NODE_FAST_PEERS"] = "quic://veilnode.3nostr.com:5000"
             env["VEIL_NODE_TOKEN"] = token
+            env["VEIL_NODE_ALLOW_IDENTITY_EXPORT"] = "1"
             env["VEIL_NODE_STATE_KEY_HEX"] = stateKeyHex
             env["VEIL_DISCOVERY_BOOTSTRAP"] = "quic://veilnode.3nostr.com:5000,wss://veilnode.3nostr.com/ws"
             env["VEIL_LAN_DISCOVERY"] = "1"

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
@@ -26,15 +25,16 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
     try {
       final uri = Uri.parse(url);
       final response = await http.get(uri).timeout(const Duration(seconds: 4));
-      
+
       if (response.statusCode >= 200 && response.statusCode < 300) {
         // Simple regex-based parsing to avoid heavy dependencies
         final html = response.body;
-        
-        String? title = _extractMeta(html, 'og:title') ?? 
-                       _extractTag(html, 'title');
-        String? description = _extractMeta(html, 'og:description') ?? 
-                             _extractMeta(html, 'description');
+
+        String? title =
+            _extractMeta(html, 'og:title') ?? _extractTag(html, 'title');
+        String? description =
+            _extractMeta(html, 'og:description') ??
+            _extractMeta(html, 'description');
         String? image = _extractMeta(html, 'og:image');
 
         if (title == null && description == null) return null;
@@ -100,7 +100,7 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
             decoration: BoxDecoration(
               color: VeilTheme.surface,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withOpacity(0.1)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -111,7 +111,8 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
                     height: 160,
                     width: double.infinity,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    errorBuilder: (context, error, stackTrace) =>
+                        const SizedBox.shrink(),
                   ),
                 Padding(
                   padding: const EdgeInsets.all(12),

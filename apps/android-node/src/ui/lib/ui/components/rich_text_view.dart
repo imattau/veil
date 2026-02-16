@@ -1,9 +1,10 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+
 import '../../logic/social_controller.dart';
-import '../theme/veil_theme.dart';
 import '../screens/profile_view.dart';
+import '../theme/veil_theme.dart';
 
 class RichTextView extends StatelessWidget {
   final String text;
@@ -52,9 +53,9 @@ class RichTextView extends StatelessWidget {
                 final channel = token.substring(1);
                 await controller.nodeService.subscribeTag(channel);
                 if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Joined #$channel')),
-                  );
+                  ScaffoldMessenger.of(
+                    context,
+                  ).showSnackBar(SnackBar(content: Text('Joined #$channel')));
                 }
               },
           ),

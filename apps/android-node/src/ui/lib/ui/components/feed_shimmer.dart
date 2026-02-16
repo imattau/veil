@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../theme/veil_theme.dart';
 
 class FeedShimmer extends StatefulWidget {
   const FeedShimmer({super.key});
@@ -64,8 +63,7 @@ class _ShimmerPost extends StatelessWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _ShimmerBox(
-                        width: 100, height: 12, controller: controller),
+                    _ShimmerBox(width: 100, height: 12, controller: controller),
                     const SizedBox(height: 6),
                     _ShimmerBox(width: 60, height: 10, controller: controller),
                   ],
@@ -74,10 +72,16 @@ class _ShimmerPost extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             _ShimmerBox(
-                width: double.infinity, height: 14, controller: controller),
+              width: double.infinity,
+              height: 14,
+              controller: controller,
+            ),
             const SizedBox(height: 8),
             _ShimmerBox(
-                width: double.infinity, height: 14, controller: controller),
+              width: double.infinity,
+              height: 14,
+              controller: controller,
+            ),
             const SizedBox(height: 8),
             _ShimmerBox(width: 200, height: 14, controller: controller),
           ],
@@ -116,11 +120,7 @@ class _ShimmerBox extends StatelessWidget {
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: const [
-                Colors.white10,
-                Colors.white24,
-                Colors.white10,
-              ],
+              colors: const [Colors.white10, Colors.white24, Colors.white10],
               stops: [
                 (controller.value - 0.3).clamp(0.0, 1.0),
                 controller.value.clamp(0.0, 1.0),

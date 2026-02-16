@@ -169,10 +169,10 @@ fn run() -> Result<(), String> {
         free_udp_addr().map_err(|e| format!("failed to allocate receiver UDP port: {e}"))?;
 
     let mut sender_cfg = QuicAdapterConfig::new(sender_addr, "localhost", identity_sender.clone());
-    sender_cfg.trusted_peer_certs_der = vec![identity_receiver.cert_der.clone()];
+    sender_cfg.trusted_peer_certs_der = vec![identity_receiver.cert_chain_der[0].clone()];
     let mut receiver_cfg =
         QuicAdapterConfig::new(receiver_addr, "localhost", identity_receiver.clone());
-    receiver_cfg.trusted_peer_certs_der = vec![identity_sender.cert_der.clone()];
+    receiver_cfg.trusted_peer_certs_der = vec![identity_sender.cert_chain_der[0].clone()];
 
     let mut sender =
         QuicAdapter::connect(sender_cfg).map_err(|e| format!("sender setup failed: {e}"))?;

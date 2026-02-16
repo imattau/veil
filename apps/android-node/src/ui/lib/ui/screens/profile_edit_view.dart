@@ -28,6 +28,8 @@ class _ProfileEditViewState extends State<ProfileEditView> {
   bool _isSaving = false;
   final ImagePicker _picker = ImagePicker();
 
+  bool get _serviceReady => widget.service.state.running;
+
   @override
   void initState() {
     super.initState();
@@ -40,11 +42,15 @@ class _ProfileEditViewState extends State<ProfileEditView> {
   }
 
   Future<void> _pickImage() async {
+    if (!_serviceReady) {
+      _showNotReadyMessage('upload an avatar');
+      return;
+    }
     final image = await _picker.pickImage(
       source: ImageSource.gallery,
-      maxWidth: 512,
-      maxHeight: 512,
-      imageQuality: 80,
+      maxWidth: 1024,
+      maxHeight: 1024,
+      imageQuality: 85,
     );
     if (image != null) {
       final bytes = await image.readAsBytes();
@@ -55,6 +61,10 @@ class _ProfileEditViewState extends State<ProfileEditView> {
   }
 
   Future<void> _handleSave() async {
+    if (!_serviceReady) {
+      _showNotReadyMessage('save your profile');
+      return;
+    }
     final name = _nameController.text.trim();
     final bio = _bioController.text.trim();
     final ln = _lnController.text.trim();
@@ -95,6 +105,13 @@ class _ProfileEditViewState extends State<ProfileEditView> {
     }
   }
 
+  void _showNotReadyMessage(String action) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Node is still starting; cannot $action yet.')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -102,7 +119,7 @@ class _ProfileEditViewState extends State<ProfileEditView> {
         title: const Text('Edit Profile'),
         actions: [
           TextButton(
-            onPressed: _isSaving ? null : _handleSave,
+            onPressed: _isSaving || !_serviceReady ? null : _handleSave,
             child: _isSaving
                 ? const SizedBox(
                     width: 20,
@@ -132,15 +149,19 @@ class _ProfileEditViewState extends State<ProfileEditView> {
                     backgroundImage: _selectedImageBytes != null
                         ? MemoryImage(_selectedImageBytes!)
                         : (_avatarMediaRoot != null &&
-                                widget.controller.imageCache
-                                    .containsKey(_avatarMediaRoot))
-                            ? MemoryImage(widget.controller
-                                .imageCache[_avatarMediaRoot!]!)
-                            : null,
-                    child: _selectedImageBytes == null &&
+                              widget.controller.imageCache.containsKey(
+                                _avatarMediaRoot,
+                              ))
+                        ? MemoryImage(
+                            widget.controller.imageCache[_avatarMediaRoot!]!,
+                          )
+                        : null,
+                    child:
+                        _selectedImageBytes == null &&
                             (_avatarMediaRoot == null ||
-                                !widget.controller.imageCache
-                                    .containsKey(_avatarMediaRoot))
+                                !widget.controller.imageCache.containsKey(
+                                  _avatarMediaRoot,
+                                ))
                         ? const Icon(
                             Icons.person,
                             size: 50,

@@ -38,3 +38,4 @@ apps/android-node/src/ui/android/app/src/main/assets/veil_node_*
 apps/veil-vps-node/.env
 data/
 target/
+/skills/

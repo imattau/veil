@@ -51,7 +51,7 @@ fn ffi_fetches_peer_cert_from_quic_server() {
         .to_string();
     unsafe { veil_quic_free_string(cert_ptr) };
 
-    assert_eq!(cert_hex, hex_encode(&identity.cert_der));
+    assert_eq!(cert_hex, hex_encode(&identity.cert_chain_der[0]));
 }
 
 #[test]

@@ -44,13 +44,8 @@ impl SettingsStore {
                 }
             }
         }
-        let conn = Connection::open(path).map_err(|e| {
-            format!(
-                "open settings db at {}: {}",
-                path.display(),
-                e
-            )
-        })?;
+        let conn = Connection::open(path)
+            .map_err(|e| format!("open settings db at {}: {}", path.display(), e))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;

@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:veil_social/logic/models/node_event.dart';
 import 'package:veil_social/logic/node_service.dart';
 
 void main() {
@@ -21,7 +20,7 @@ void main() {
           'author_pubkey_hex': 'my_pubkey',
           'display_name': 'New Name',
           'bio': 'My Bio',
-        }
+        },
       });
 
       final profile = service.profiles['my_pubkey'];
@@ -41,7 +40,7 @@ void main() {
           'kind': 'profile',
           'author_pubkey_hex': 'user1',
           'display_name': 'Old Name',
-        }
+        },
       });
 
       // Inject a newer profile version
@@ -52,7 +51,7 @@ void main() {
           'kind': 'profile',
           'author_pubkey_hex': 'user1',
           'display_name': 'New Name',
-        }
+        },
       });
 
       expect(service.profiles['user1']!.displayName, 'New Name');
@@ -65,7 +64,7 @@ void main() {
           'kind': 'profile',
           'author_pubkey_hex': 'user1',
           'display_name': 'Stale Name',
-        }
+        },
       });
 
       expect(service.profiles['user1']!.displayName, 'New Name');

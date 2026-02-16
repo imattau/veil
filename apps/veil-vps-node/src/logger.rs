@@ -57,7 +57,9 @@ where
             .as_millis() as u64;
 
         let mut message = String::new();
-        let mut visitor = MessageVisitor { message: &mut message };
+        let mut visitor = MessageVisitor {
+            message: &mut message,
+        };
         event.record(&mut visitor);
 
         let entry = LogEntry {

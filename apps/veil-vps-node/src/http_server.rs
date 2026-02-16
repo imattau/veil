@@ -209,9 +209,15 @@ async fn admin_login(
 
     // Auto-trust the admin pubkey in the runtime policy
     {
-        let mut config = state.runtime_config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = state
+            .runtime_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         config.wot_policy.trust(login_pubkey);
-        tracing::info!("admin auth: auto-trusted pubkey {}", hex::encode(login_pubkey));
+        tracing::info!(
+            "admin auth: auto-trusted pubkey {}",
+            hex::encode(login_pubkey)
+        );
     }
 
     let mut raw = [0_u8; 32];
@@ -403,9 +409,13 @@ async fn admin_settings_set(
         .and_then(|store| store.set(&key, payload.value.trim()))
     {
         Ok(()) => {
-            tracing::info!("admin config: set setting '{}' to '{}'", key, payload.value.trim());
+            tracing::info!(
+                "admin config: set setting '{}' to '{}'",
+                key,
+                payload.value.trim()
+            );
             (StatusCode::OK, Json(json!({"ok": true, "key": key})))
-        },
+        }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"ok": false, "error": err})),
@@ -439,7 +449,7 @@ async fn admin_settings_delete(
                 StatusCode::OK,
                 Json(json!({"ok": true, "deleted": true, "key": key})),
             )
-        },
+        }
         Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(json!({"ok": false, "error": "setting not found"})),
@@ -475,16 +485,20 @@ async fn discovery_announce(
     State(state): State<VpsAppState>,
     Json(request): Json<veil_android_node::DiscoveryAnnounceRequest>,
 ) -> impl IntoResponse {
-    let mut table = state.discovery_table.lock().unwrap_or_else(|e| e.into_inner());
+    let mut table = state
+        .discovery_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     table.insert(request.contact.peer_id.clone(), request.contact.clone());
-    
+
     // Simple logic: return some other known contacts
-    let neighbors: Vec<_> = table.values()
+    let neighbors: Vec<_> = table
+        .values()
         .filter(|c| c.peer_id != request.contact.peer_id)
         .take(16)
         .cloned()
         .collect();
-        
+
     Json(veil_android_node::DiscoveryAnnounceResponse {
         accepted: true,
         neighbors,
@@ -495,15 +509,25 @@ async fn discovery_lookup(
     State(state): State<VpsAppState>,
     Json(request): Json<veil_android_node::DiscoveryLookupRequest>,
 ) -> impl IntoResponse {
-    let table = state.discovery_table.lock().unwrap_or_else(|e| e.into_inner());
+    let table = state
+        .discovery_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let contacts = if let Some(peer_id) = request.peer_id {
-        table.get(&peer_id).map(|c| vec![c.clone()]).unwrap_or_default()
+        table
+            .get(&peer_id)
+            .map(|c| vec![c.clone()])
+            .unwrap_or_default()
     } else if let Some(pubkey_hex) = request.pubkey_hex {
-        table.values().filter(|c| c.pubkey_hex == pubkey_hex).cloned().collect()
+        table
+            .values()
+            .filter(|c| c.pubkey_hex == pubkey_hex)
+            .cloned()
+            .collect()
     } else {
         Vec::new()
     };
-    
+
     Json(veil_android_node::DiscoveryLookupResponse { contacts })
 }
 
@@ -511,11 +535,14 @@ async fn discovery_gossip(
     State(state): State<VpsAppState>,
     Json(request): Json<veil_android_node::DiscoveryGossipRequest>,
 ) -> impl IntoResponse {
-    let mut table = state.discovery_table.lock().unwrap_or_else(|e| e.into_inner());
+    let mut table = state
+        .discovery_table
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     for contact in request.contacts {
         table.insert(contact.peer_id.clone(), contact);
     }
-    
+
     // Sample some contacts to return
     let contacts: Vec<_> = table.values().take(24).cloned().collect();
     Json(veil_android_node::DiscoveryGossipResponse { contacts })
@@ -523,11 +550,17 @@ async fn discovery_gossip(
 
 // --- Admin Policy Handlers ---
 
-async fn admin_policy_summary(State(state): State<VpsAppState>, headers: HeaderMap) -> impl IntoResponse {
+async fn admin_policy_summary(
+    State(state): State<VpsAppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     if !admin_authenticated(&headers, &state.admin_auth) {
         return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
     }
-    let config = state.runtime_config.lock().unwrap_or_else(|e| e.into_inner());
+    let config = state
+        .runtime_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let summary = config.wot_policy.summary();
     Json(summary).into_response()
 }
@@ -540,20 +573,26 @@ async fn admin_policy_config_set(
     if !admin_authenticated(&headers, &state.admin_auth) {
         return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
     }
-    let mut config = state.runtime_config.lock().unwrap_or_else(|e| e.into_inner());
+    let mut config = state
+        .runtime_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     config.wot_policy.update_config(payload);
     (StatusCode::OK, Json(json!({"ok": true}))).into_response()
 }
 
 async fn admin_policy_trust(
-    State(state): State<VpsAppState>, 
+    State(state): State<VpsAppState>,
     headers: HeaderMap,
     Json(payload): Json<veil_android_node::PolicySetRequest>,
 ) -> impl IntoResponse {
     if !admin_authenticated(&headers, &state.admin_auth) {
         return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
     }
-    let mut config = state.runtime_config.lock().unwrap_or_else(|e| e.into_inner());
+    let mut config = state
+        .runtime_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
         if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
             config.wot_policy.trust(pubkey);
@@ -564,14 +603,17 @@ async fn admin_policy_trust(
 }
 
 async fn admin_policy_untrust(
-    State(state): State<VpsAppState>, 
+    State(state): State<VpsAppState>,
     headers: HeaderMap,
     Json(payload): Json<veil_android_node::PolicySetRequest>,
 ) -> impl IntoResponse {
     if !admin_authenticated(&headers, &state.admin_auth) {
         return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
     }
-    let mut config = state.runtime_config.lock().unwrap_or_else(|e| e.into_inner());
+    let mut config = state
+        .runtime_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
         if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
             config.wot_policy.untrust(pubkey);
@@ -582,14 +624,17 @@ async fn admin_policy_untrust(
 }
 
 async fn admin_policy_mute(
-    State(state): State<VpsAppState>, 
+    State(state): State<VpsAppState>,
     headers: HeaderMap,
     Json(payload): Json<veil_android_node::PolicySetRequest>,
 ) -> impl IntoResponse {
     if !admin_authenticated(&headers, &state.admin_auth) {
         return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
     }
-    let mut config = state.runtime_config.lock().unwrap_or_else(|e| e.into_inner());
+    let mut config = state
+        .runtime_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
         if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
             config.wot_policy.mute(pubkey);
@@ -600,14 +645,17 @@ async fn admin_policy_mute(
 }
 
 async fn admin_policy_unmute(
-    State(state): State<VpsAppState>, 
+    State(state): State<VpsAppState>,
     headers: HeaderMap,
     Json(payload): Json<veil_android_node::PolicySetRequest>,
 ) -> impl IntoResponse {
     if !admin_authenticated(&headers, &state.admin_auth) {
         return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
     }
-    let mut config = state.runtime_config.lock().unwrap_or_else(|e| e.into_inner());
+    let mut config = state
+        .runtime_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
         if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
             config.wot_policy.unmute(pubkey);
@@ -618,14 +666,17 @@ async fn admin_policy_unmute(
 }
 
 async fn admin_policy_block(
-    State(state): State<VpsAppState>, 
+    State(state): State<VpsAppState>,
     headers: HeaderMap,
     Json(payload): Json<veil_android_node::PolicySetRequest>,
 ) -> impl IntoResponse {
     if !admin_authenticated(&headers, &state.admin_auth) {
         return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
     }
-    let mut config = state.runtime_config.lock().unwrap_or_else(|e| e.into_inner());
+    let mut config = state
+        .runtime_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
         if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
             config.wot_policy.block(pubkey);
@@ -636,14 +687,17 @@ async fn admin_policy_block(
 }
 
 async fn admin_policy_unblock(
-    State(state): State<VpsAppState>, 
+    State(state): State<VpsAppState>,
     headers: HeaderMap,
     Json(payload): Json<veil_android_node::PolicySetRequest>,
 ) -> impl IntoResponse {
     if !admin_authenticated(&headers, &state.admin_auth) {
         return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
     }
-    let mut config = state.runtime_config.lock().unwrap_or_else(|e| e.into_inner());
+    let mut config = state
+        .runtime_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
         if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
             config.wot_policy.unblock(pubkey);

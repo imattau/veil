@@ -11,7 +11,8 @@ class NodeStatusCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = state.statusPayload;
     final nodeId = status['node_id'] as String?;
-    final version = status['version'] as String? ??
+    final version =
+        status['version'] as String? ??
         state.healthPayload['version'] as String?;
     final lastUpdated = state.lastUpdated != null
         ? state.lastUpdated!.toLocal().toIso8601String()
@@ -26,10 +27,7 @@ class NodeStatusCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Node Status',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text('Node Status', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             _StatusRow(label: 'Running', value: state.running ? 'Yes' : 'No'),
             _StatusRow(label: 'Node ID', value: nodeId ?? 'Unknown'),
@@ -42,18 +40,23 @@ class NodeStatusCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             if (state.subscriptions.isEmpty)
-              const Text('None', style: TextStyle(color: Colors.grey, fontSize: 13))
+              const Text(
+                'None',
+                style: TextStyle(color: Colors.grey, fontSize: 13),
+              )
             else
               Wrap(
                 spacing: 6,
                 runSpacing: 0,
                 children: state.subscriptions
-                    .map((s) => Chip(
-                          label: Text(s, style: const TextStyle(fontSize: 11)),
-                          visualDensity: VisualDensity.compact,
-                          padding: EdgeInsets.zero,
-                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ))
+                    .map(
+                      (s) => Chip(
+                        label: Text(s, style: const TextStyle(fontSize: 11)),
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    )
                     .toList(),
               ),
             if (state.lastError != null) ...[

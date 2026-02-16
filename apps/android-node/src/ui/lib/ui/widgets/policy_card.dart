@@ -73,11 +73,17 @@ class _PolicyCardState extends State<PolicyCard> {
                     ),
                     items: const [
                       DropdownMenuItem(value: 'trust', child: Text('Trust')),
-                      DropdownMenuItem(value: 'untrust', child: Text('Untrust')),
+                      DropdownMenuItem(
+                        value: 'untrust',
+                        child: Text('Untrust'),
+                      ),
                       DropdownMenuItem(value: 'mute', child: Text('Mute')),
                       DropdownMenuItem(value: 'unmute', child: Text('Unmute')),
                       DropdownMenuItem(value: 'block', child: Text('Block')),
-                      DropdownMenuItem(value: 'unblock', child: Text('Unblock')),
+                      DropdownMenuItem(
+                        value: 'unblock',
+                        child: Text('Unblock'),
+                      ),
                     ],
                     onChanged: widget.busy
                         ? null

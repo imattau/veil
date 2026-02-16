@@ -22,10 +22,7 @@ class LaneStatusCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Lane Health',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text('Lane Health', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             _LaneRow(
               label: 'QUIC',
@@ -106,7 +103,9 @@ class _LaneRow extends StatelessWidget {
                 if (error != null && error!.isNotEmpty)
                   Text(
                     error!,
-                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                   ),
               ],
             ),

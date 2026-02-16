@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../../logic/models/node_event.dart';
 import '../../logic/social_controller.dart';
 import '../theme/veil_theme.dart';
@@ -39,9 +40,9 @@ class PollWidget extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.02),
+        color: Colors.white.withValues(alpha: 0.02),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -52,8 +53,9 @@ class PollWidget extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           ...List.generate(options.length, (index) {
-            final optionVotes =
-                votes.where((v) => v.data['option_index'] == index).length;
+            final optionVotes = votes
+                .where((v) => v.data['option_index'] == index)
+                .length;
             final percent = totalVotes == 0 ? 0.0 : optionVotes / totalVotes;
             final isMyVote = hasVoted && myVote.data['option_index'] == index;
 
@@ -74,7 +76,7 @@ class PollWidget extends StatelessWidget {
                     Container(
                       height: 36,
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.05),
+                        color: Colors.white.withValues(alpha: 0.05),
                         borderRadius: BorderRadius.circular(8),
                         border: isMyVote
                             ? Border.all(color: VeilTheme.accent, width: 1)
@@ -87,8 +89,8 @@ class PollWidget extends StatelessWidget {
                         height: 36,
                         decoration: BoxDecoration(
                           color: isMyVote
-                              ? VeilTheme.accent.withOpacity(0.4)
-                              : VeilTheme.accent.withOpacity(0.2),
+                              ? VeilTheme.accent.withValues(alpha: 0.4)
+                              : VeilTheme.accent.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(8),
                         ),
                       ),
@@ -112,8 +114,11 @@ class PollWidget extends StatelessWidget {
                               if (isMyVote)
                                 const Padding(
                                   padding: EdgeInsets.only(left: 8),
-                                  child: Icon(Icons.check_circle,
-                                      size: 14, color: VeilTheme.accent),
+                                  child: Icon(
+                                    Icons.check_circle,
+                                    size: 14,
+                                    color: VeilTheme.accent,
+                                  ),
                                 ),
                             ],
                           ),

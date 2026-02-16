@@ -21,7 +21,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn build_server_config(identity: &QuicIdentity) -> Result<ServerConfig, String> {
-    let cert = CertificateDer::from(identity.cert_der.clone());
+    let cert = CertificateDer::from(identity.cert_chain_der[0].clone());
     let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(identity.key_der.clone()));
     ServerConfig::with_single_cert(vec![cert], key).map_err(|_| "invalid identity".to_string())
 }
@@ -93,7 +93,11 @@ async fn main() -> Result<(), String> {
 
     let peers: Arc<Mutex<Vec<SocketAddr>>> = Arc::new(Mutex::new(Vec::new()));
 
-    println!("READY {} {}", bind_addr, hex_encode(&identity.cert_der));
+    println!(
+        "READY {} {}",
+        bind_addr,
+        hex_encode(&identity.cert_chain_der[0])
+    );
     let _ = io::stdout().flush();
 
     let debug = std::env::var_os("VEIL_QUIC_DEBUG").is_some();

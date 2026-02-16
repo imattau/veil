@@ -252,7 +252,11 @@ impl ProtocolEngine {
         runtime.state.subscriptions.contains(&tag)
     }
 
-    pub async fn sync_subscriptions(&self, channels: &[String], contacts: &[crate::api::ContactBundle]) {
+    pub async fn sync_subscriptions(
+        &self,
+        channels: &[String],
+        contacts: &[crate::api::ContactBundle],
+    ) {
         let mut tags = Vec::new();
         let my_pubkey = *self.identity_pubkey.lock().await;
 
@@ -272,11 +276,19 @@ impl ProtocolEngine {
             }
 
             // Otherwise treat as channel name
-            tags.push(veil_core::tags::derive_channel_feed_tag(&my_pubkey, self.config.namespace, channel));
+            tags.push(veil_core::tags::derive_channel_feed_tag(
+                &my_pubkey,
+                self.config.namespace,
+                channel,
+            ));
             for contact in contacts {
                 if let Ok(bytes) = hex::decode(&contact.pubkey_hex) {
                     if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
-                        tags.push(veil_core::tags::derive_channel_feed_tag(&pubkey, self.config.namespace, channel));
+                        tags.push(veil_core::tags::derive_channel_feed_tag(
+                            &pubkey,
+                            self.config.namespace,
+                            channel,
+                        ));
                     }
                 }
             }
@@ -451,21 +463,24 @@ impl ProtocolEngine {
                     {
                         if let Ok((object, _)) = decode_object_cbor_prefix(&reconstructed) {
                             let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
-                            
+
                             // Try primary encrypt_key, fallback to public zero-key
-                            let decrypted_payload = cipher.decrypt(
-                                &runtime.encrypt_key,
-                                object.nonce,
-                                &aad,
-                                &object.ciphertext,
-                            ).or_else(|_| {
-                                cipher.decrypt(
-                                    &[0u8; 32],
+                            let decrypted_payload = cipher
+                                .decrypt(
+                                    &runtime.encrypt_key,
                                     object.nonce,
                                     &aad,
                                     &object.ciphertext,
                                 )
-                            }).ok();
+                                .or_else(|_| {
+                                    cipher.decrypt(
+                                        &[0u8; 32],
+                                        object.nonce,
+                                        &aad,
+                                        &object.ciphertext,
+                                    )
+                                })
+                                .ok();
 
                             if let Some(decrypted_payload) = decrypted_payload {
                                 // Direct match on wire_root?
@@ -538,24 +553,14 @@ impl ProtocolEngine {
             };
 
             let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
-            
-            // Try primary encrypt_key, fallback to public zero-key
-            let decrypted_payload = cipher.decrypt(
-                &runtime.encrypt_key,
-                object.nonce,
-                &aad,
-                &object.ciphertext,
-            ).or_else(|_| {
-                cipher.decrypt(
-                    &[0u8; 32],
-                    object.nonce,
-                    &aad,
-                    &object.ciphertext,
-                )
-            }).ok();
 
-            if let Some(decrypted_payload) = decrypted_payload
-            {
+            // Try primary encrypt_key, fallback to public zero-key
+            let decrypted_payload = cipher
+                .decrypt(&runtime.encrypt_key, object.nonce, &aad, &object.ciphertext)
+                .or_else(|_| cipher.decrypt(&[0u8; 32], object.nonce, &aad, &object.ciphertext))
+                .ok();
+
+            if let Some(decrypted_payload) = decrypted_payload {
                 // 2a. Match on ObjectV1.object_root (the payload hash)
                 if object.object_root == root {
                     // It might still be a batch! If so, we need to check items.

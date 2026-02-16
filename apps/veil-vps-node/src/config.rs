@@ -33,11 +33,15 @@ pub struct VpsConfig {
     pub core_tags: Vec<String>,
     #[serde(deserialize_with = "deserialize_list")]
     pub tor_peers: Vec<String>,
+    #[allow(dead_code)]
     pub ble_enabled: bool,
     #[serde(deserialize_with = "deserialize_list")]
+    #[allow(dead_code)]
     pub ble_peers: Vec<String>,
     #[serde(deserialize_with = "deserialize_list")]
+    #[allow(dead_code)]
     pub ble_allowlist: Vec<String>,
+    #[allow(dead_code)]
     pub ble_mtu: usize,
     pub adaptive_lane_scoring: bool,
     pub probabilistic_forwarding: bool,
@@ -85,7 +89,7 @@ where
             E: de::Error,
         {
             Ok(value
-                .split(|c| c == ',' || c == ';')
+                .split([',', ';'])
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect())
@@ -368,7 +372,7 @@ fast_peers = ["file-peer1","file-peer2"]
 
         for (input, expected) in cases {
             let actual: Vec<String> = input
-                .split(|c| c == ',' || c == ';')
+                .split([',', ';'])
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();

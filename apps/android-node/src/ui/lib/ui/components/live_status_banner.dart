@@ -25,7 +25,9 @@ class LiveStatusBanner extends StatelessWidget {
           final emoji = status.statusEmoji ?? '💭';
           final profile = controller.nodeService.profiles[pubkey];
           final avatarRoot = profile?.avatarMediaRoot;
-          final avatarBytes = avatarRoot != null ? controller.imageCache[avatarRoot] : null;
+          final avatarBytes = avatarRoot != null
+              ? controller.imageCache[avatarRoot]
+              : null;
 
           return Container(
             width: 70,
@@ -37,10 +39,16 @@ class LiveStatusBanner extends StatelessWidget {
                     CircleAvatar(
                       radius: 24,
                       backgroundColor: VeilTheme.accentSubtle,
-                      backgroundImage: avatarBytes != null ? MemoryImage(avatarBytes) : null,
-                      child: avatarBytes == null 
-                        ? Text(displayName.isEmpty ? '?' : displayName.substring(0, 1).toUpperCase())
-                        : null,
+                      backgroundImage: avatarBytes != null
+                          ? MemoryImage(avatarBytes)
+                          : null,
+                      child: avatarBytes == null
+                          ? Text(
+                              displayName.isEmpty
+                                  ? '?'
+                                  : displayName.substring(0, 1).toUpperCase(),
+                            )
+                          : null,
                     ),
                     Positioned(
                       right: 0,
@@ -51,7 +59,10 @@ class LiveStatusBanner extends StatelessWidget {
                           color: VeilTheme.surface,
                           shape: BoxShape.circle,
                         ),
-                        child: Text(emoji, style: const TextStyle(fontSize: 12)),
+                        child: Text(
+                          emoji,
+                          style: const TextStyle(fontSize: 12),
+                        ),
                       ),
                     ),
                   ],

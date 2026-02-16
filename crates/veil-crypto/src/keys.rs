@@ -1,7 +1,7 @@
 use veil_core::hash::blake3_32;
 
 /// Derives a deterministic 32-byte symmetric encryption key from a secret key.
-/// 
+///
 /// This ensures that nodes sharing the same identity (e.g. VPS and mobile)
 /// derive the same encryption key for their protocol runtimes.
 pub fn derive_encrypt_key(secret_key: &[u8; 32]) -> [u8; 32] {

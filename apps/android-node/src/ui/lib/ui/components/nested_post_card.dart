@@ -26,9 +26,9 @@ class NestedPostCard extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.02),
+          color: Colors.white.withValues(alpha: 0.02),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white.withOpacity(0.05)),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
         ),
         child: const Text(
           'Post not found or still syncing...',
@@ -43,9 +43,9 @@ class NestedPostCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.02),
+        color: Colors.white.withValues(alpha: 0.02),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -54,7 +54,7 @@ class NestedPostCard extends StatelessWidget {
             children: [
               CircleAvatar(
                 radius: 10,
-                backgroundColor: VeilTheme.accent.withOpacity(0.2),
+                backgroundColor: VeilTheme.accent.withValues(alpha: 0.2),
                 child: Text(
                   displayName.substring(0, 1).toUpperCase(),
                   style: const TextStyle(fontSize: 8),
@@ -63,12 +63,18 @@ class NestedPostCard extends StatelessWidget {
               const SizedBox(width: 8),
               Text(
                 displayName,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
               ),
               const SizedBox(width: 4),
               Text(
                 pubkey.length >= 8 ? '@${pubkey.substring(0, 8)}' : '@$pubkey',
-                style: const TextStyle(color: VeilTheme.textSecondary, fontSize: 10),
+                style: const TextStyle(
+                  color: VeilTheme.textSecondary,
+                  fontSize: 10,
+                ),
               ),
             ],
           ),

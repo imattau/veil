@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 class ServiceControls extends StatelessWidget {
   final bool busy;
+  final bool running;
   final VoidCallback onStart;
   final VoidCallback onStop;
   final VoidCallback onRefresh;
@@ -9,6 +10,7 @@ class ServiceControls extends StatelessWidget {
   const ServiceControls({
     super.key,
     required this.busy,
+    required this.running,
     required this.onStart,
     required this.onStop,
     required this.onRefresh,
@@ -26,7 +28,7 @@ class ServiceControls extends StatelessWidget {
           children: [
             Expanded(
               child: ElevatedButton(
-                onPressed: busy ? null : onStart,
+                onPressed: (busy || running) ? null : onStart,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF0B1D26),
                   foregroundColor: Colors.white,
@@ -37,7 +39,7 @@ class ServiceControls extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
               child: OutlinedButton(
-                onPressed: busy ? null : onStop,
+                onPressed: (busy || !running) ? null : onStop,
                 child: const Text('Stop'),
               ),
             ),

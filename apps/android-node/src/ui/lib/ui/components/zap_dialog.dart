@@ -23,11 +23,18 @@ class ZapDialog extends StatefulWidget {
 class _ZapDialogState extends State<ZapDialog> {
   bool _isProcessing = false;
   int _selectedAmount = 100;
+  String? _errorText;
 
   Future<void> _handleZap() async {
-    setState(() => _isProcessing = true);
+    setState(() {
+      _isProcessing = true;
+      _errorText = null;
+    });
     try {
-      final invoice = await widget.controller.getInvoice(widget.lnAddress, _selectedAmount);
+      final invoice = await widget.controller.getInvoice(
+        widget.lnAddress,
+        _selectedAmount,
+      );
       if (invoice != null) {
         await widget.controller.launchWallet(invoice);
         // After launching, we broadcast social proof
@@ -42,9 +49,7 @@ class _ZapDialogState extends State<ZapDialog> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Zap failed: $e')),
-        );
+        setState(() => _errorText = 'Zap failed: $e');
       }
     } finally {
       if (mounted) setState(() => _isProcessing = false);
@@ -66,7 +71,10 @@ class _ZapDialogState extends State<ZapDialog> {
         children: [
           Text(
             'Sending to ${widget.lnAddress}',
-            style: const TextStyle(fontSize: 12, color: VeilTheme.textSecondary),
+            style: const TextStyle(
+              fontSize: 12,
+              color: VeilTheme.textSecondary,
+            ),
           ),
           const SizedBox(height: 24),
           Row(
@@ -77,11 +85,21 @@ class _ZapDialogState extends State<ZapDialog> {
                 label: Text('$amt'),
                 selected: isSelected,
                 onSelected: (val) => setState(() => _selectedAmount = amt),
-                selectedColor: Colors.amber.withOpacity(0.2),
-                labelStyle: TextStyle(color: isSelected ? Colors.amber : Colors.white),
+                selectedColor: Colors.amber.withValues(alpha: 0.2),
+                labelStyle: TextStyle(
+                  color: isSelected ? Colors.amber : Colors.white,
+                ),
               );
             }).toList(),
           ),
+          if (_errorText != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                _errorText!,
+                style: const TextStyle(color: Colors.red, fontSize: 13),
+              ),
+            ),
         ],
       ),
       actions: [
@@ -91,10 +109,17 @@ class _ZapDialogState extends State<ZapDialog> {
         ),
         ElevatedButton(
           onPressed: _isProcessing ? null : _handleZap,
-          style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
-          child: _isProcessing 
-            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-            : const Text('Zap!'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.amber,
+            foregroundColor: Colors.black,
+          ),
+          child: _isProcessing
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Zap!'),
         ),
       ],
     );

@@ -26,7 +26,7 @@ class BookmarksView extends StatelessWidget {
           child: BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
             child: AppBar(
-              backgroundColor: VeilTheme.background.withOpacity(0.7),
+              backgroundColor: VeilTheme.background.withValues(alpha: 0.7),
               title: const Text('Bookmarks'),
             ),
           ),

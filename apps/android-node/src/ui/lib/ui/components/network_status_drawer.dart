@@ -25,9 +25,15 @@ class NetworkStatusDrawer extends StatelessWidget {
                 .where((detail) => detail['connected'] == true)
                 .length;
 
-            final quicConnected = details.any((d) => d['transport'] == 'quic' && d['connected'] == true);
-            final wsConnected = details.any((d) => d['transport'] == 'websocket' && d['connected'] == true);
-            final torConnected = details.any((d) => d['transport'] == 'tor' && d['connected'] == true);
+            final quicConnected = details.any(
+              (d) => d['transport'] == 'quic' && d['connected'] == true,
+            );
+            final wsConnected = details.any(
+              (d) => d['transport'] == 'websocket' && d['connected'] == true,
+            );
+            final torConnected = details.any(
+              (d) => d['transport'] == 'tor' && d['connected'] == true,
+            );
 
             final queue = (status['queue'] as Map?) ?? const {};
             final cache = (status['cache'] as Map?) ?? const {};
@@ -166,10 +172,10 @@ class NetworkStatusDrawer extends StatelessWidget {
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: Colors.red.withOpacity(0.08),
+                            color: Colors.red.withValues(alpha: 0.08),
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(
-                              color: Colors.red.withOpacity(0.35),
+                              color: Colors.red.withValues(alpha: 0.35),
                             ),
                           ),
                           child: Text(

@@ -4,11 +4,7 @@ class PublishCard extends StatefulWidget {
   final bool busy;
   final Future<void> Function(String payload) onPublish;
 
-  const PublishCard({
-    super.key,
-    required this.busy,
-    required this.onPublish,
-  });
+  const PublishCard({super.key, required this.busy, required this.onPublish});
 
   @override
   State<PublishCard> createState() => _PublishCardState();
@@ -34,10 +30,7 @@ class _PublishCardState extends State<PublishCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Publish',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text('Publish', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             TextField(
               controller: _controller,

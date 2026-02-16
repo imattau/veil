@@ -6,10 +6,19 @@ import 'package:veil_social/logic/node_service.dart';
 import 'package:veil_social/ui/screens/inbox_view.dart';
 
 void main() {
-  testWidgets('InboxView shows empty state when no messages', (WidgetTester tester) async {
+  testWidgets('InboxView shows empty state when no messages', (
+    WidgetTester tester,
+  ) async {
     final service = NodeService();
     final socialController = SocialController(service);
     final messagingController = MessagingController(service);
+    final scrollController = ScrollController();
+    addTearDown(() {
+      scrollController.dispose();
+      messagingController.dispose();
+      socialController.dispose();
+      service.dispose();
+    });
 
     await tester.pumpWidget(
       MaterialApp(
@@ -17,6 +26,9 @@ void main() {
           body: InboxView(
             controller: messagingController,
             socialController: socialController,
+            scrollController: scrollController,
+            topInset: 64,
+            bottomInset: 96,
           ),
         ),
       ),
@@ -25,11 +37,20 @@ void main() {
     expect(find.text('No messages yet'), findsOneWidget);
   });
 
-  testWidgets('InboxView displays conversation list', (WidgetTester tester) async {
+  testWidgets('InboxView displays conversation list', (
+    WidgetTester tester,
+  ) async {
     final service = NodeService();
     service.testSetIdentity('me');
     final socialController = SocialController(service);
     final messagingController = MessagingController(service);
+    final scrollController = ScrollController();
+    addTearDown(() {
+      scrollController.dispose();
+      messagingController.dispose();
+      socialController.dispose();
+      service.dispose();
+    });
 
     // Inject a DM
     service.testInjectEvent({
@@ -40,7 +61,7 @@ void main() {
         'author_pubkey_hex': 'alice_pubkey',
         'recipient_pubkey_hex': 'me',
         'ciphertext_root': 'root1',
-      }
+      },
     });
 
     await tester.pumpWidget(
@@ -49,6 +70,9 @@ void main() {
           body: InboxView(
             controller: messagingController,
             socialController: socialController,
+            scrollController: scrollController,
+            topInset: 64,
+            bottomInset: 96,
           ),
         ),
       ),

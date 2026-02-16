@@ -49,12 +49,14 @@ class _FeedRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final kind = data['kind'] as String? ?? 'unknown';
     final channel = data['channel_id'] as String? ?? 'unknown';
-    final author = data['author_pubkey_hex'] as String? ??
+    final author =
+        data['author_pubkey_hex'] as String? ??
         data['follower_pubkey_hex'] as String? ??
         data['muter_pubkey_hex'] as String? ??
         data['blocker_pubkey_hex'] as String? ??
         'unknown';
-    final text = data['text'] as String? ??
+    final text =
+        data['text'] as String? ??
         data['action_code'] as String? ??
         data['group_id'] as String? ??
         data['mime_type'] as String? ??
@@ -63,10 +65,7 @@ class _FeedRow extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          kind,
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
+        Text(kind, style: const TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
         Text('Channel: $channel'),
         Text('Author: ${_short(author)}'),

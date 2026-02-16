@@ -992,54 +992,51 @@ async fn main() {
         }
     }
 
-    match &cli.command {
-        Some(Commands::Settings { db, action }) => {
-            let store = match SettingsStore::open(db) {
-                Ok(store) => store,
+    if let Some(Commands::Settings { db, action }) = &cli.command {
+        let store = match SettingsStore::open(db) {
+            Ok(store) => store,
+            Err(err) => {
+                error!("settings db open failed: {err}");
+                std::process::exit(1);
+            }
+        };
+
+        match action {
+            SettingsCommands::List => match store.list() {
+                Ok(items) => {
+                    for (k, v) in items {
+                        println!("{k}={v}");
+                    }
+                }
                 Err(err) => {
-                    error!("settings db open failed: {err}");
+                    error!("{err}");
                     std::process::exit(1);
                 }
-            };
-
-            match action {
-                SettingsCommands::List => match store.list() {
-                    Ok(items) => {
-                        for (k, v) in items {
-                            println!("{k}={v}");
-                        }
-                    }
-                    Err(err) => {
-                        error!("{err}");
-                        std::process::exit(1);
-                    }
-                },
-                SettingsCommands::Get { key } => {
-                    if let Some(v) = store.get(key) {
-                        println!("{v}");
-                    } else {
-                        std::process::exit(3);
-                    }
+            },
+            SettingsCommands::Get { key } => {
+                if let Some(v) = store.get(key) {
+                    println!("{v}");
+                } else {
+                    std::process::exit(3);
                 }
-                SettingsCommands::Set { key, value } => {
-                    if let Err(err) = store.set(key, value.trim()) {
-                        error!("{err}");
-                        std::process::exit(1);
-                    }
-                    println!("ok");
-                }
-                SettingsCommands::Delete { key } => match store.delete(key) {
-                    Ok(true) => println!("deleted"),
-                    Ok(false) => std::process::exit(3),
-                    Err(err) => {
-                        error!("{err}");
-                        std::process::exit(1);
-                    }
-                },
             }
-            return;
+            SettingsCommands::Set { key, value } => {
+                if let Err(err) = store.set(key, value.trim()) {
+                    error!("{err}");
+                    std::process::exit(1);
+                }
+                println!("ok");
+            }
+            SettingsCommands::Delete { key } => match store.delete(key) {
+                Ok(true) => println!("deleted"),
+                Ok(false) => std::process::exit(3),
+                Err(err) => {
+                    error!("{err}");
+                    std::process::exit(1);
+                }
+            },
         }
-        _ => {}
+        return;
     }
 
     let settings_db_path = settings_db_path_from_env();
@@ -1229,7 +1226,8 @@ async fn main() {
     state.subscriptions.insert(discovery_tag);
 
     let runtime_config = Arc::new(Mutex::new(cfg));
-    let discovery_table: Arc<Mutex<HashMap<String, veil_android_node::ContactBundle>>> = Arc::new(Mutex::new(HashMap::new()));
+    let discovery_table: Arc<Mutex<HashMap<String, veil_android_node::ContactBundle>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     let quic_bind_addr = match quic_bind.parse() {
         Ok(addr) => addr,
@@ -1387,7 +1385,10 @@ async fn main() {
         state,
         fast_adapter,
         fallback_adapter,
-        runtime_config.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        runtime_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
         veil_crypto::keys::derive_encrypt_key(&node_key),
         XChaCha20Poly1305Cipher,
         NostrVerifier,
@@ -1434,7 +1435,8 @@ async fn main() {
     let _ = flag::register(SIGTERM, Arc::clone(&shutdown));
     let _ = flag::register(SIGINT, Arc::clone(&shutdown));
     let peer_snapshot: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let feed_history: Arc<Mutex<VecDeque<serde_json::Value>>> = Arc::new(Mutex::new(VecDeque::with_capacity(50)));
+    let feed_history: Arc<Mutex<VecDeque<serde_json::Value>>> =
+        Arc::new(Mutex::new(VecDeque::with_capacity(50)));
     if let Err(err) = AdminAuthState::bootstrap_session_db(&admin_session_db_path) {
         error!("fatal: admin auth bootstrap failed: {err}");
         std::process::exit(1);
@@ -1529,19 +1531,27 @@ async fn main() {
                         metrics_ref
                             .nostr_bridge_payload_bytes_total
                             .fetch_add(item.payload.len() as u64, Ordering::Relaxed);
-                        
+
                         // Add to local feed history for immediate display
-                        if let Ok(bundle) = serde_json::from_slice::<veil_schema_feed::FeedBundle>(&item.payload) {
+                        if let Ok(bundle) =
+                            serde_json::from_slice::<veil_schema_feed::FeedBundle>(&item.payload)
+                        {
                             let mut guard = feed_history.lock().unwrap_or_else(|e| e.into_inner());
                             if guard.len() >= 50 {
                                 guard.pop_front();
                             }
                             let mut value = serde_json::to_value(bundle).unwrap_or_default();
                             if let Some(obj) = value.as_object_mut() {
-                                obj.insert("source_relay".to_string(), serde_json::Value::String(item.source_relay.clone()));
+                                obj.insert(
+                                    "source_relay".to_string(),
+                                    serde_json::Value::String(item.source_relay.clone()),
+                                );
                             }
                             guard.push_back(value);
-                            info!("nostr bridge: added post to local history (relay={})", item.source_relay);
+                            info!(
+                                "nostr bridge: added post to local history (relay={})",
+                                item.source_relay
+                            );
                         } else {
                             warn!("nostr bridge: received payload that failed to parse as FeedBundle (relay={})", item.source_relay);
                         }
@@ -1562,7 +1572,8 @@ async fn main() {
                     tag: bridge_tag,
                     encrypt_key: &[0u8; 32],
                     now_step,
-                    flags: veil_codec::object::OBJECT_FLAG_SIGNED | veil_codec::object::OBJECT_FLAG_PUBLIC,
+                    flags: veil_codec::object::OBJECT_FLAG_SIGNED
+                        | veil_codec::object::OBJECT_FLAG_PUBLIC,
                     interactive_flush: false,
                     fast_peers: &fast_peer_list,
                     fallback_peers: &fallback_peer_list,
@@ -1574,7 +1585,8 @@ async fn main() {
         }
 
         let feed_history_ref: Arc<Mutex<VecDeque<serde_json::Value>>> = Arc::clone(&feed_history);
-        let discovery_table_ref: Arc<Mutex<HashMap<String, veil_android_node::ContactBundle>>> = Arc::clone(&discovery_table);
+        let discovery_table_ref: Arc<Mutex<HashMap<String, veil_android_node::ContactBundle>>> =
+            Arc::clone(&discovery_table);
         let _ = runtime.tick_with_callbacks(
             now_step,
             &fast_peer_list,
@@ -1583,31 +1595,43 @@ async fn main() {
                 on_delivered: Some(&mut |_root, payload| {
                     metrics_ref.delivered.fetch_add(1, Ordering::Relaxed);
                     metrics_ref.delivered_total.fetch_add(1, Ordering::Relaxed);
-                    
+
                     // Handle Discovery
-                    if let Ok(msg) = serde_json::from_slice::<veil_android_node::DiscoveryMessage>(payload) {
+                    if let Ok(msg) =
+                        serde_json::from_slice::<veil_android_node::DiscoveryMessage>(payload)
+                    {
                         if let Some(contact) = msg.contact {
-                            let mut guard = discovery_table_ref.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut guard = discovery_table_ref
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
                             guard.insert(contact.peer_id.clone(), contact);
                         }
                         for contact in msg.contacts {
-                            let mut guard = discovery_table_ref.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut guard = discovery_table_ref
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
                             guard.insert(contact.peer_id.clone(), contact);
                         }
                     }
 
                     // Attempt to parse feed bundles for public display
-                    if let Ok(bundle) = serde_json::from_slice::<veil_schema_feed::FeedBundle>(payload) {
+                    if let Ok(bundle) =
+                        serde_json::from_slice::<veil_schema_feed::FeedBundle>(payload)
+                    {
                         let mut guard = feed_history_ref.lock().unwrap_or_else(|e| e.into_inner());
                         if guard.len() >= 50 {
                             guard.pop_front();
                         }
                         guard.push_back(serde_json::to_value(bundle).unwrap_or_default());
                         info!("runtime: delivered post added to history");
-                    } else if let Ok(batch) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload) {
+                    } else if let Ok(batch) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload)
+                    {
                         for item in batch {
-                            if let Ok(bundle) = serde_json::from_slice::<veil_schema_feed::FeedBundle>(&item) {
-                                let mut guard = feed_history_ref.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Ok(bundle) =
+                                serde_json::from_slice::<veil_schema_feed::FeedBundle>(&item)
+                            {
+                                let mut guard =
+                                    feed_history_ref.lock().unwrap_or_else(|e| e.into_inner());
                                 if guard.len() >= 50 {
                                     guard.pop_front();
                                 }
@@ -1924,18 +1948,18 @@ mod tests {
         use clap::Parser;
 
         // Test 'run' (implicit)
-        let cli = Cli::try_parse_from(&["veil-vps-node"]).unwrap();
+        let cli = Cli::try_parse_from(["veil-vps-node"]).unwrap();
         assert!(cli.command.is_none());
 
         // Test 'run' (explicit)
-        let cli = Cli::try_parse_from(&["veil-vps-node", "run"]).unwrap();
+        let cli = Cli::try_parse_from(["veil-vps-node", "run"]).unwrap();
         match cli.command {
             Some(Commands::Run) => {}
             _ => panic!("expected Run command"),
         }
 
         // Test 'settings'
-        let cli = Cli::try_parse_from(&["veil-vps-node", "settings", "list"]).unwrap();
+        let cli = Cli::try_parse_from(["veil-vps-node", "settings", "list"]).unwrap();
         match cli.command {
             Some(Commands::Settings {
                 action: SettingsCommands::List,
@@ -1945,7 +1969,7 @@ mod tests {
         }
 
         // Test 'settings' with custom DB
-        let cli = Cli::try_parse_from(&[
+        let cli = Cli::try_parse_from([
             "veil-vps-node",
             "settings",
             "--db",

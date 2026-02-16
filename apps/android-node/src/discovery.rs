@@ -149,6 +149,7 @@ impl DiscoveryWorker {
     }
 
     async fn gossip_once(&mut self) {
+        let gossip_limit = bounded_gossip_contacts(self.config.max_gossip_contacts);
         let mut all_targets = self.config.bootstrap_urls.clone();
         let contacts = self.state.contacts();
         for contact in &contacts {
@@ -168,7 +169,7 @@ impl DiscoveryWorker {
 
         if target_count > 0 {
             let payload = DiscoveryGossipRequest {
-                contacts: self.state.discovery_sample(self.config.max_gossip_contacts),
+                contacts: self.state.discovery_sample(gossip_limit),
             };
             tracing::info!(
                 "Starting HTTP discovery gossip with {} targets (known contacts: {})",
@@ -228,9 +229,7 @@ impl DiscoveryWorker {
         if self.config.transport_enabled {
             let self_contact = build_self_contact(&self.state, &self.protocol);
             let announce = DiscoveryMessage::announce(self_contact);
-            let gossip = DiscoveryMessage::gossip(
-                self.state.discovery_sample(self.config.max_gossip_contacts),
-            );
+            let gossip = DiscoveryMessage::gossip(self.state.discovery_sample(gossip_limit));
 
             if let Err(e) = self.protocol.publish_discovery(announce).await {
                 tracing::debug!("Transport discovery announce failed: {}", e);
@@ -553,7 +552,7 @@ pub fn handle_discovery_gossip(
         state.add_contact(contact);
     }
     DiscoveryGossipResponse {
-        contacts: state.discovery_sample(max_contacts),
+        contacts: state.discovery_sample(bounded_gossip_contacts(max_contacts)),
     }
 }
 
@@ -614,6 +613,10 @@ fn with_auth_header(
         Some(value) => builder.header("x-veil-token", value),
         None => builder,
     }
+}
+
+fn bounded_gossip_contacts(requested: usize) -> usize {
+    requested.max(1).min(DISCOVERY_MAX_CONTACTS)
 }
 
 fn sanitize_contact(mut contact: ContactBundle) -> Option<ContactBundle> {
@@ -886,5 +889,39 @@ mod tests {
             .build()
             .expect("request");
         assert!(request.headers().get("x-veil-token").is_none());
+    }
+
+    #[test]
+    fn bounded_gossip_contacts_is_capped_and_non_zero() {
+        assert_eq!(bounded_gossip_contacts(0), 1);
+        assert_eq!(bounded_gossip_contacts(1), 1);
+        assert_eq!(bounded_gossip_contacts(24), 24);
+        assert_eq!(
+            bounded_gossip_contacts(DISCOVERY_MAX_CONTACTS + 999),
+            DISCOVERY_MAX_CONTACTS
+        );
+    }
+
+    #[test]
+    fn discovery_gossip_response_caps_requested_max_contacts() {
+        let state = NodeState::new("test");
+        for i in 0..(DISCOVERY_MAX_CONTACTS + 40) {
+            state.add_contact(ContactBundle {
+                peer_id: format!("peer-{i}"),
+                ws_url: None,
+                quic_addr: None,
+                pubkey_hex: format!("{:064x}", i + 1),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            });
+        }
+        let response = handle_discovery_gossip(
+            &state,
+            DiscoveryGossipRequest {
+                contacts: Vec::new(),
+            },
+            usize::MAX,
+        );
+        assert_eq!(response.contacts.len(), DISCOVERY_MAX_CONTACTS);
     }
 }

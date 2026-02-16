@@ -28,6 +28,7 @@ impl QueueWorker {
         protocol: Arc<ProtocolEngine>,
         config: QueueWorkerConfig,
     ) -> Self {
+        let config = normalize_worker_config(config);
         Self {
             state,
             protocol,
@@ -39,12 +40,15 @@ impl QueueWorker {
     pub async fn run(self) {
         let mut worker = self;
         let base_tick = Duration::from_millis(worker.config.tick_ms.max(50));
-        
+
         // Initial subscription sync
         {
             let channels = worker.state.get_subscriptions();
             let contacts = worker.state.contacts();
-            worker.protocol.sync_subscriptions(&channels, &contacts).await;
+            worker
+                .protocol
+                .sync_subscriptions(&channels, &contacts)
+                .await;
         }
 
         loop {
@@ -91,11 +95,14 @@ impl QueueWorker {
             if worker.step.is_multiple_of(50) {
                 worker.protocol.persist_cache_state().await;
                 worker.state.persist();
-                
+
                 // Sync subscriptions from UI state to ProtocolEngine
                 let channels = worker.state.get_subscriptions();
                 let contacts = worker.state.contacts();
-                worker.protocol.sync_subscriptions(&channels, &contacts).await;
+                worker
+                    .protocol
+                    .sync_subscriptions(&channels, &contacts)
+                    .await;
             }
             let details = worker.protocol.lane_details().await;
             worker.state.mark_lane_details(details);
@@ -155,6 +162,19 @@ impl QueueWorker {
     }
 }
 
+fn normalize_worker_config(config: QueueWorkerConfig) -> QueueWorkerConfig {
+    let tick_ms = config.tick_ms.max(50);
+    let max_attempts = config.max_attempts.max(1);
+    let backoff_base_ms = config.backoff_base_ms.max(50);
+    let backoff_max_ms = config.backoff_max_ms.max(backoff_base_ms);
+    QueueWorkerConfig {
+        tick_ms,
+        max_attempts,
+        backoff_base_ms,
+        backoff_max_ms,
+    }
+}
+
 fn retry_backoff_ms(attempts: u32, base_ms: u64, max_ms: u64) -> u64 {
     let exponent = attempts.saturating_sub(1).min(10);
     let factor = 1u64.checked_shl(exponent).unwrap_or(u64::MAX);
@@ -198,7 +218,8 @@ fn queued_payload_to_bytes(payload: &str) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::queued_payload_to_bytes;
+    use super::{normalize_worker_config, queued_payload_to_bytes};
+    use crate::api::QueueWorkerConfig;
 
     #[test]
     fn decode_wrapped_raw_b64_payload() {
@@ -216,5 +237,33 @@ mod tests {
         let payload = r#"{"kind":"post","text":"hello"}"#;
         let bytes = queued_payload_to_bytes(payload);
         assert_eq!(bytes, payload.as_bytes());
+    }
+
+    #[test]
+    fn normalize_worker_config_enforces_safe_minimums() {
+        let normalized = normalize_worker_config(QueueWorkerConfig {
+            tick_ms: 0,
+            max_attempts: 0,
+            backoff_base_ms: 0,
+            backoff_max_ms: 0,
+        });
+        assert_eq!(normalized.tick_ms, 50);
+        assert_eq!(normalized.max_attempts, 1);
+        assert_eq!(normalized.backoff_base_ms, 50);
+        assert_eq!(normalized.backoff_max_ms, 50);
+    }
+
+    #[test]
+    fn normalize_worker_config_preserves_valid_values() {
+        let normalized = normalize_worker_config(QueueWorkerConfig {
+            tick_ms: 500,
+            max_attempts: 3,
+            backoff_base_ms: 500,
+            backoff_max_ms: 20_000,
+        });
+        assert_eq!(normalized.tick_ms, 500);
+        assert_eq!(normalized.max_attempts, 3);
+        assert_eq!(normalized.backoff_base_ms, 500);
+        assert_eq!(normalized.backoff_max_ms, 20_000);
     }
 }

@@ -156,6 +156,84 @@ This document consolidates all feature-specific plans and roadmaps for the VEIL 
     - [x] Update `publish_object` to return the pipeline-consistent root hash.
     - [x] Verify `emit_payload` root consistency for media.
     - [x] Add round-trip integration test for media upload/fetch.
+- [x] **M9 - Social UX Refinement**:
+    - [x] Add like/unlike toggle to `_PostFooter` heart button (#13).
+    - [x] Add repost toggle with confirmation dialog (#14).
+    - [x] Remove duplicate `ReactionTray` or merge with footer (#15).
+    - [x] Make `ReactionTray` chips tappable (#16).
+    - [x] Fix comment button on detail view (#17).
+    - [x] Increase tap targets to 48x48dp minimum (#18).
+    - [x] Add optimistic UI for like toggle (#19).
+    - [x] Cache `ZapController` instance instead of creating per tap (#20).
+- [x] **M10 - Stability & Hardening**:
+    - [x] Fix WS stream leak and dispose cleanup (#21, #22).
+    - [x] Replace global busy flag with per-operation tracking (#24).
+    - [x] Secure and harden `ZapController` external calls (#25, #37).
+    - [x] Parallelize `refresh()` and fix poller stacking (#27, #28).
+    - [x] Add disposal guards to `SocialController` and others (#30, #31).
+    - [x] Implement WS backoff and offline detection (#26, #33).
+    - [x] Fix unbounded `_feedEvents` growth (#32).
+    - [x] Debounce `MessagingController` notifications (#34).
+    - [x] Fix race conditions in `ListController` and `PreferencesController` (#35, #36).
+    - [x] Clean up `NetworkPulse` and `ServiceControls` (#29, #38, #39).
+    - [x] Address P2 minor improvements (#40, #43, #44, #45).
+- [ ] **M11 - UI/Logic Monolith Decomposition + P0 Regression Fixes**:
+    - [x] **Monolith inventory**: 47 Dart files / ~9,900 lines, with 6 critical monoliths identified.
+    - [x] **Task 1 (P0)**: Split `logic/node_service.dart` (`1679` lines, `54` methods) into focused modules.
+    - [x] **Task 2**: Decompose `logic/social_controller.dart` (`545` lines, `29` methods) into focused modules.
+    - [x] **Task 3**: Extract `screens/connections_view.dart` widgets (`876` lines, `9` classes).
+    - [x] **Task 4**: Extract `screens/profile_view.dart` widgets (`705` lines, `8` classes + function).
+    - [x] **Task 5**: Extract `components/veil_post_card.dart` widgets (`586` lines, `4` classes + enum).
+    - [x] **Task 6**: Extract `screens/composer_view.dart` widgets (`486` lines, `5` classes).
+    - [x] **Task 7 (P0)**:
+        - [x] Fix WebSocket subscription leak on reconnect.
+        - [x] Fix async cleanup path in `dispose()`.
+        - [x] Replace/verify global busy-flag behavior with per-operation tracking.
+    - [x] **Task 8**: Final import + barrel/export integration pass.
+    - [x] **Dependency graph enforcement**:
+        - [x] Task 1 -> Task 2
+        - [x] Task 1 -> Task 7
+        - [x] Tasks 1/3/4/5/6 parallelizable
+        - [x] Task 8 last
+- [x] **M12 - Social UI/UX Cohesion + Preference Wiring**:
+    - [x] **Task 1 (P0) - Theme + preference wiring**:
+        - [x] Lift `PreferencesController` to app root and drive `MaterialApp` from persisted prefs.
+        - [x] Wire settings theme choices (`dark`/`light`/`amoled`) to actual runtime theme selection.
+        - [x] Add and tune `VeilTheme` variants for `light` and `amoled` while preserving current dark style.
+    - [x] **Task 2 (P0) - Shell layout consistency**:
+        - [x] Normalize top/bottom shell insets across Home, Explore, Inbox, and Profile tabs.
+        - [x] Ensure list/content surfaces do not render under glass app bar/navigation chrome.
+        - [x] Verify pull-to-refresh and FAB spacing behavior on all tabs.
+    - [x] **Task 3 (P1) - Navigation + action clarity**:
+        - [x] Normalize "tap active tab to scroll-to-top" behavior across all tabs (or remove where unsupported).
+        - [x] Replace icon-only contextual FAB affordances with explicit per-tab actions (label or equivalent clarity).
+        - [x] Align channel membership CTA copy/state in Explore (`Join`/`Leave`) and feedback toasts.
+    - [x] **Task 4 (P1) - Composer + onboarding polish**:
+        - [x] Apply saved `default_channel` preference when opening `ComposerView`.
+        - [x] Disable publish action when no text/media is present and provide clear disabled affordance.
+        - [x] Improve first-run empty-state onboarding path from feed/explore into follow/join flows.
+    - [x] **Task 5 (P2) - Accessibility + visual QA**:
+        - [x] Run contrast, focus, and minimum tap target audit across core social screens.
+        - [x] Standardize spacing/radius/elevation token usage across cards, dialogs, and sheets.
+        - [x] Add widget/golden smoke coverage for Home, Explore, Inbox, Profile, and Composer shells.
+    - [x] **Dependency graph enforcement**:
+        - [x] Task 1 -> Task 4
+        - [x] Task 2 -> Task 3
+    - [x] Tasks 1/2 parallelizable
+    - [x] Task 5 after Tasks 1-4
+- [x] **M13 - Threaded Conversations in Comments and Messaging**:
+    - [x] **Task 1 (P0) - Post comment threading**:
+        - [x] Render nested comment threads by traversing `reply_to_root` relationships in `PostDetailView`.
+        - [x] Add explicit per-comment reply actions and visual nesting/indentation.
+        - [x] Wire reply composer to a selected comment target with clear/cancel affordance.
+    - [x] **Task 2 (P0) - DM/group message threading**:
+        - [x] Add reply-target selection on message long-press in `ChatDetailView`.
+        - [x] Send message replies with `replyToRoot` for both DM and group publish paths.
+        - [x] Render inline reply context inside message bubbles when referenced messages are present.
+    - [x] **Task 3 (P1) - Coverage and validation**:
+        - [x] Extend widget coverage for nested post-comment rendering and targeted replies.
+        - [x] Add widget coverage verifying DM reply sends include `replyToRoot`.
+        - [x] Run analyzer and targeted test suite after implementation.
 - [ ] Implement unit tests for rich content.
 
 ### VPS Node (`apps/veil-vps-node`)

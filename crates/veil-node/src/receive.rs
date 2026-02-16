@@ -196,11 +196,9 @@ pub fn receive_shard_with_policy(
     let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
     let payload = match cipher.decrypt(decrypt_key, object.nonce, &aad, &object.ciphertext) {
         Ok(p) => p,
-        Err(e) if (object.flags & veil_codec::object::OBJECT_FLAG_PUBLIC) != 0 => {
-            cipher
-                .decrypt(&[0u8; 32], object.nonce, &aad, &object.ciphertext)
-                .map_err(|_| e)?
-        }
+        Err(e) if (object.flags & veil_codec::object::OBJECT_FLAG_PUBLIC) != 0 => cipher
+            .decrypt(&[0u8; 32], object.nonce, &aad, &object.ciphertext)
+            .map_err(|_| e)?,
         Err(e) => return Err(e.into()),
     };
 

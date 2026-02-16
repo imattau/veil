@@ -6,8 +6,19 @@ import '../theme/veil_theme.dart';
 
 class ExploreView extends StatelessWidget {
   final NodeService service;
+  final ScrollController scrollController;
+  final double topInset;
+  final double bottomInset;
+  final VoidCallback onAddChannel;
 
-  const ExploreView({super.key, required this.service});
+  const ExploreView({
+    super.key,
+    required this.service,
+    required this.scrollController,
+    required this.topInset,
+    required this.bottomInset,
+    required this.onAddChannel,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -15,7 +26,7 @@ class ExploreView extends StatelessWidget {
       listenable: service,
       builder: (context, _) {
         final subscribed = service.state.subscriptions.toSet();
-        
+
         // Optimize: Count posts per channel once
         final counts = <String, int>{};
         for (final event in service.feedEvents) {
@@ -27,21 +38,37 @@ class ExploreView extends StatelessWidget {
 
         final discovered = counts.keys.toSet();
         final channels = <String>{...subscribed, ...discovered}.toList()
-          ..sort((a, b) => (counts[b] ?? 0).compareTo(counts[a] ?? 0)); // Sort by popularity
+          ..sort(
+            (a, b) => (counts[b] ?? 0).compareTo(counts[a] ?? 0),
+          ); // Sort by popularity
 
         if (channels.isEmpty) {
-          return const EmptyState(
-            icon: Icons.tag,
-            title: 'No channels yet',
-            message:
-                'Tap + to add a channel. Channels you post in or discover will show here.',
+          return RefreshIndicator(
+            onRefresh: service.refresh,
+            child: SingleChildScrollView(
+              controller: scrollController,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(16, topInset, 16, bottomInset),
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * 0.7,
+                child: EmptyState(
+                  icon: Icons.tag,
+                  title: 'No channels yet',
+                  message:
+                      'Add your first channel to start discovering and organizing posts.',
+                  onAction: onAddChannel,
+                  actionLabel: 'Add Channel',
+                ),
+              ),
+            ),
           );
         }
 
         return RefreshIndicator(
           onRefresh: service.refresh,
           child: ListView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+            controller: scrollController,
+            padding: EdgeInsets.fromLTRB(16, topInset, 16, bottomInset),
             itemCount: channels.length + 1,
             itemBuilder: (context, index) {
               if (index == 0) {
@@ -67,13 +94,10 @@ class ExploreView extends StatelessWidget {
                       width: 48,
                       height: 48,
                       decoration: BoxDecoration(
-                        color: VeilTheme.accent.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
+                        color: VeilTheme.accent.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(VeilTheme.radiusS),
                       ),
-                      child: const Icon(
-                        Icons.tag,
-                        color: VeilTheme.accent,
-                      ),
+                      child: const Icon(Icons.tag, color: VeilTheme.accent),
                     ),
                     title: Text(
                       '#$channel',
@@ -91,26 +115,29 @@ class ExploreView extends StatelessWidget {
                         final ok = isSubscribed
                             ? await service.unsubscribeTag(channel)
                             : await service.subscribeTag(channel);
-                        if (!context.mounted || !ok) return;
+                        if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(
-                              isSubscribed
-                                  ? 'Unsubscribed from #$channel'
-                                  : 'Subscribed to #$channel',
+                              ok
+                                  ? (isSubscribed
+                                        ? 'Left #$channel'
+                                        : 'Joined #$channel')
+                                  : (service.state.lastError ??
+                                        'Failed to update #$channel'),
                             ),
                           ),
                         );
                       },
                       style: FilledButton.styleFrom(
                         backgroundColor: isSubscribed
-                            ? Colors.white.withOpacity(0.1)
-                            : VeilTheme.accent.withOpacity(0.2),
+                            ? Colors.white.withValues(alpha: 0.1)
+                            : VeilTheme.accent.withValues(alpha: 0.2),
                         foregroundColor: isSubscribed
                             ? Colors.white
                             : VeilTheme.accent,
                       ),
-                      child: Text(isSubscribed ? 'Joined' : 'Join'),
+                      child: Text(isSubscribed ? 'Leave' : 'Join'),
                     ),
                   ),
                 ),

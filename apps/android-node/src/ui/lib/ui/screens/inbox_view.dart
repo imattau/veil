@@ -8,11 +8,17 @@ import './chat_detail_view.dart';
 class InboxView extends StatelessWidget {
   final MessagingController controller;
   final SocialController socialController;
+  final ScrollController scrollController;
+  final double topInset;
+  final double bottomInset;
 
   const InboxView({
     super.key,
     required this.controller,
     required this.socialController,
+    required this.scrollController,
+    required this.topInset,
+    required this.bottomInset,
   });
 
   @override
@@ -23,25 +29,40 @@ class InboxView extends StatelessWidget {
         final threads = controller.conversations;
 
         if (threads.isEmpty) {
-          return const EmptyState(
-            icon: Icons.mail_outline,
-            title: 'No messages yet',
-            message:
-                'Your private conversations and group chats will appear here.',
+          return RefreshIndicator(
+            onRefresh: controller.nodeService.refresh,
+            child: SingleChildScrollView(
+              controller: scrollController,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.fromLTRB(16, topInset, 16, bottomInset),
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * 0.7,
+                child: const EmptyState(
+                  icon: Icons.mail_outline,
+                  title: 'No messages yet',
+                  message:
+                      'Your private conversations and group chats will appear here.',
+                ),
+              ),
+            ),
           );
         }
 
-        return ListView.builder(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          itemCount: threads.length,
-          itemBuilder: (context, index) {
-            final thread = threads[index];
-            return _ConversationTile(
-              thread: thread,
-              controller: controller,
-              socialController: socialController,
-            );
-          },
+        return RefreshIndicator(
+          onRefresh: controller.nodeService.refresh,
+          child: ListView.builder(
+            controller: scrollController,
+            padding: EdgeInsets.fromLTRB(0, topInset - 8, 0, bottomInset),
+            itemCount: threads.length,
+            itemBuilder: (context, index) {
+              final thread = threads[index];
+              return _ConversationTile(
+                thread: thread,
+                controller: controller,
+                socialController: socialController,
+              );
+            },
+          ),
         );
       },
     );
@@ -77,7 +98,11 @@ class _ConversationTile extends StatelessWidget {
           )
         : '';
     final isOutgoing =
-        thread.lastMessage?.authorPubkey == controller.nodeService.state.identityHex;
+        thread.lastMessage?.authorPubkey ==
+        controller.nodeService.state.identityHex;
+    final avatarLabel = displayName.isEmpty
+        ? '?'
+        : displayName.substring(0, 1).toUpperCase();
 
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -86,11 +111,11 @@ class _ConversationTile extends StatelessWidget {
           CircleAvatar(
             radius: 24,
             backgroundColor: thread.isGroup
-                ? Colors.white.withOpacity(0.08)
-                : VeilTheme.accent.withOpacity(0.18),
+                ? Colors.white.withValues(alpha: 0.08)
+                : VeilTheme.accent.withValues(alpha: 0.18),
             child: thread.isGroup
                 ? const Icon(Icons.group, color: VeilTheme.textSecondary)
-                : Text(displayName.substring(0, 1).toUpperCase()),
+                : Text(avatarLabel),
           ),
           if (isUnread)
             const Positioned(
@@ -123,7 +148,9 @@ class _ConversationTile extends StatelessWidget {
             Text(
               time,
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: isUnread ? VeilTheme.textPrimary : VeilTheme.textSecondary,
+                color: isUnread
+                    ? VeilTheme.textPrimary
+                    : VeilTheme.textSecondary,
               ),
             ),
           if (thread.unreadCount > 0) ...[

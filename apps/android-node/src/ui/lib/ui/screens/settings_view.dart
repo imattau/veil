@@ -10,9 +10,7 @@ class SettingsView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Settings'),
-      ),
+      appBar: AppBar(title: const Text('Settings')),
       body: ListenableBuilder(
         listenable: controller,
         builder: (context, _) {
@@ -38,7 +36,7 @@ class SettingsView extends StatelessWidget {
                     title: const Text('Enable Notifications'),
                     value: controller.notificationsEnabled,
                     onChanged: (val) => controller.updateNotifications(val),
-                    activeColor: VeilTheme.accent,
+                    activeThumbColor: VeilTheme.accent,
                   ),
                 ],
               ),
@@ -66,26 +64,31 @@ class SettingsView extends StatelessWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Choose Theme'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: ['dark', 'light', 'amoled'].map((t) {
-            return RadioListTile<String>(
-              title: Text(t.toUpperCase()),
-              value: t,
-              groupValue: controller.theme,
-              onChanged: (val) {
-                if (val != null) controller.updateTheme(val);
-                Navigator.pop(context);
-              },
-            );
-          }).toList(),
+        content: RadioGroup<String>(
+          groupValue: controller.theme,
+          onChanged: (val) {
+            if (val == null) return;
+            controller.updateTheme(val);
+            Navigator.pop(context);
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: ['dark', 'light', 'amoled'].map((t) {
+              return RadioListTile<String>(
+                title: Text(t.toUpperCase()),
+                value: t,
+              );
+            }).toList(),
+          ),
         ),
       ),
     );
   }
 
   void _showChannelDialog(BuildContext context) {
-    final textController = TextEditingController(text: controller.defaultChannel);
+    final textController = TextEditingController(
+      text: controller.defaultChannel,
+    );
     showDialog(
       context: context,
       builder: (context) => AlertDialog(

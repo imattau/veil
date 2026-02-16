@@ -102,7 +102,9 @@ class _NewMessageDialogState extends State<NewMessageDialog> {
                       );
                       return ListTile(
                         leading: CircleAvatar(
-                          backgroundColor: VeilTheme.accent.withOpacity(0.1),
+                          backgroundColor: VeilTheme.accent.withValues(
+                            alpha: 0.1,
+                          ),
                           child: Text(name.substring(0, 1).toUpperCase()),
                         ),
                         title: Text(name),

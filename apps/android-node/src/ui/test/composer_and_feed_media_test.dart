@@ -84,7 +84,11 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: VeilPostCard(event: event, controller: controller, isDetail: true),
+          body: VeilPostCard(
+            event: event,
+            controller: controller,
+            isDetail: true,
+          ),
         ),
       ),
     );
@@ -95,14 +99,15 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
-  testWidgets('Composer poll button opens dialog and publishes poll', (tester) async {
+  testWidgets('Composer poll button opens dialog and publishes poll', (
+    tester,
+  ) async {
     final service = _FakeNodeService();
+    service.testSetReady(running: true);
 
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: ComposerView(service: service),
-        ),
+        home: Scaffold(body: ComposerView(service: service)),
       ),
     );
 

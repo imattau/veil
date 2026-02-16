@@ -9,14 +9,17 @@ import './rich_text_view.dart';
 import './nested_post_card.dart';
 import './zap_dialog.dart';
 import './link_preview_card.dart';
-import '../../logic/zap_controller.dart';
 import '../screens/post_detail_view.dart';
+
+part 'veil_post_card/veil_post_card_media_gallery.dart';
+part 'veil_post_card/veil_post_card_footer.dart';
 
 class VeilPostCard extends StatelessWidget {
   final NodeEvent event;
   final SocialController controller;
   final ListController? listController;
   final bool isDetail;
+  final VoidCallback? onCommentTap;
 
   const VeilPostCard({
     super.key,
@@ -24,6 +27,7 @@ class VeilPostCard extends StatelessWidget {
     required this.controller,
     this.listController,
     this.isDetail = false,
+    this.onCommentTap,
   });
 
   @override
@@ -152,7 +156,7 @@ class VeilPostCard extends StatelessWidget {
                 ),
               ] else if (firstLink != null) ...[
                 const SizedBox(height: 8),
-                LinkPreviewCard(url: firstLink!),
+                LinkPreviewCard(url: firstLink),
               ],
 
               if (targetRoot != null) ...[
@@ -161,8 +165,6 @@ class VeilPostCard extends StatelessWidget {
               ],
 
               if (root != null) ...[
-                const SizedBox(height: 12),
-                ReactionTray(objectRoot: root, controller: controller),
                 const SizedBox(height: 16),
                 _PostFooter(
                   postEvent: event,
@@ -170,6 +172,7 @@ class VeilPostCard extends StatelessWidget {
                   controller: controller,
                   listController: listController,
                   isDetail: isDetail,
+                  onCommentTap: onCommentTap,
                 ),
               ],
             ],
@@ -242,287 +245,3 @@ class VeilPostCard extends StatelessWidget {
 }
 
 enum _AuthorAction { follow, unfollow, mute, unmute, block, unblock }
-
-class _PostMediaGallery extends StatelessWidget {
-  final List<String> mediaRoots;
-  final SocialController controller;
-
-  const _PostMediaGallery({required this.mediaRoots, required this.controller});
-
-  @override
-  Widget build(BuildContext context) {
-    if (mediaRoots.isEmpty) return const SizedBox.shrink();
-
-    if (mediaRoots.length == 1) {
-      return _buildImage(context, mediaRoots[0], height: 220);
-    }
-
-    if (mediaRoots.length == 2) {
-      return Row(
-        children: [
-          Expanded(child: _buildImage(context, mediaRoots[0], height: 160)),
-          const SizedBox(width: 4),
-          Expanded(child: _buildImage(context, mediaRoots[1], height: 160)),
-        ],
-      );
-    }
-
-    if (mediaRoots.length == 3) {
-      return Column(
-        children: [
-          _buildImage(context, mediaRoots[0], height: 160),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(child: _buildImage(context, mediaRoots[1], height: 120)),
-              const SizedBox(width: 4),
-              Expanded(child: _buildImage(context, mediaRoots[2], height: 120)),
-            ],
-          ),
-        ],
-      );
-    }
-
-    final display = mediaRoots.take(4).toList();
-    return Column(
-      children: [
-        Row(
-          children: [
-            Expanded(child: _buildImage(context, display[0], height: 120)),
-            const SizedBox(width: 4),
-            Expanded(child: _buildImage(context, display[1], height: 120)),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Row(
-          children: [
-            Expanded(child: _buildImage(context, display[2], height: 120)),
-            const SizedBox(width: 4),
-            Expanded(child: _buildImage(context, display[3], height: 120)),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildImage(BuildContext context, String root, {double? height}) {
-    final bytes = controller.imageCache[root];
-    return Container(
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        color: Colors.white.withOpacity(0.03),
-      ),
-      child: bytes != null
-          ? GestureDetector(
-              onTap: () {
-                showDialog(
-                  context: context,
-                  builder: (context) => Dialog.fullscreen(
-                    backgroundColor: Colors.black,
-                    child: Stack(
-                      children: [
-                        InteractiveViewer(
-                          child: Center(child: Image.memory(bytes)),
-                        ),
-                        Positioned(
-                          top: 40,
-                          right: 20,
-                          child: IconButton(
-                            icon: const Icon(Icons.close,
-                                color: Colors.white, size: 30),
-                            onPressed: () => Navigator.pop(context),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-              child: Image.memory(
-                bytes,
-                fit: BoxFit.cover,
-                width: double.infinity,
-                height: height,
-                errorBuilder: (_, __, ___) => _mediaUnavailable(height),
-              ),
-            )
-          : SizedBox(
-              height: height,
-              child: Center(
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: VeilTheme.accent.withOpacity(0.8),
-                ),
-              ),
-            ),
-    );
-  }
-
-  Widget _mediaUnavailable(double? height) {
-    return SizedBox(
-      height: height,
-      child: const Center(
-        child: Text(
-          'Media unavailable',
-          style: TextStyle(color: VeilTheme.textSecondary, fontSize: 10),
-        ),
-      ),
-    );
-  }
-}
-
-class _PostFooter extends StatelessWidget {
-  final NodeEvent postEvent;
-  final String objectRoot;
-  final SocialController controller;
-  final ListController? listController;
-  final bool isDetail;
-
-  const _PostFooter({
-    required this.postEvent,
-    required this.objectRoot,
-    required this.controller,
-    this.listController,
-    required this.isDetail,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final reactions = controller.getReactions(objectRoot);
-    final reposts = controller.getReposts(objectRoot);
-    final comments = controller.getComments(objectRoot);
-    final zapTotal = controller.getZapTotal(objectRoot);
-    final liked = controller.hasLiked(objectRoot);
-
-    final authorPubkey = postEvent.authorPubkey;
-    final lnAddress = authorPubkey != null
-        ? controller.nodeService.profiles[authorPubkey]?.lightningAddress
-        : null;
-
-    return Row(
-      children: [
-        _FooterAction(
-          icon: liked ? Icons.favorite : Icons.favorite_border,
-          count: reactions.length,
-          color: liked ? Colors.red : null,
-          onTap: () {
-            HapticFeedback.lightImpact();
-            controller.reactToPost(
-              objectRoot,
-              action: 'like',
-              channelId: postEvent.channelId,
-            );
-          },
-        ),
-        const SizedBox(width: 24),
-        _FooterAction(
-          icon: Icons.chat_bubble_outline,
-          count: comments.length,
-          onTap: () {
-            HapticFeedback.lightImpact();
-            if (!isDetail) {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) =>
-                      PostDetailView(post: postEvent, controller: controller),
-                ),
-              );
-            }
-          },
-        ),
-        const SizedBox(width: 24),
-        _FooterAction(
-          icon: Icons.repeat,
-          count: reposts.length,
-          onTap: () {
-            HapticFeedback.lightImpact();
-            controller.repost(objectRoot, channelId: postEvent.channelId);
-          },
-        ),
-        const SizedBox(width: 24),
-        _FooterAction(
-          icon: Icons.bolt,
-          count: zapTotal,
-          color: zapTotal > 0 ? Colors.amber : null,
-          onTap: () {
-            HapticFeedback.lightImpact();
-            if (lnAddress != null && authorPubkey != null) {
-              showDialog(
-                context: context,
-                builder: (context) => ZapDialog(
-                  lnAddress: lnAddress,
-                  targetRoot: objectRoot,
-                  authorPubkey: authorPubkey,
-                  controller: ZapController(controller.nodeService),
-                ),
-              );
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Author has no Lightning Address set'),
-                ),
-              );
-            }
-          },
-        ),
-        if (listController != null) ...[
-          const Spacer(),
-          ListenableBuilder(
-            listenable: listController!,
-            builder: (context, _) {
-              final isBookmarked = listController!.isBookmarked(objectRoot);
-              return IconButton(
-                onPressed: () {
-                  HapticFeedback.lightImpact();
-                  listController!.toggleBookmark(objectRoot);
-                },
-                icon: Icon(
-                  isBookmarked ? Icons.bookmark : Icons.bookmark_border,
-                  size: 18,
-                  color: isBookmarked ? VeilTheme.accent : VeilTheme.textSecondary,
-                ),
-              );
-            },
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-class _FooterAction extends StatelessWidget {
-  final IconData icon;
-  final int count;
-  final VoidCallback onTap;
-  final Color? color;
-
-  const _FooterAction({
-    required this.icon,
-    required this.count,
-    required this.onTap,
-    this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: color ?? VeilTheme.textSecondary),
-          const SizedBox(width: 4),
-          if (count > 0)
-            Text(
-              count.toString(),
-              style: TextStyle(
-                fontSize: 12,
-                color: color ?? VeilTheme.textSecondary,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}

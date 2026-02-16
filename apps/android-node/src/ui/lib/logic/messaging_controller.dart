@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import './node_service.dart';
 import './models/node_event.dart';
@@ -19,9 +20,28 @@ class ConversationThread {
 class MessagingController extends ChangeNotifier {
   final NodeService nodeService;
   final Map<String, int> _lastReadSeqByThread = {};
+  bool _notificationQueued = false;
+  bool _isDisposed = false;
 
   MessagingController(this.nodeService) {
-    nodeService.addListener(notifyListeners);
+    nodeService.addListener(_onServiceUpdate);
+  }
+
+  void _onServiceUpdate() {
+    if (_isDisposed || _notificationQueued) return;
+    _notificationQueued = true;
+    scheduleMicrotask(() {
+      _notificationQueued = false;
+      if (!_isDisposed) {
+        notifyListeners();
+      }
+    });
+  }
+
+  @override
+  void notifyListeners() {
+    if (_isDisposed) return;
+    super.notifyListeners();
   }
 
   Future<void> publishDirectMessage({
@@ -154,7 +174,9 @@ class MessagingController extends ChangeNotifier {
     final key = _threadKey(isGroup: isGroup, id: id);
     final lastRead = _lastReadSeqByThread[key] ?? 0;
     final self = nodeService.state.identityHex;
-    final messages = isGroup ? getMessagesForGroup(id) : getMessagesForContact(id);
+    final messages = isGroup
+        ? getMessagesForGroup(id)
+        : getMessagesForContact(id);
     return messages.where((m) {
       if (m.seq <= lastRead) return false;
       return self == null || m.authorPubkey != self;
@@ -162,7 +184,9 @@ class MessagingController extends ChangeNotifier {
   }
 
   void markThreadRead({required bool isGroup, required String id}) {
-    final messages = isGroup ? getMessagesForGroup(id) : getMessagesForContact(id);
+    final messages = isGroup
+        ? getMessagesForGroup(id)
+        : getMessagesForContact(id);
     if (messages.isEmpty) {
       return;
     }
@@ -192,7 +216,8 @@ class MessagingController extends ChangeNotifier {
 
   @override
   void dispose() {
-    nodeService.removeListener(notifyListeners);
+    _isDisposed = true;
+    nodeService.removeListener(_onServiceUpdate);
     super.dispose();
   }
 }

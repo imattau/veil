@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 @immutable
 class NodeState {
   final bool running;
-  final bool busy;
+  final Set<String> activeOperations;
   final String? lastError;
   final String? identityHex;
   final String? authToken;
@@ -12,11 +12,14 @@ class NodeState {
   final Map<String, dynamic> policySummary;
   final List<String> subscriptions;
   final bool hasBackedUp;
+  final bool isOffline;
   final DateTime? lastUpdated;
+
+  bool get busy => activeOperations.isNotEmpty;
 
   const NodeState({
     required this.running,
-    required this.busy,
+    required this.activeOperations,
     required this.lastError,
     required this.identityHex,
     required this.authToken,
@@ -25,26 +28,28 @@ class NodeState {
     required this.policySummary,
     required this.subscriptions,
     required this.hasBackedUp,
+    required this.isOffline,
     required this.lastUpdated,
   });
 
   factory NodeState.initial() => const NodeState(
-        running: false,
-        busy: false,
-        lastError: null,
-        identityHex: null,
-        authToken: null,
-        statusPayload: {},
-        healthPayload: {},
-        policySummary: {},
-        subscriptions: [],
-        hasBackedUp: false,
-        lastUpdated: null,
-      );
+    running: false,
+    activeOperations: {},
+    lastError: null,
+    identityHex: null,
+    authToken: null,
+    statusPayload: {},
+    healthPayload: {},
+    policySummary: {},
+    subscriptions: [],
+    hasBackedUp: false,
+    isOffline: false,
+    lastUpdated: null,
+  );
 
   NodeState copyWith({
     bool? running,
-    bool? busy,
+    Set<String>? activeOperations,
     String? lastError,
     String? identityHex,
     String? authToken,
@@ -53,11 +58,12 @@ class NodeState {
     Map<String, dynamic>? policySummary,
     List<String>? subscriptions,
     bool? hasBackedUp,
+    bool? isOffline,
     DateTime? lastUpdated,
   }) {
     return NodeState(
       running: running ?? this.running,
-      busy: busy ?? this.busy,
+      activeOperations: activeOperations ?? this.activeOperations,
       lastError: lastError ?? this.lastError,
       identityHex: identityHex ?? this.identityHex,
       authToken: authToken ?? this.authToken,
@@ -66,6 +72,7 @@ class NodeState {
       policySummary: policySummary ?? this.policySummary,
       subscriptions: subscriptions ?? this.subscriptions,
       hasBackedUp: hasBackedUp ?? this.hasBackedUp,
+      isOffline: isOffline ?? this.isOffline,
       lastUpdated: lastUpdated ?? this.lastUpdated,
     );
   }
@@ -76,7 +83,7 @@ class NodeState {
       other is NodeState &&
           runtimeType == other.runtimeType &&
           running == other.running &&
-          busy == other.busy &&
+          setEquals(activeOperations, other.activeOperations) &&
           lastError == other.lastError &&
           identityHex == other.identityHex &&
           authToken == other.authToken &&
@@ -85,12 +92,13 @@ class NodeState {
           mapEquals(policySummary, other.policySummary) &&
           listEquals(subscriptions, other.subscriptions) &&
           hasBackedUp == other.hasBackedUp &&
+          isOffline == other.isOffline &&
           lastUpdated == other.lastUpdated;
 
   @override
   int get hashCode =>
       running.hashCode ^
-      busy.hashCode ^
+      activeOperations.hashCode ^
       lastError.hashCode ^
       identityHex.hashCode ^
       authToken.hashCode ^
@@ -99,5 +107,6 @@ class NodeState {
       policySummary.hashCode ^
       subscriptions.hashCode ^
       hasBackedUp.hashCode ^
+      isOffline.hashCode ^
       lastUpdated.hashCode;
 }

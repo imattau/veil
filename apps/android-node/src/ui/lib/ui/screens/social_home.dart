@@ -21,32 +21,42 @@ import '../../logic/preferences_controller.dart';
 import '../components/entrance_fader.dart';
 
 class SocialHome extends StatefulWidget {
-  const SocialHome({super.key});
+  final NodeService service;
+  final PreferencesController preferencesController;
+
+  const SocialHome({
+    super.key,
+    required this.service,
+    required this.preferencesController,
+  });
 
   @override
   State<SocialHome> createState() => _SocialHomeState();
 }
 
 class _SocialHomeState extends State<SocialHome> {
-  final NodeService _service = NodeService();
+  late final NodeService _service;
   late final SocialController _controller;
   late final MessagingController _messagingController;
   late final ListController _listController;
-  late final PreferencesController _preferencesController;
   int _currentIndex = 0;
   bool _hideBackupReminder = false;
-  final List<ScrollController> _scrollControllers =
-      List.generate(4, (_) => ScrollController());
+  String? _lastShownErrorKey;
+  DateTime? _lastShownErrorAt;
+  static const Duration _errorToastCooldown = Duration(seconds: 20);
+  final List<ScrollController> _scrollControllers = List.generate(
+    4,
+    (_) => ScrollController(),
+  );
 
   @override
   void initState() {
     super.initState();
+    _service = widget.service;
     _controller = SocialController(_service);
     _messagingController = MessagingController(_service);
     _listController = ListController(_service);
-    _preferencesController = PreferencesController(_service);
     _service.addListener(_handleError);
-    _service.start();
   }
 
   void _handleError() {
@@ -54,11 +64,36 @@ class _SocialHomeState extends State<SocialHome> {
     if (error != null && error.isNotEmpty) {
       _service.clearError();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error)),
-        );
+        if (_shouldShowErrorToast(error)) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(content: Text(error)));
+        }
       }
     }
+  }
+
+  bool _shouldShowErrorToast(String message) {
+    final now = DateTime.now();
+    final key = _errorToastKey(message);
+    if (_lastShownErrorKey == key &&
+        _lastShownErrorAt != null &&
+        now.difference(_lastShownErrorAt!) < _errorToastCooldown) {
+      return false;
+    }
+    _lastShownErrorKey = key;
+    _lastShownErrorAt = now;
+    return true;
+  }
+
+  String _errorToastKey(String message) {
+    if (message.startsWith('Publish failed')) return 'publish_failed';
+    if (message.startsWith('Publish dropped')) return 'publish_dropped';
+    if (message.startsWith('Cannot reach node')) return 'cannot_reach_node';
+    final normalized = message
+        .replaceAll(RegExp(r'\(attempt \d+\)'), '(attempt)')
+        .replaceAll(RegExp(r'retry in \d+ms'), 'retry in Xms');
+    return normalized;
   }
 
   @override
@@ -70,8 +105,6 @@ class _SocialHomeState extends State<SocialHome> {
     _controller.dispose();
     _messagingController.dispose();
     _listController.dispose();
-    _preferencesController.dispose();
-    _service.dispose();
     super.dispose();
   }
 
@@ -80,6 +113,17 @@ class _SocialHomeState extends State<SocialHome> {
     return ListenableBuilder(
       listenable: _service,
       builder: (context, _) {
+        final mediaQuery = MediaQuery.of(context);
+        final theme = Theme.of(context);
+        final surface = theme.colorScheme.surface;
+        final secondaryText =
+            theme.textTheme.labelSmall?.color ?? VeilTheme.textSecondary;
+        final topInset = mediaQuery.padding.top + kToolbarHeight + 16;
+        final tabBottomInset =
+            kBottomNavigationBarHeight + mediaQuery.padding.bottom + 80;
+        final profileBottomInset =
+            kBottomNavigationBarHeight + mediaQuery.padding.bottom + 24;
+
         return Scaffold(
           extendBody: true,
           extendBodyBehindAppBar: true,
@@ -90,7 +134,7 @@ class _SocialHomeState extends State<SocialHome> {
               child: BackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
                 child: AppBar(
-                  backgroundColor: VeilTheme.background.withOpacity(0.7),
+                  backgroundColor: surface.withValues(alpha: 0.72),
                   title: Row(
                     children: [
                       Image.asset('assets/veil_logo.png', height: 24),
@@ -104,8 +148,7 @@ class _SocialHomeState extends State<SocialHome> {
                         padding: const EdgeInsets.only(right: 10),
                         child: IconButton(
                           tooltip: 'Network status',
-                          onPressed: () =>
-                              Scaffold.of(context).openEndDrawer(),
+                          onPressed: () => Scaffold.of(context).openEndDrawer(),
                           icon: NetworkPulse(service: _service),
                         ),
                       ),
@@ -126,18 +169,33 @@ class _SocialHomeState extends State<SocialHome> {
                     setState(() => _hideBackupReminder = true),
                 onBackup: () =>
                     setState(() => _currentIndex = 3), // Profile tab
+                onDiscover: () => setState(() => _currentIndex = 1),
                 scrollController: _scrollControllers[0],
+                topInset: topInset,
+                bottomInset: tabBottomInset,
               ),
-              ExploreView(service: _service),
+              ExploreView(
+                service: _service,
+                scrollController: _scrollControllers[1],
+                topInset: topInset,
+                bottomInset: tabBottomInset,
+                onAddChannel: _showAddChannelDialog,
+              ),
               InboxView(
                 controller: _messagingController,
                 socialController: _controller,
+                scrollController: _scrollControllers[2],
+                topInset: topInset,
+                bottomInset: tabBottomInset,
               ),
               ProfileView(
                 service: _service,
                 controller: _controller,
                 listController: _listController,
-                preferencesController: _preferencesController,
+                preferencesController: widget.preferencesController,
+                scrollController: _scrollControllers[3],
+                topInset: topInset,
+                bottomInset: profileBottomInset,
               ),
             ],
           ),
@@ -161,9 +219,9 @@ class _SocialHomeState extends State<SocialHome> {
                   }
                 },
                 type: BottomNavigationBarType.fixed,
-                backgroundColor: VeilTheme.background.withOpacity(0.7),
-                selectedItemColor: VeilTheme.accent,
-                unselectedItemColor: VeilTheme.textSecondary,
+                backgroundColor: surface.withValues(alpha: 0.72),
+                selectedItemColor: theme.colorScheme.primary,
+                unselectedItemColor: secondaryText.withValues(alpha: 0.88),
                 showSelectedLabels: true,
                 showUnselectedLabels: true,
                 items: const [
@@ -195,6 +253,12 @@ class _SocialHomeState extends State<SocialHome> {
 
   Widget? _buildContextualFAB() {
     if (_currentIndex == 3) return null; // Profile tab
+    final theme = Theme.of(context);
+    final fabForeground =
+        ThemeData.estimateBrightnessForColor(theme.colorScheme.primary) ==
+            Brightness.dark
+        ? Colors.white
+        : Colors.black;
 
     IconData icon = Icons.add;
     VoidCallback? onPressed;
@@ -218,20 +282,36 @@ class _SocialHomeState extends State<SocialHome> {
     } else {
       // Home tab
       onPressed = () {
+        final preferredChannel = widget.preferencesController.defaultChannel
+            .trim()
+            .replaceFirst(RegExp(r'^#'), '');
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => ComposerView(service: _service),
+            builder: (context) => ComposerView(
+              service: _service,
+              initialChannel: preferredChannel.isEmpty
+                  ? null
+                  : preferredChannel,
+            ),
             fullscreenDialog: true,
           ),
         );
       };
     }
 
-    return FloatingActionButton(
+    final label = switch (_currentIndex) {
+      2 => 'New Message',
+      1 => 'Add Channel',
+      _ => 'Post',
+    };
+
+    return FloatingActionButton.extended(
       onPressed: onPressed,
-      backgroundColor: VeilTheme.accent,
-      child: Icon(icon, color: Colors.black),
+      backgroundColor: theme.colorScheme.primary,
+      foregroundColor: fabForeground,
+      icon: Icon(icon),
+      label: Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
     );
   }
 
@@ -240,6 +320,9 @@ class _SocialHomeState extends State<SocialHome> {
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(VeilTheme.radiusM),
+        ),
         title: const Text('Add Channel'),
         content: TextField(
           controller: controller,
@@ -284,26 +367,27 @@ class _FeedView extends StatelessWidget {
   final SocialController controller;
   final ListController listController;
   final VoidCallback onBackup;
+  final VoidCallback onDiscover;
   final VoidCallback onDismissReminder;
   final bool showBackupReminder;
   final ScrollController scrollController;
+  final double topInset;
+  final double bottomInset;
 
   const _FeedView({
     required this.controller,
     required this.listController,
     required this.onBackup,
+    required this.onDiscover,
     required this.onDismissReminder,
     required this.showBackupReminder,
     required this.scrollController,
+    required this.topInset,
+    required this.bottomInset,
   });
 
   @override
   Widget build(BuildContext context) {
-    final topPad = MediaQuery.of(context).padding.top + kToolbarHeight + 16;
-    final bottomPad = kBottomNavigationBarHeight +
-        MediaQuery.of(context).padding.bottom +
-        80; // 80 accounts for FAB
-
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
@@ -320,16 +404,16 @@ class _FeedView extends StatelessWidget {
             child: SingleChildScrollView(
               controller: scrollController,
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: EdgeInsets.fromLTRB(16, topPad, 16, bottomPad),
+              padding: EdgeInsets.fromLTRB(16, topInset, 16, bottomInset),
               child: SizedBox(
                 height: MediaQuery.of(context).size.height * 0.7,
                 child: EmptyState(
                   icon: Icons.bubble_chart_outlined,
                   title: 'Welcome to the Veil',
                   message:
-                      'Your personal social node is active and syncing. Follow people or channels to see content!',
-                  onAction: () => controller.nodeService.refresh(),
-                  actionLabel: 'Check for Updates',
+                      'Your personal social node is active and syncing. Follow people or channels to see content.',
+                  onAction: onDiscover,
+                  actionLabel: 'Explore Channels',
                 ),
               ),
             ),
@@ -340,7 +424,7 @@ class _FeedView extends StatelessWidget {
           onRefresh: controller.nodeService.refresh,
           child: ListView.builder(
             controller: scrollController,
-            padding: EdgeInsets.fromLTRB(16, topPad, 16, bottomPad),
+            padding: EdgeInsets.fromLTRB(16, topInset, 16, bottomInset),
             itemCount: feed.length + 1,
             itemBuilder: (context, index) {
               if (index == 0) {
@@ -388,9 +472,9 @@ class _BackupReminder extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.amber.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.amber.withOpacity(0.3)),
+        color: Colors.amber.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(VeilTheme.radiusS),
+        border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
       ),
       child: Column(
         children: [
@@ -416,11 +500,14 @@ class _BackupReminder extends StatelessWidget {
             children: [
               TextButton(
                 onPressed: onBackup,
-                child: const Text('BACK UP NOW',
-                    style: TextStyle(
-                        color: Colors.amber,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12)),
+                child: const Text(
+                  'BACK UP NOW',
+                  style: TextStyle(
+                    color: Colors.amber,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
               ),
             ],
           ),

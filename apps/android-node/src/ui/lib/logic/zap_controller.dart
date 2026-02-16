@@ -3,7 +3,6 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 import './node_service.dart';
-import './models/node_event.dart';
 
 class ZapController extends ChangeNotifier {
   final NodeService nodeService;
@@ -17,22 +16,48 @@ class ZapController extends ChangeNotifier {
       final parts = lnAddress.split('@');
       if (parts.length != 2) return null;
 
-      final domain = parts[1];
+      final domain = parts[1].toLowerCase().trim();
       final user = parts[0];
+
+      // Basic SSRF protection
+      if (domain == 'localhost' ||
+          domain == '127.0.0.1' ||
+          domain.startsWith('192.168.') ||
+          domain.startsWith('10.') ||
+          domain.startsWith('172.')) {
+        debugPrint('Blocked potentially malicious LNURL domain: $domain');
+        return null;
+      }
+
       final url = 'https://$domain/.well-known/lnurlp/$user';
 
-      final res = await _client.get(Uri.parse(url));
+      final res = await _client
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) return null;
+
       final metadata = jsonDecode(res.body);
       final callback = metadata['callback'] as String?;
 
       if (callback == null) return null;
 
-      final amountMsat = amountSats * 1000;
-      final invoiceRes = await _client.get(
-        Uri.parse('$callback?amount=$amountMsat'),
-      );
-      final invoiceData = jsonDecode(invoiceRes.body);
+      // Ensure callback is also HTTPS and not local
+      final callbackUri = Uri.tryParse(callback);
+      if (callbackUri == null ||
+          callbackUri.scheme != 'https' ||
+          callbackUri.host == 'localhost' ||
+          callbackUri.host == '127.0.0.1') {
+        return null;
+      }
 
+      final amountMsat = amountSats * 1000;
+      final separator = callback.contains('?') ? '&' : '?';
+      final invoiceRes = await _client
+          .get(Uri.parse('$callback${separator}amount=$amountMsat'))
+          .timeout(const Duration(seconds: 10));
+      if (invoiceRes.statusCode != 200) return null;
+
+      final invoiceData = jsonDecode(invoiceRes.body);
       return invoiceData['pr'] as String?; // The Bolt11 invoice
     } catch (e) {
       debugPrint('LNURL error: $e');
@@ -45,7 +70,7 @@ class ZapController extends ChangeNotifier {
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri);
     } else {
-      throw 'No lightning wallet found';
+      throw Exception('No lightning wallet found on this device');
     }
   }
 

@@ -11,7 +11,8 @@ class NetworkPulse extends StatefulWidget {
   State<NetworkPulse> createState() => _NetworkPulseState();
 }
 
-class _NetworkPulseState extends State<NetworkPulse> with SingleTickerProviderStateMixin {
+class _NetworkPulseState extends State<NetworkPulse>
+    with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
 
   @override
@@ -34,14 +35,28 @@ class _NetworkPulseState extends State<NetworkPulse> with SingleTickerProviderSt
     return ListenableBuilder(
       listenable: widget.service,
       builder: (context, _) {
-        final status = widget.service.state.statusPayload;
-        final quic = status['lanes']?['quic']?['connected'] == true;
-        final ws = status['lanes']?['websocket']?['connected'] == true;
-        final pending = (status['queue']?['pending'] as num?)?.toInt() ?? 0;
-        
+        final state = widget.service.state;
+        if (state.isOffline) {
+          return const Tooltip(
+            message: 'Node unreachable',
+            child: Icon(Icons.cloud_off, size: 14, color: Colors.red),
+          );
+        }
+
+        final status = state.statusPayload;
+        final lanes = status['lanes'];
+        final queue = status['queue'];
+
+        final bool quic = (lanes is Map) && lanes['quic']?['connected'] == true;
+        final bool ws =
+            (lanes is Map) && lanes['websocket']?['connected'] == true;
+        final int pending = (queue is Map)
+            ? (queue['pending'] as num?)?.toInt() ?? 0
+            : 0;
+
         Color color = Colors.red;
         String label = 'Disconnected';
-        
+
         if (quic) {
           color = VeilTheme.accent;
           label = 'Fast';
@@ -58,8 +73,8 @@ class _NetworkPulseState extends State<NetworkPulse> with SingleTickerProviderSt
 
         return Tooltip(
           message: 'Network: $label ${pending > 0 ? '($pending sending)' : ''}',
-          child: AnimatedBuilder(
-            animation: _pulseController,
+          child: ListenableBuilder(
+            listenable: _pulseController,
             builder: (context, child) {
               return Container(
                 width: 10,
@@ -69,7 +84,9 @@ class _NetworkPulseState extends State<NetworkPulse> with SingleTickerProviderSt
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: color.withOpacity(0.5 + (0.5 * _pulseController.value)),
+                      color: color.withValues(
+                        alpha: 0.5 + (0.5 * _pulseController.value),
+                      ),
                       blurRadius: 4 + (4 * _pulseController.value),
                       spreadRadius: 2 + (2 * _pulseController.value),
                     ),
