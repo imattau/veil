@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use tracing::warn;
 use veil_crypto::aead::AeadCipher;
 use veil_crypto::signing::Signer;
 use veil_node::batch::FeedBatcher;
@@ -42,7 +43,7 @@ pub(super) fn publish_bridge_batch<AFast, AFallback, S>(
     AFallback: TransportAdapter,
     S: Signer,
 {
-    let _ = publish_queue_tick_multi_lane(
+    if let Err(err) = publish_queue_tick_multi_lane(
         node,
         fast_adapter,
         fallback_adapter,
@@ -51,5 +52,7 @@ pub(super) fn publish_bridge_batch<AFast, AFallback, S>(
         config,
         cipher,
         signer,
-    );
+    ) {
+        warn!("nostr bridge publish failed: {err}");
+    }
 }

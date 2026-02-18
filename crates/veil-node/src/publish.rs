@@ -285,45 +285,66 @@ pub fn publish_queue_tick_multi_lane<
     cipher: &impl AeadCipher,
     signer: Option<&S>,
 ) -> Result<Option<PublishResult>, PublishError> {
-    let items = if params.interactive_flush {
-        batcher.drain_interactive()
-    } else {
-        batcher.drain_next_batch()
-    };
-    if items.is_empty() {
-        return Ok(None);
-    }
+    let mut interactive_flush = params.interactive_flush;
+    loop {
+        let items = if interactive_flush {
+            batcher.drain_interactive()
+        } else {
+            batcher.drain_next_batch()
+        };
+        if items.is_empty() {
+            return Ok(None);
+        }
 
-    let mut payload = Vec::new();
-    ciborium::ser::into_writer(&items, &mut payload)
-        .map_err(|e| PublishError::PayloadEncode(e.to_string()))?;
-    let mut flags = params.flags;
-    if items.len() > 1 {
-        flags |= OBJECT_FLAG_BATCHED;
-    }
-    let encoded_object = build_encoded_object(
-        &payload,
-        params.namespace,
-        params.epoch,
-        params.tag,
-        params.encrypt_key,
-        params.now_step,
-        flags,
-        cipher,
-        signer,
-    )?;
+        let publish_result = (|| {
+            let mut payload = Vec::new();
+            ciborium::ser::into_writer(&items, &mut payload)
+                .map_err(|e| PublishError::PayloadEncode(e.to_string()))?;
+            let mut flags = params.flags;
+            if items.len() > 1 {
+                flags |= OBJECT_FLAG_BATCHED;
+            }
+            let encoded_object = build_encoded_object(
+                &payload,
+                params.namespace,
+                params.epoch,
+                params.tag,
+                params.encrypt_key,
+                params.now_step,
+                flags,
+                cipher,
+                signer,
+            )?;
 
-    let result = publish_encoded_object_multi_lane(
-        node,
-        fast_adapter,
-        fallback_adapter,
-        &encoded_object,
-        params.fast_peers,
-        params.fallback_peers,
-        params.now_step,
-        config,
-    )?;
-    Ok(Some(result))
+            publish_encoded_object_multi_lane(
+                node,
+                fast_adapter,
+                fallback_adapter,
+                &encoded_object,
+                params.fast_peers,
+                params.fallback_peers,
+                params.now_step,
+                config,
+            )
+        })();
+
+        match publish_result {
+            Ok(result) => return Ok(Some(result)),
+            Err(PublishError::ObjectTooLarge { .. }) if !interactive_flush && items.len() > 1 => {
+                // Split oversized batches by retrying one item at a time.
+                batcher.requeue_front(items);
+                interactive_flush = true;
+            }
+            Err(err) => {
+                // Keep retryable failures queued; irrecoverable single-item
+                // oversize failures are dropped to preserve queue liveness.
+                if !matches!(err, PublishError::ObjectTooLarge { .. } if items.len() == 1) {
+                    batcher.requeue_front(items);
+                }
+                return Err(err);
+            }
+        }
+    }
 }
 
 /// Runs one publish service tick:
@@ -394,7 +415,7 @@ mod tests {
         PublishServiceTickParams,
     };
     use crate::ack::{register_pending_ack, AckRetryPolicy};
-    use crate::batch::{BatchLimits, FeedBatcher};
+    use crate::batch::{BatchLimits, FeedBatcher, DEFAULT_MAX_OBJECT_SIZE};
     use crate::config::NodeRuntimeConfig;
     use crate::state::NodeState;
 
@@ -565,6 +586,69 @@ mod tests {
         .expect_err("missing signer should fail");
 
         assert!(err.to_string().contains("signer"));
+        assert_eq!(batcher.len(), 1);
+    }
+
+    #[test]
+    fn publish_queue_tick_drops_unpublishable_oversized_item_and_keeps_following_items() {
+        let mut node = NodeState::default();
+        let mut fast = InMemoryAdapter::default();
+        let mut fallback = InMemoryAdapter::default();
+        let cfg = NodeRuntimeConfig::default();
+        let mut batcher = FeedBatcher::default();
+        batcher.enqueue(vec![0xAA_u8; DEFAULT_MAX_OBJECT_SIZE + 128]);
+        batcher.enqueue(vec![0xBB_u8; 32]);
+        let peers = vec!["peer-a".to_string()];
+        let signer = Ed25519Signer::from_secret([0x66; 32]);
+
+        let err = publish_queue_tick_multi_lane(
+            &mut node,
+            &mut fast,
+            &mut fallback,
+            &mut batcher,
+            PublishQueueTickParams {
+                namespace: Namespace(1),
+                epoch: Epoch(1),
+                tag: [0x11; 32],
+                encrypt_key: &[0xAB; 32],
+                now_step: 1,
+                flags: OBJECT_FLAG_SIGNED,
+                interactive_flush: false,
+                fast_peers: &peers,
+                fallback_peers: &peers,
+            },
+            &cfg,
+            &XChaCha20Poly1305Cipher,
+            Some(&signer),
+        )
+        .expect_err("oversized single item should fail");
+        assert!(matches!(err, super::PublishError::ObjectTooLarge { .. }));
+        assert_eq!(batcher.len(), 1);
+
+        let out = publish_queue_tick_multi_lane(
+            &mut node,
+            &mut fast,
+            &mut fallback,
+            &mut batcher,
+            PublishQueueTickParams {
+                namespace: Namespace(1),
+                epoch: Epoch(1),
+                tag: [0x11; 32],
+                encrypt_key: &[0xAB; 32],
+                now_step: 2,
+                flags: OBJECT_FLAG_SIGNED,
+                interactive_flush: false,
+                fast_peers: &peers,
+                fallback_peers: &peers,
+            },
+            &cfg,
+            &XChaCha20Poly1305Cipher,
+            Some(&signer),
+        )
+        .expect("remaining item should publish")
+        .expect("queue should publish one item");
+        assert!(out.sent_fast > 0);
+        assert_eq!(batcher.len(), 0);
     }
 
     #[test]

@@ -85,10 +85,23 @@ where
 }
 
 fn is_fast_peer_seed(peer: &&String) -> bool {
-    !peer.starts_with("ws:")
-        && !peer.starts_with("wssrv:")
-        && !peer.starts_with("tor:")
-        && !peer.starts_with("ble:")
+    let peer = peer.trim();
+    !peer
+        .get(..3)
+        .map(|p| p.eq_ignore_ascii_case("ws:"))
+        .unwrap_or(false)
+        && !peer
+            .get(..6)
+            .map(|p| p.eq_ignore_ascii_case("wssrv:"))
+            .unwrap_or(false)
+        && !peer
+            .get(..4)
+            .map(|p| p.eq_ignore_ascii_case("tor:"))
+            .unwrap_or(false)
+        && !peer
+            .get(..4)
+            .map(|p| p.eq_ignore_ascii_case("ble:"))
+            .unwrap_or(false)
 }
 
 fn merge_snapshot_strings(fast_seen: Vec<String>, fallback_seen: Vec<FallbackPeer>) -> Vec<String> {
@@ -112,9 +125,15 @@ mod tests {
     fn is_fast_peer_seed_filters_transport_prefixes() {
         assert!(is_fast_peer_seed(&&"peer-a".to_string()));
         assert!(!is_fast_peer_seed(&&"ws:relay-a".to_string()));
+        assert!(!is_fast_peer_seed(&&"WS:relay-a".to_string()));
         assert!(!is_fast_peer_seed(&&"wssrv:127.0.0.1:8080".to_string()));
+        assert!(!is_fast_peer_seed(&&"WSSRV:127.0.0.1:8080".to_string()));
         assert!(!is_fast_peer_seed(&&"tor:peer.onion:5000".to_string()));
+        assert!(!is_fast_peer_seed(&&"Tor:peer.onion:5000".to_string()));
         assert!(!is_fast_peer_seed(&&"ble:AA:BB:CC:DD:EE:FF".to_string()));
+        assert!(!is_fast_peer_seed(
+            &&"  BLE:AA:BB:CC:DD:EE:FF  ".to_string()
+        ));
     }
 
     #[test]

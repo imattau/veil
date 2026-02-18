@@ -564,7 +564,18 @@ async fn main() {
 
     let mut now_step = 0_u64;
     loop {
-        if handle_shutdown_if_requested(&shutdown, &state_path, &mut runtime.state) {
+        if shutdown.load(Ordering::Relaxed)
+            && handle_shutdown_if_requested(
+                &shutdown,
+                &state_path,
+                &mut runtime.state,
+                peer_db.as_ref(),
+                &peer_snapshot,
+                runtime.fast_adapter.snapshot_seen(),
+                runtime.fallback_adapter.snapshot_seen(),
+                max_peer_db_rows,
+            )
+        {
             break;
         }
         let metrics_ref = Arc::clone(&metrics);

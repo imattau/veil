@@ -6,6 +6,15 @@ use veil_transport_ble::BlePeer;
 
 use crate::fallback_transport::FallbackPeer;
 
+fn strip_ascii_prefix_ci<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = value.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
+        Some(&value[prefix.len()..])
+    } else {
+        None
+    }
+}
+
 pub(super) fn parse_fallback_peers(
     ws_peer: Option<String>,
     tor_peers: Vec<String>,
@@ -29,28 +38,29 @@ pub(super) fn parse_fallback_peer_strings(values: &[String]) -> Vec<FallbackPeer
     values
         .iter()
         .filter_map(|value| {
-            if let Some(rest) = value.strip_prefix("ws:") {
+            let value = value.trim();
+            if let Some(rest) = strip_ascii_prefix_ci(value, "ws:") {
                 let url = rest.trim();
                 if url.is_empty() {
                     None
                 } else {
                     Some(FallbackPeer::WebSocket(url.to_string()))
                 }
-            } else if let Some(rest) = value.strip_prefix("wssrv:") {
+            } else if let Some(rest) = strip_ascii_prefix_ci(value, "wssrv:") {
                 let addr = rest.trim();
                 if addr.is_empty() {
                     None
                 } else {
                     Some(FallbackPeer::WebSocketServer(addr.to_string()))
                 }
-            } else if let Some(rest) = value.strip_prefix("tor:") {
+            } else if let Some(rest) = strip_ascii_prefix_ci(value, "tor:") {
                 let addr = rest.trim();
                 if addr.is_empty() {
                     None
                 } else {
                     Some(FallbackPeer::Tor(addr.to_string()))
                 }
-            } else if let Some(_rest) = value.strip_prefix("ble:") {
+            } else if let Some(_rest) = strip_ascii_prefix_ci(value, "ble:") {
                 #[cfg(feature = "ble")]
                 {
                     let addr = _rest.trim();
@@ -112,4 +122,32 @@ pub(super) fn merge_peers<T: Clone + Eq + Hash>(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_fallback_peer_strings;
+    use crate::fallback_transport::FallbackPeer;
+
+    #[test]
+    fn parse_fallback_peer_strings_accepts_case_insensitive_prefixes() {
+        let parsed = parse_fallback_peer_strings(&[
+            "WS:relay-a".to_string(),
+            "WSSRV:127.0.0.1:7000".to_string(),
+            "Tor:peer.onion:5000".to_string(),
+        ]);
+        assert!(parsed.contains(&FallbackPeer::WebSocket("relay-a".to_string())));
+        assert!(parsed.contains(&FallbackPeer::WebSocketServer("127.0.0.1:7000".to_string())));
+        assert!(parsed.contains(&FallbackPeer::Tor("peer.onion:5000".to_string())));
+    }
+
+    #[test]
+    fn parse_fallback_peer_strings_trims_outer_whitespace() {
+        let parsed = parse_fallback_peer_strings(&[
+            "  ws:relay-a  ".to_string(),
+            "\ttor:peer.onion:5000\t".to_string(),
+        ]);
+        assert!(parsed.contains(&FallbackPeer::WebSocket("relay-a".to_string())));
+        assert!(parsed.contains(&FallbackPeer::Tor("peer.onion:5000".to_string())));
+    }
 }

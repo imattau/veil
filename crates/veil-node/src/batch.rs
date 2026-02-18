@@ -42,6 +42,13 @@ impl FeedBatcher {
         self.queue.push_back(item);
     }
 
+    /// Re-enqueues drained items to the front of the queue in original order.
+    pub fn requeue_front(&mut self, items: Vec<Vec<u8>>) {
+        for item in items.into_iter().rev() {
+            self.queue.push_front(item);
+        }
+    }
+
     /// Number of queued items.
     pub fn len(&self) -> usize {
         self.queue.len()
