@@ -29,6 +29,7 @@ const DISCOVERY_MAX_LAN_ADDRS: usize = 8;
 const DISCOVERY_MAX_LAN_ADDR_LEN: usize = 256;
 const DISCOVERY_TAG_SEED: &[u8] = b"veil-discovery";
 
+mod api_handlers;
 mod contact_validation;
 mod http_targets;
 mod lan;
@@ -36,7 +37,10 @@ mod lookup_keys;
 mod message;
 mod message_handlers;
 mod table;
+mod worker_helpers;
 pub use self::message::{DiscoveryKind, DiscoveryMessage};
+pub use self::worker_helpers::build_self_contact;
+use self::worker_helpers::{join_discovery_endpoint, with_auth_header};
 
 #[derive(Debug, Clone)]
 pub struct DiscoveryConfig {
@@ -265,35 +269,19 @@ pub fn handle_discovery_announce(
     request: DiscoveryAnnounceRequest,
     max_neighbors: usize,
 ) -> DiscoveryAnnounceResponse {
-    let Some(contact) = sanitize_contact(request.contact) else {
-        return DiscoveryAnnounceResponse {
-            accepted: false,
-            neighbors: Vec::new(),
-        };
-    };
-    state.add_contact(contact.clone());
-    let neighbors = state.discovery_lookup_contact(&contact, max_neighbors);
-    DiscoveryAnnounceResponse {
-        accepted: true,
-        neighbors,
-    }
+    api_handlers::handle_discovery_announce(state, request, max_neighbors, sanitize_contact)
 }
 
 pub fn handle_discovery_lookup(
     state: &NodeState,
     request: DiscoveryLookupRequest,
 ) -> DiscoveryLookupResponse {
-    let limit = request
-        .limit
-        .unwrap_or(DISCOVERY_LOOKUP_DEFAULT_LIMIT)
-        .min(DISCOVERY_MAX_CONTACTS);
-    let mut result = Vec::new();
-    if let Some(peer_id) = request.peer_id.as_deref() {
-        result = state.discovery_lookup_peer(peer_id, limit);
-    } else if let Some(pubkey_hex) = request.pubkey_hex.as_deref() {
-        result = state.discovery_lookup_pubkey(pubkey_hex, limit);
-    }
-    DiscoveryLookupResponse { contacts: result }
+    api_handlers::handle_discovery_lookup(
+        state,
+        request,
+        DISCOVERY_LOOKUP_DEFAULT_LIMIT,
+        DISCOVERY_MAX_CONTACTS,
+    )
 }
 
 pub fn handle_discovery_gossip(
@@ -301,17 +289,13 @@ pub fn handle_discovery_gossip(
     request: DiscoveryGossipRequest,
     max_contacts: usize,
 ) -> DiscoveryGossipResponse {
-    for contact in request
-        .contacts
-        .into_iter()
-        .filter_map(sanitize_contact)
-        .take(DISCOVERY_MAX_CONTACTS)
-    {
-        state.add_contact(contact);
-    }
-    DiscoveryGossipResponse {
-        contacts: state.discovery_sample(bounded_gossip_contacts(max_contacts)),
-    }
+    api_handlers::handle_discovery_gossip(
+        state,
+        request,
+        DISCOVERY_MAX_CONTACTS,
+        sanitize_contact,
+        |value| bounded_gossip_contacts(value.min(max_contacts)),
+    )
 }
 
 pub fn discovery_tag(namespace: Namespace) -> [u8; 32] {
@@ -319,58 +303,6 @@ pub fn discovery_tag(namespace: Namespace) -> [u8; 32] {
     input.extend_from_slice(DISCOVERY_TAG_SEED);
     input.extend_from_slice(&namespace.0.to_be_bytes());
     blake3::hash(&input).into()
-}
-
-pub fn build_self_contact(node: &NodeState, protocol: &ProtocolEngine) -> ContactBundle {
-    let identity = node.identity();
-    let rpc_url = std::env::var("VEIL_NODE_RPC_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let ws_url = std::env::var("VEIL_NODE_WS_PUBLIC")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            protocol.ws_url().filter(|url| {
-                !url.contains("127.0.0.1") && !url.contains("localhost") && !url.contains("0.0.0.0")
-            })
-        });
-    let quic_addr = std::env::var("VEIL_NODE_QUIC_PUBLIC")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            let addr = protocol.quic_bind_addr();
-            if addr.starts_with("0.0.0.0")
-                || addr.starts_with("127.0.0.1")
-                || addr.contains("localhost")
-            {
-                None
-            } else {
-                Some(addr)
-            }
-        });
-    ContactBundle {
-        peer_id: protocol.peer_id(),
-        ws_url,
-        quic_addr,
-        pubkey_hex: identity.public_key_hex(),
-        rpc_url,
-        lan_addrs: Vec::new(),
-    }
-}
-
-fn join_discovery_endpoint(base: &str, path: &str) -> String {
-    let trimmed = base.trim_end_matches('/');
-    format!("{trimmed}/{path}")
-}
-
-fn with_auth_header(
-    builder: reqwest::RequestBuilder,
-    token: Option<&str>,
-) -> reqwest::RequestBuilder {
-    match token.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) => builder.header("x-veil-token", value),
-        None => builder,
-    }
 }
 
 fn bounded_gossip_contacts(requested: usize) -> usize {

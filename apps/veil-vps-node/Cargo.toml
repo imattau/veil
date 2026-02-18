@@ -19,6 +19,7 @@ rustls = "0.23"
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { workspace = true }
 serde_json = "1"
+sha2 = "0.10"
 toml.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tokio-tungstenite = "0.24"

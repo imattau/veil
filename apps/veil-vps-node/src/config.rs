@@ -189,66 +189,94 @@ mod tests {
     use super::*;
     use std::env;
     use std::path::PathBuf;
+    use std::sync::Mutex;
     use std::time::Duration;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_env<F>(vars: &[(&str, &str)], test: F)
     where
         F: FnOnce(),
     {
-        let mut old = Vec::new();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let existing_prefixed = env::vars()
+            .filter(|(k, _)| k.starts_with("VEIL_VPS_"))
+            .collect::<Vec<_>>();
+        for (k, _) in &existing_prefixed {
+            env::remove_var(k);
+        }
+
+        let mut old_non_prefixed = Vec::new();
         for (k, v) in vars {
-            old.push((k.to_string(), env::var(k).ok()));
+            if !k.starts_with("VEIL_VPS_") {
+                old_non_prefixed.push((k.to_string(), env::var(k).ok()));
+            }
             env::set_var(k, v);
         }
 
-        test();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(test));
 
-        for (k, maybe_old) in old {
+        for (k, _) in env::vars()
+            .filter(|(k, _)| k.starts_with("VEIL_VPS_"))
+            .collect::<Vec<_>>()
+        {
+            env::remove_var(k);
+        }
+        for (k, maybe_old) in old_non_prefixed {
             match maybe_old {
                 Some(val) => env::set_var(k, val),
                 None => env::remove_var(k),
             }
         }
+        for (k, v) in existing_prefixed {
+            env::set_var(k, v);
+        }
+
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
     }
 
     #[test]
     fn defaults_are_applied() {
-        let cfg = VpsConfig::new(None).expect("failed to build config");
+        with_env(&[], || {
+            let cfg = VpsConfig::new(None).expect("failed to build config");
 
-        assert_eq!(cfg.quic_alpn, "veil-quic/1,veil/1,veil-node,veil,h3,hq-29");
-        assert_eq!(
-            cfg.state_path,
-            PathBuf::from("data/veil-vps-node-state.cbor")
-        );
-        assert_eq!(cfg.snapshot_interval, Duration::from_secs(60));
-        assert_eq!(cfg.tick_interval, Duration::from_millis(50));
-        assert_eq!(cfg.health_bind, "127.0.0.1");
-        assert_eq!(cfg.health_port, 9090);
-        assert_eq!(cfg.max_dynamic_peers, 512);
-        assert_eq!(cfg.quic_bind, "0.0.0.0:5000");
-        assert_eq!(cfg.ws_peer.as_deref(), Some("ws-peer"));
-        assert!(cfg.adaptive_lane_scoring);
-        assert!(cfg.probabilistic_forwarding);
-        assert_eq!(cfg.forwarding_min_probability, 0.10);
-        assert_eq!(cfg.forwarding_replica_divisor, 8);
-        assert!(cfg.bloom_exchange);
-        assert_eq!(cfg.bloom_interval_steps, 128);
-        assert_eq!(cfg.bloom_false_positive_rate, 0.05);
-        assert_eq!(cfg.max_cache_shards, 200_000);
-        assert_eq!(cfg.bucket_jitter, 0);
-        assert!(!cfg.open_relay);
-        assert!(!cfg.nostr_bridge_enabled);
-        assert_eq!(cfg.nostr_bridge_channel_id, "nostr-bridge");
-        assert_eq!(cfg.nostr_bridge_namespace, 32);
-        assert_eq!(cfg.nostr_bridge_since, Duration::from_secs(3600));
-        assert_eq!(
-            cfg.nostr_bridge_state_path,
-            PathBuf::from("data/nostr-bridge-state.json")
-        );
-        assert_eq!(cfg.nostr_bridge_max_seen_ids, 20_000);
-        assert_eq!(cfg.nostr_bridge_persist_every_updates, 32);
-        assert!(!cfg.ble_enabled);
-        assert_eq!(cfg.ble_mtu, 180);
+            assert_eq!(cfg.quic_alpn, "veil-quic/1,veil/1,veil-node,veil,h3,hq-29");
+            assert_eq!(
+                cfg.state_path,
+                PathBuf::from("data/veil-vps-node-state.cbor")
+            );
+            assert_eq!(cfg.snapshot_interval, Duration::from_secs(60));
+            assert_eq!(cfg.tick_interval, Duration::from_millis(50));
+            assert_eq!(cfg.health_bind, "0.0.0.0");
+            assert_eq!(cfg.health_port, 9090);
+            assert_eq!(cfg.max_dynamic_peers, 512);
+            assert_eq!(cfg.quic_bind, "0.0.0.0:5000");
+            assert_eq!(cfg.ws_peer.as_deref(), Some("ws-peer"));
+            assert!(cfg.adaptive_lane_scoring);
+            assert!(cfg.probabilistic_forwarding);
+            assert_eq!(cfg.forwarding_min_probability, 0.10);
+            assert_eq!(cfg.forwarding_replica_divisor, 8);
+            assert!(cfg.bloom_exchange);
+            assert_eq!(cfg.bloom_interval_steps, 128);
+            assert_eq!(cfg.bloom_false_positive_rate, 0.05);
+            assert_eq!(cfg.max_cache_shards, 200_000);
+            assert_eq!(cfg.bucket_jitter, 0);
+            assert!(!cfg.open_relay);
+            assert!(!cfg.nostr_bridge_enabled);
+            assert_eq!(cfg.nostr_bridge_channel_id, "nostr-bridge");
+            assert_eq!(cfg.nostr_bridge_namespace, 32);
+            assert_eq!(cfg.nostr_bridge_since, Duration::from_secs(3600));
+            assert_eq!(
+                cfg.nostr_bridge_state_path,
+                PathBuf::from("data/nostr-bridge-state.json")
+            );
+            assert_eq!(cfg.nostr_bridge_max_seen_ids, 20_000);
+            assert_eq!(cfg.nostr_bridge_persist_every_updates, 32);
+            assert!(!cfg.ble_enabled);
+            assert_eq!(cfg.ble_mtu, 180);
+        });
     }
 
     #[test]

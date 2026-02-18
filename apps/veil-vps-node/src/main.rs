@@ -1,35 +1,73 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs;
-use std::hash::Hash;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use clap::{Parser, Subcommand};
-use tracing::{debug, error, info, warn};
+use clap::Parser;
+use tracing::{error, info, warn};
 
+mod admin_auth;
+mod cli;
 mod config;
+mod fallback_peers;
+mod fallback_transport;
 mod http_server;
 mod logger;
+mod metrics_state;
+mod node_bootstrap;
 mod nostr_bridge;
+mod nostr_secret;
+mod peer_runtime;
+mod peer_store;
+mod runtime_bridge;
+mod runtime_housekeeping;
+mod runtime_metrics;
+mod runtime_payloads;
 mod settings_db;
+mod settings_runtime;
+mod time_utils;
 
-use bech32::{Bech32, Hrp};
+use admin_auth::{AdminAuthState, AdminLoginRequest, AdminSettingUpsertRequest};
+use cli::{Cli, Commands, SettingsCommands};
+#[cfg(test)]
+use fallback_peers::merge_peers;
+use fallback_peers::parse_fallback_peers;
+#[cfg(test)]
+use fallback_peers::{encode_fallback_peers, parse_fallback_peer_strings};
+#[cfg(test)]
+use fallback_transport::FallbackPeer;
+use fallback_transport::{CombinedFallbackAdapter, RecordingAdapter};
 use logger::{AdminLoggerLayer, LogBuffer};
+use metrics_state::MetricsState;
+use node_bootstrap::{
+    load_or_create_identity, load_or_create_node_key, load_trusted_certs, parse_core_tags,
+    parse_required_signed_namespaces, pseudo_pubkey_for_peer,
+};
 use nostr_bridge::{start_nostr_bridge, NostrBridgeConfig};
-use rand::RngCore;
-use rusqlite::{params, Connection};
-use serde::Deserialize;
-use settings_db::SettingsStore;
+use nostr_secret::{decode_nostr_secret_input, encode_nostr_nsec};
+use peer_runtime::{compute_peer_lists, seed_discovered_peers};
+use peer_store::{load_peer_list, open_peer_db};
+use runtime_bridge::{drain_bridged_items, publish_bridge_batch};
+use runtime_housekeeping::{
+    handle_shutdown_if_requested, maybe_log_transport_health, maybe_snapshot_state,
+};
+use runtime_metrics::{
+    note_ack_clears, note_send_failures, note_tick, set_nostr_bridge_relays_configured,
+};
+use runtime_payloads::handle_runtime_delivered_payload;
+#[cfg(test)]
+use settings_runtime::normalize_settings_key;
+use settings_runtime::{
+    apply_settings_db_overrides, maybe_handle_settings_command, settings_db_path_from_env,
+};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::flag;
+use time_utils::current_epoch;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use veil_core::hash::blake3_32;
 use veil_core::tags::derive_channel_feed_tag;
-use veil_core::{Epoch, Namespace};
+use veil_core::Namespace;
 use veil_crypto::aead::XChaCha20Poly1305Cipher;
 use veil_crypto::signing::{NostrSigner, NostrVerifier, Signer};
 use veil_node::batch::FeedBatcher;
@@ -37,922 +75,22 @@ use veil_node::config::{
     AdaptiveLaneScoringConfig, BloomExchangeConfig, NodeRuntimeConfig,
     ProbabilisticForwardingConfig,
 };
-use veil_node::persistence::{load_state_or_default, save_state_to_path};
-use veil_node::publish::{publish_queue_tick_multi_lane, PublishQueueTickParams};
+use veil_node::persistence::load_state_or_default;
+use veil_node::publish::PublishQueueTickParams;
 use veil_node::service::{NodeRuntime, NodeRuntimeCallbacks};
-use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
 #[cfg(feature = "ble-btleplug")]
 use veil_transport_ble::btleplug_backend::{BtleplugLink, BtleplugLinkConfig};
 #[cfg(all(feature = "ble", not(feature = "ble-btleplug")))]
 use veil_transport_ble::MockBleLink;
 #[cfg(feature = "ble")]
-use veil_transport_ble::{BleAdapter, BleAdapterConfig, BlePeer};
-use veil_transport_quic::{QuicAdapter, QuicAdapterConfig, QuicIdentity};
+use veil_transport_ble::{BleAdapter, BleAdapterConfig};
+use veil_transport_quic::{QuicAdapter, QuicAdapterConfig};
 use veil_transport_tor::{TorSocksAdapter, TorSocksAdapterConfig};
 use veil_transport_websocket::{
     WebSocketAdapter, WebSocketAdapterConfig, WebSocketServerAdapter, WebSocketServerAdapterConfig,
 };
 
 use crate::config::VpsConfig;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum FallbackPeer {
-    WebSocket(String),
-    WebSocketServer(String),
-    Tor(String),
-    #[cfg(feature = "ble")]
-    Ble(BlePeer),
-}
-
-impl std::fmt::Display for FallbackPeer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FallbackPeer::WebSocket(peer) => write!(f, "ws:{peer}"),
-            FallbackPeer::WebSocketServer(peer) => write!(f, "wssrv:{peer}"),
-            FallbackPeer::Tor(peer) => write!(f, "tor:{peer}"),
-            #[cfg(feature = "ble")]
-            FallbackPeer::Ble(peer) => write!(f, "ble:{}", peer.addr),
-        }
-    }
-}
-
-#[derive(Debug)]
-enum FallbackSendError {
-    WebSocket,
-    WebSocketServer,
-    Tor,
-    MissingWebSocket,
-    MissingWebSocketServer,
-    MissingTor,
-    #[cfg(feature = "ble")]
-    Ble,
-    #[cfg(feature = "ble")]
-    MissingBle,
-}
-
-#[cfg(feature = "ble-btleplug")]
-type BleLinkImpl = BtleplugLink;
-#[cfg(all(feature = "ble", not(feature = "ble-btleplug")))]
-type BleLinkImpl = MockBleLink;
-
-struct CombinedFallbackAdapter {
-    ws: Option<WebSocketAdapter>,
-    ws_server: Option<WebSocketServerAdapter>,
-    tor: Option<TorSocksAdapter>,
-    #[cfg(feature = "ble")]
-    ble: Option<BleAdapter<BleLinkImpl>>,
-}
-
-impl CombinedFallbackAdapter {
-    fn new(
-        ws: Option<WebSocketAdapter>,
-        ws_server: Option<WebSocketServerAdapter>,
-        tor: Option<TorSocksAdapter>,
-        #[cfg(feature = "ble")] ble: Option<BleAdapter<BleLinkImpl>>,
-    ) -> Self {
-        Self {
-            ws,
-            ws_server,
-            tor,
-            #[cfg(feature = "ble")]
-            ble,
-        }
-    }
-
-    fn ws_mut(&mut self) -> Option<&mut WebSocketAdapter> {
-        self.ws.as_mut()
-    }
-
-    fn ws_server_mut(&mut self) -> Option<&mut WebSocketServerAdapter> {
-        self.ws_server.as_mut()
-    }
-
-    fn tor_mut(&mut self) -> Option<&mut TorSocksAdapter> {
-        self.tor.as_mut()
-    }
-
-    #[cfg(feature = "ble")]
-    fn ble_mut(&mut self) -> Option<&mut BleAdapter<BleLinkImpl>> {
-        self.ble.as_mut()
-    }
-
-    fn combined_max_payload_hint(&self) -> Option<usize> {
-        let ws_hint = self.ws.as_ref().and_then(|w| w.max_payload_hint());
-        let ws_srv_hint = self.ws_server.as_ref().and_then(|w| w.max_payload_hint());
-        let tor_hint = self.tor.as_ref().and_then(|t| t.max_payload_hint());
-        let hint = match (ws_hint, ws_srv_hint, tor_hint) {
-            (Some(a), Some(b), Some(c)) => Some(a.min(b).min(c)),
-            (Some(a), Some(b), None) => Some(a.min(b)),
-            (Some(a), None, Some(c)) => Some(a.min(c)),
-            (None, Some(b), Some(c)) => Some(b.min(c)),
-            (Some(a), None, None) => Some(a),
-            (None, Some(b), None) => Some(b),
-            (None, None, Some(c)) => Some(c),
-            (None, None, None) => None,
-        };
-        #[cfg(feature = "ble")]
-        {
-            let ble_hint = self.ble.as_ref().and_then(|b| b.max_payload_hint());
-            return match (hint, ble_hint) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            };
-        }
-        hint
-    }
-
-    fn combined_health_snapshot(&self) -> TransportHealthSnapshot {
-        let mut out = TransportHealthSnapshot::default();
-        if let Some(ws) = &self.ws {
-            let h = ws.health_snapshot();
-            out.outbound_queued += h.outbound_queued;
-            out.outbound_send_ok += h.outbound_send_ok;
-            out.outbound_send_err += h.outbound_send_err;
-            out.inbound_received += h.inbound_received;
-            out.inbound_dropped += h.inbound_dropped;
-            out.reconnect_attempts += h.reconnect_attempts;
-        }
-        if let Some(ws) = &self.ws_server {
-            let h = ws.health_snapshot();
-            out.outbound_queued += h.outbound_queued;
-            out.outbound_send_ok += h.outbound_send_ok;
-            out.outbound_send_err += h.outbound_send_err;
-            out.inbound_received += h.inbound_received;
-            out.inbound_dropped += h.inbound_dropped;
-            out.reconnect_attempts += h.reconnect_attempts;
-        }
-        if let Some(tor) = &self.tor {
-            let h = tor.health_snapshot();
-            out.outbound_queued += h.outbound_queued;
-            out.outbound_send_ok += h.outbound_send_ok;
-            out.outbound_send_err += h.outbound_send_err;
-            out.inbound_received += h.inbound_received;
-            out.inbound_dropped += h.inbound_dropped;
-            out.reconnect_attempts += h.reconnect_attempts;
-        }
-        #[cfg(feature = "ble")]
-        if let Some(ble) = &self.ble {
-            let h = ble.health_snapshot();
-            out.outbound_queued += h.outbound_queued;
-            out.outbound_send_ok += h.outbound_send_ok;
-            out.outbound_send_err += h.outbound_send_err;
-            out.inbound_received += h.inbound_received;
-            out.inbound_dropped += h.inbound_dropped;
-            out.reconnect_attempts += h.reconnect_attempts;
-        }
-        out
-    }
-}
-
-impl TransportAdapter for CombinedFallbackAdapter {
-    type Peer = FallbackPeer;
-    type Error = FallbackSendError;
-
-    fn send(&mut self, peer: &Self::Peer, bytes: &[u8]) -> Result<(), Self::Error> {
-        match peer {
-            FallbackPeer::WebSocket(ws_peer) => {
-                let ws = self.ws_mut().ok_or(FallbackSendError::MissingWebSocket)?;
-                ws.send(ws_peer, bytes)
-                    .map_err(|_| FallbackSendError::WebSocket)
-            }
-            FallbackPeer::WebSocketServer(ws_peer) => {
-                let ws = self
-                    .ws_server_mut()
-                    .ok_or(FallbackSendError::MissingWebSocketServer)?;
-                ws.send(ws_peer, bytes)
-                    .map_err(|_| FallbackSendError::WebSocketServer)
-            }
-            FallbackPeer::Tor(tor_peer) => {
-                let tor = self.tor_mut().ok_or(FallbackSendError::MissingTor)?;
-                tor.send(tor_peer, bytes)
-                    .map_err(|_| FallbackSendError::Tor)
-            }
-            #[cfg(feature = "ble")]
-            FallbackPeer::Ble(ble_peer) => {
-                let ble = self.ble_mut().ok_or(FallbackSendError::MissingBle)?;
-                ble.send(ble_peer, bytes)
-                    .map_err(|_| FallbackSendError::Ble)
-            }
-        }
-    }
-
-    fn recv(&mut self) -> Option<(Self::Peer, Vec<u8>)> {
-        if let Some(ws) = self.ws_mut() {
-            if let Some((peer, bytes)) = ws.recv() {
-                return Some((FallbackPeer::WebSocket(peer), bytes));
-            }
-        }
-        if let Some(ws) = self.ws_server_mut() {
-            if let Some((peer, bytes)) = ws.recv() {
-                return Some((FallbackPeer::WebSocketServer(peer), bytes));
-            }
-        }
-        #[cfg(feature = "ble")]
-        if let Some(ble) = self.ble_mut() {
-            if let Some((peer, bytes)) = ble.recv() {
-                return Some((FallbackPeer::Ble(peer), bytes));
-            }
-        }
-        None
-    }
-
-    fn max_payload_hint(&self) -> Option<usize> {
-        self.combined_max_payload_hint()
-    }
-
-    fn can_send(&self) -> bool {
-        let ok = self.ws.as_ref().map(|w| w.can_send()).unwrap_or(false)
-            || self
-                .ws_server
-                .as_ref()
-                .map(|w| w.can_send())
-                .unwrap_or(false)
-            || self.tor.as_ref().map(|t| t.can_send()).unwrap_or(false);
-        #[cfg(feature = "ble")]
-        {
-            return ok || self.ble.as_ref().map(|b| b.can_send()).unwrap_or(false);
-        }
-        ok
-    }
-
-    fn can_recv(&self) -> bool {
-        let ok = self.ws.as_ref().map(|w| w.can_recv()).unwrap_or(false)
-            || self
-                .ws_server
-                .as_ref()
-                .map(|w| w.can_recv())
-                .unwrap_or(false);
-        #[cfg(feature = "ble")]
-        {
-            return ok || self.ble.as_ref().map(|b| b.can_recv()).unwrap_or(false);
-        }
-        ok
-    }
-
-    fn health_snapshot(&self) -> TransportHealthSnapshot {
-        self.combined_health_snapshot()
-    }
-}
-
-#[cfg(feature = "ble")]
-impl FallbackPeer {
-    fn peer_ble(self) -> BlePeer {
-        match self {
-            FallbackPeer::Ble(p) => p,
-            _ => panic!("not a ble peer"),
-        }
-    }
-}
-
-struct RecordingAdapter<A: TransportAdapter> {
-    inner: A,
-    seen: Arc<Mutex<HashSet<A::Peer>>>,
-}
-
-impl<A: TransportAdapter> RecordingAdapter<A> {
-    fn new(inner: A, seen: Arc<Mutex<HashSet<A::Peer>>>) -> Self {
-        Self { inner, seen }
-    }
-
-    fn snapshot_seen(&self) -> Vec<A::Peer>
-    where
-        A::Peer: Clone,
-    {
-        let guard = self.seen.lock().unwrap_or_else(|e| e.into_inner());
-        guard.iter().cloned().collect()
-    }
-}
-
-impl<A: TransportAdapter> TransportAdapter for RecordingAdapter<A>
-where
-    A::Peer: Clone + Eq + Hash,
-{
-    type Peer = A::Peer;
-    type Error = A::Error;
-
-    fn send(&mut self, peer: &Self::Peer, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.inner.send(peer, bytes)
-    }
-
-    fn recv(&mut self) -> Option<(Self::Peer, Vec<u8>)> {
-        let item = self.inner.recv();
-        if let Some((ref peer, _)) = item {
-            let mut guard = self.seen.lock().unwrap_or_else(|e| e.into_inner());
-            guard.insert(peer.clone());
-        }
-        item
-    }
-
-    fn max_payload_hint(&self) -> Option<usize> {
-        self.inner.max_payload_hint()
-    }
-
-    fn can_send(&self) -> bool {
-        self.inner.can_send()
-    }
-
-    fn can_recv(&self) -> bool {
-        self.inner.can_recv()
-    }
-
-    fn health_snapshot(&self) -> TransportHealthSnapshot {
-        self.inner.health_snapshot()
-    }
-}
-
-fn current_epoch() -> Epoch {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    Epoch((now / 86_400) as u32)
-}
-
-fn open_peer_db(path: &Path) -> Option<Connection> {
-    if let Err(err) = ensure_parent(path) {
-        error!("failed to create peer db dir: {err}");
-        return None;
-    }
-    let conn = match Connection::open(path) {
-        Ok(conn) => conn,
-        Err(err) => {
-            error!("failed to open peer db: {err}");
-            return None;
-        }
-    };
-    let _ = conn.execute_batch(
-        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
-    );
-    if let Err(err) = conn.execute(
-        "CREATE TABLE IF NOT EXISTS peers (peer TEXT PRIMARY KEY, last_seen_ms INTEGER NOT NULL)",
-        [],
-    ) {
-        eprintln!("failed to init peer db: {err}");
-        return None;
-    }
-    Some(conn)
-}
-
-fn load_peer_list(conn: &Connection, limit: usize) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut stmt = match conn.prepare("SELECT peer FROM peers ORDER BY last_seen_ms DESC LIMIT ?1")
-    {
-        Ok(stmt) => stmt,
-        Err(_) => return out,
-    };
-    let rows = stmt.query_map([limit as i64], |row| row.get::<_, String>(0));
-    if let Ok(rows) = rows {
-        for row in rows.flatten() {
-            out.push(row);
-        }
-    }
-    out
-}
-
-fn save_peer_list(conn: &Connection, peers: &[String]) {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
-    for peer in peers {
-        let _ = conn.execute(
-            "INSERT INTO peers (peer, last_seen_ms) VALUES (?1, ?2)\n             ON CONFLICT(peer) DO UPDATE SET last_seen_ms=excluded.last_seen_ms",
-            params![peer, now_ms],
-        );
-    }
-}
-
-fn ensure_parent(path: &Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent)?;
-        }
-    }
-    Ok(())
-}
-
-fn load_or_create_identity(cert_path: &Path, key_path: &Path) -> Result<QuicIdentity, String> {
-    if cert_path.exists() && key_path.exists() {
-        let cert_bytes = fs::read(cert_path)
-            .map_err(|e| format!("read cert from {}: {}", cert_path.display(), e))?;
-        let key_bytes = fs::read(key_path)
-            .map_err(|e| format!("read key from {}: {}", key_path.display(), e))?;
-        let fingerprint = blake3_32(&cert_bytes);
-        info!(
-            "loaded existing QUIC identity from {} (fingerprint: {})",
-            cert_path.display(),
-            hex::encode(fingerprint)
-        );
-        return Ok(QuicIdentity {
-            cert_chain_der: vec![cert_bytes],
-            key_der: key_bytes,
-        });
-    }
-
-    let identity = QuicIdentity::generate_self_signed("veil-node")
-        .map_err(|e| format!("generate identity: {e}"))?;
-    let fingerprint = blake3_32(&identity.cert_chain_der[0]);
-    info!(
-        "generated new self-signed QUIC identity (fingerprint: {})",
-        hex::encode(fingerprint)
-    );
-    ensure_parent(cert_path).map_err(|e| format!("create cert dir: {e}"))?;
-    fs::write(cert_path, &identity.cert_chain_der[0])
-        .map_err(|e| format!("write cert to {}: {}", cert_path.display(), e))?;
-    fs::write(key_path, &identity.key_der)
-        .map_err(|e| format!("write key to {}: {}", key_path.display(), e))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(cert_path, fs::Permissions::from_mode(0o600));
-        let _ = fs::set_permissions(key_path, fs::Permissions::from_mode(0o600));
-    }
-    Ok(identity)
-}
-
-fn load_trusted_certs(paths: &[String]) -> Vec<Vec<u8>> {
-    let mut out = Vec::new();
-    for path in paths {
-        match fs::read(path) {
-            Ok(bytes) => out.push(bytes),
-            Err(err) => eprintln!("failed to read trusted cert {path}: {err}"),
-        }
-    }
-    out
-}
-
-fn parse_required_signed_namespaces(values: &[String]) -> HashSet<u16> {
-    let mut out = HashSet::new();
-    for value in values {
-        if let Ok(ns) = value.parse::<u16>() {
-            out.insert(ns);
-        }
-    }
-    out
-}
-
-fn parse_core_tags(values: &[String]) -> Vec<[u8; 32]> {
-    values
-        .iter()
-        .filter_map(|value| {
-            let bytes = hex::decode(value).ok()?;
-            <[u8; 32]>::try_from(bytes.as_slice()).ok()
-        })
-        .collect()
-}
-
-fn pseudo_pubkey_for_peer(peer: &str) -> [u8; 32] {
-    let mut preimage = Vec::with_capacity(8 + peer.len());
-    preimage.extend_from_slice(b"vps-peer");
-    preimage.extend_from_slice(peer.as_bytes());
-    blake3_32(&preimage)
-}
-
-fn parse_fallback_peers(
-    ws_peer: Option<String>,
-    tor_peers: Vec<String>,
-    #[cfg(feature = "ble")] ble_peers: Vec<String>,
-) -> Vec<FallbackPeer> {
-    let mut peers = Vec::new();
-    if let Some(ws_peer) = ws_peer {
-        peers.push(FallbackPeer::WebSocket(ws_peer));
-    }
-    for peer in tor_peers {
-        peers.push(FallbackPeer::Tor(peer));
-    }
-    #[cfg(feature = "ble")]
-    for peer in ble_peers {
-        peers.push(FallbackPeer::Ble(BlePeer::new(peer)));
-    }
-    peers
-}
-
-fn parse_fallback_peer_strings(values: &[String]) -> Vec<FallbackPeer> {
-    values
-        .iter()
-        .filter_map(|value| {
-            if let Some(rest) = value.strip_prefix("ws:") {
-                let url = rest.trim();
-                if url.is_empty() {
-                    None
-                } else {
-                    Some(FallbackPeer::WebSocket(url.to_string()))
-                }
-            } else if let Some(rest) = value.strip_prefix("wssrv:") {
-                let addr = rest.trim();
-                if addr.is_empty() {
-                    None
-                } else {
-                    Some(FallbackPeer::WebSocketServer(addr.to_string()))
-                }
-            } else if let Some(rest) = value.strip_prefix("tor:") {
-                let addr = rest.trim();
-                if addr.is_empty() {
-                    None
-                } else {
-                    Some(FallbackPeer::Tor(addr.to_string()))
-                }
-            } else if let Some(_rest) = value.strip_prefix("ble:") {
-                #[cfg(feature = "ble")]
-                {
-                    let addr = _rest.trim();
-                    if addr.is_empty() {
-                        None
-                    } else {
-                        Some(FallbackPeer::Ble(BlePeer::new(addr.to_string())))
-                    }
-                }
-                #[cfg(not(feature = "ble"))]
-                {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-fn fallback_peer_supported(
-    peer: &FallbackPeer,
-    ws_enabled: bool,
-    ws_server_enabled: bool,
-    tor_enabled: bool,
-    #[cfg(feature = "ble")] ble_enabled: bool,
-) -> bool {
-    match peer {
-        FallbackPeer::WebSocket(_) => ws_enabled,
-        FallbackPeer::WebSocketServer(_) => ws_server_enabled,
-        FallbackPeer::Tor(_) => tor_enabled,
-        #[cfg(feature = "ble")]
-        FallbackPeer::Ble(_) => ble_enabled,
-    }
-}
-
-fn encode_fallback_peers(peers: &[FallbackPeer]) -> Vec<String> {
-    peers.iter().map(|peer| peer.to_string()).collect()
-}
-
-fn merge_peers<T: Clone + Eq + Hash>(
-    configured: &[T],
-    discovered: &[T],
-    max_total: usize,
-) -> Vec<T> {
-    let mut seen = HashSet::with_capacity(configured.len() + discovered.len());
-    let mut out = Vec::new();
-    for peer in configured {
-        if seen.insert(peer) {
-            out.push(peer.clone());
-        }
-    }
-    for peer in discovered {
-        if out.len() >= max_total {
-            break;
-        }
-        if seen.insert(peer) {
-            out.push(peer.clone());
-        }
-    }
-    out
-}
-
-fn load_or_create_node_key(path: &Path) -> Result<[u8; 32], String> {
-    if path.exists() {
-        let bytes = fs::read(path).map_err(|e| format!("read node key: {e}"))?;
-        if bytes.len() == 32 {
-            let mut out = [0_u8; 32];
-            out.copy_from_slice(&bytes);
-            if NostrSigner::from_secret(out).is_ok() {
-                return Ok(out);
-            }
-        }
-
-        if let Ok(content) = String::from_utf8(bytes) {
-            if let Some(key) = decode_nostr_secret_input(&content) {
-                return Ok(key);
-            }
-        }
-    }
-
-    let key = loop {
-        let mut candidate = [0_u8; 32];
-        rand::thread_rng().fill_bytes(&mut candidate);
-        if NostrSigner::from_secret(candidate).is_ok() {
-            break candidate;
-        }
-    };
-    ensure_parent(path).map_err(|e| format!("create node key dir: {e}"))?;
-    fs::write(path, key).map_err(|e| format!("write node key: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
-    }
-    Ok(key)
-}
-
-#[derive(Debug, Default)]
-pub struct MetricsState {
-    pub ticks: AtomicU64,
-    pub delivered: AtomicU64,
-    pub delivered_total: AtomicU64,
-    pub send_failures: AtomicU64,
-    pub ack_clears: AtomicU64,
-    pub last_fast_outbound_ok: AtomicU64,
-    pub last_fast_outbound_err: AtomicU64,
-    pub last_fallback_outbound_ok: AtomicU64,
-    pub last_fallback_outbound_err: AtomicU64,
-    pub last_fast_inbound: AtomicU64,
-    pub last_fallback_inbound: AtomicU64,
-    pub nostr_bridge_events_total: AtomicU64,
-    pub nostr_bridge_payload_bytes_total: AtomicU64,
-    pub nostr_bridge_enabled: AtomicU64,
-    pub nostr_bridge_relays_configured: AtomicU64,
-}
-
-#[derive(Debug)]
-pub struct AdminAuthState {
-    pub server_pubkey: [u8; 32],
-    pub server_pubkey_hex: String,
-    pub server_secret_hex: String,
-    pub server_secret_nsec: String,
-    pub session_ttl_secs: u64,
-    pub session_db_path: PathBuf,
-    pub settings_db_path: PathBuf,
-    pub sessions: Mutex<HashMap<String, u64>>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AdminLoginRequest {
-    pub secret: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AdminSettingUpsertRequest {
-    pub key: String,
-    pub value: String,
-}
-
-impl AdminAuthState {
-    fn bootstrap_session_db(path: &Path) -> Result<(), String> {
-        if let Err(err) = ensure_parent(path) {
-            return Err(format!(
-                "failed to create session db parent {}: {err}",
-                path.display()
-            ));
-        }
-        match Connection::open(path) {
-            Ok(conn) => {
-                if let Err(err) = conn.execute(
-                    "CREATE TABLE IF NOT EXISTS admin_sessions (
-                        token TEXT PRIMARY KEY,
-                        expires_at INTEGER NOT NULL
-                    )",
-                    params![],
-                ) {
-                    return Err(format!(
-                        "failed to initialize session table {}: {err}",
-                        path.display()
-                    ));
-                }
-                let now = now_unix_secs() as i64;
-                let _ = conn.execute(
-                    "DELETE FROM admin_sessions WHERE expires_at <= ?1",
-                    params![now],
-                );
-                Ok(())
-            }
-            Err(err) => Err(format!(
-                "failed to open session db {}: {err}",
-                path.display()
-            )),
-        }
-    }
-
-    fn load_sessions_from_db(path: &Path) -> HashMap<String, u64> {
-        let mut out = HashMap::new();
-        let conn = match Connection::open(path) {
-            Ok(conn) => conn,
-            Err(err) => {
-                warn!("admin auth: could not open session db for loading: {err}");
-                return out;
-            }
-        };
-        let now = now_unix_secs() as i64;
-        let _ = conn.execute(
-            "DELETE FROM admin_sessions WHERE expires_at <= ?1",
-            params![now],
-        );
-        let Ok(mut stmt) = conn.prepare("SELECT token, expires_at FROM admin_sessions") else {
-            return out;
-        };
-        let rows = stmt.query_map(params![], |row| {
-            let token: String = row.get(0)?;
-            let expires_at: i64 = row.get(1)?;
-            Ok((token, expires_at))
-        });
-        if let Ok(rows) = rows {
-            for (token, expires_at) in rows.flatten() {
-                if expires_at > 0 {
-                    out.insert(token, expires_at as u64);
-                }
-            }
-        }
-        out
-    }
-
-    fn persist_session_insert(&self, token: &str, expires: u64) {
-        if let Ok(conn) = Connection::open(&self.session_db_path) {
-            let _ = conn.execute(
-                "INSERT OR REPLACE INTO admin_sessions (token, expires_at) VALUES (?1, ?2)",
-                params![token, expires as i64],
-            );
-        }
-    }
-
-    pub fn persist_session_remove(&self, token: &str) {
-        if let Ok(conn) = Connection::open(&self.session_db_path) {
-            let _ = conn.execute(
-                "DELETE FROM admin_sessions WHERE token = ?1",
-                params![token],
-            );
-        }
-    }
-
-    pub fn persist_expired_prune(&self, now: u64) {
-        if let Ok(conn) = Connection::open(&self.session_db_path) {
-            let _ = conn.execute(
-                "DELETE FROM admin_sessions WHERE expires_at <= ?1",
-                params![now as i64],
-            );
-        }
-    }
-
-    pub fn add_session(&self, token: String, expires: u64) {
-        self.sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(token.clone(), expires);
-        self.persist_session_insert(&token, expires);
-    }
-
-    pub fn revoke_session(&self, token: &str) -> bool {
-        let removed = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(token)
-            .is_some();
-        self.persist_session_remove(token);
-        removed
-    }
-}
-
-pub fn now_unix_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-pub fn decode_nostr_secret_input(value: &str) -> Option<[u8; 32]> {
-    let trimmed = value.trim();
-    if let Ok(bytes) = hex::decode(trimmed) {
-        if let Ok(key) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            return Some(key);
-        }
-    }
-    let (decoded_hrp, data) = bech32::decode(trimmed).ok()?;
-    if decoded_hrp.as_str() != "nsec" {
-        return None;
-    }
-    if let Ok(key) = <[u8; 32]>::try_from(data.as_slice()) {
-        return Some(key);
-    }
-    None
-}
-
-fn encode_nostr_nsec(secret: [u8; 32]) -> Option<String> {
-    let hrp = Hrp::parse("nsec").ok()?;
-    bech32::encode::<Bech32>(hrp, &secret).ok()
-}
-
-#[derive(Parser)]
-#[command(author, version, about, long_about = None)]
-struct Cli {
-    /// Path to configuration file
-    #[arg(long, short)]
-    config: Option<PathBuf>,
-
-    /// Ignore all settings in the database and use only config file/defaults
-    #[arg(long)]
-    safe_mode: bool,
-
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Run the VPS node (default)
-    Run,
-    /// Manage node settings
-    Settings {
-        /// Path to settings database
-        #[arg(long, default_value = "data/settings.db")]
-        db: PathBuf,
-        #[command(subcommand)]
-        action: SettingsCommands,
-    },
-    /// Export node identity (nsec)
-    Identity,
-}
-
-#[derive(Subcommand)]
-enum SettingsCommands {
-    /// List all settings
-    List,
-    /// Get a specific setting
-    Get { key: String },
-    /// Set a setting value
-    Set { key: String, value: String },
-    /// Delete a setting
-    Delete { key: String },
-}
-
-fn settings_db_path_from_env() -> PathBuf {
-    std::env::var("VEIL_VPS_SETTINGS_DB_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("data/settings.db"))
-}
-
-fn normalize_settings_key(key: &str) -> Option<&'static str> {
-    match key {
-        // Backward compatibility for older admin UI typo.
-        "VEIL_VPS_NOSTR_BRIDGE_ENABLE" => Some("VEIL_VPS_NOSTR_BRIDGE_ENABLED"),
-        "VEIL_VPS_OPEN_RELAY" => Some("VEIL_VPS_OPEN_RELAY"),
-        "VEIL_VPS_NOSTR_BRIDGE_ENABLED" => Some("VEIL_VPS_NOSTR_BRIDGE_ENABLED"),
-        "VEIL_VPS_NOSTR_RELAYS" => Some("VEIL_VPS_NOSTR_BRIDGE_RELAYS"),
-        "VEIL_VPS_NOSTR_BRIDGE_RELAYS" => Some("VEIL_VPS_NOSTR_BRIDGE_RELAYS"),
-        "VEIL_VPS_NOSTR_BRIDGE_CHANNEL_ID" => Some("VEIL_VPS_NOSTR_BRIDGE_CHANNEL_ID"),
-        "VEIL_VPS_NOSTR_BRIDGE_NAMESPACE" => Some("VEIL_VPS_NOSTR_BRIDGE_NAMESPACE"),
-        "VEIL_VPS_NOSTR_BRIDGE_SINCE" => Some("VEIL_VPS_NOSTR_BRIDGE_SINCE"),
-        "VEIL_VPS_NOSTR_BRIDGE_STATE_PATH" => Some("VEIL_VPS_NOSTR_BRIDGE_STATE_PATH"),
-        "VEIL_VPS_NOSTR_BRIDGE_MAX_SEEN_IDS" => Some("VEIL_VPS_NOSTR_BRIDGE_MAX_SEEN_IDS"),
-        "VEIL_VPS_NOSTR_BRIDGE_PERSIST_EVERY_UPDATES" => {
-            Some("VEIL_VPS_NOSTR_BRIDGE_PERSIST_EVERY_UPDATES")
-        }
-        "VEIL_VPS_ADAPTIVE_LANE_SCORING" => Some("VEIL_VPS_ADAPTIVE_LANE_SCORING"),
-        "VEIL_VPS_PROBABILISTIC_FORWARDING" => Some("VEIL_VPS_PROBABILISTIC_FORWARDING"),
-        "VEIL_VPS_BLOOM_EXCHANGE" => Some("VEIL_VPS_BLOOM_EXCHANGE"),
-        // QUIC cert/key paths are always internal; do not allow DB overrides
-        // that could point at stale external paths from older installs.
-        "VEIL_VPS_QUIC_BIND" => Some("VEIL_VPS_QUIC_BIND"),
-        "VEIL_VPS_WS_URL" => Some("VEIL_VPS_WS_URL"),
-        "VEIL_VPS_WS_LISTEN" => Some("VEIL_VPS_WS_LISTEN"),
-        "VEIL_VPS_WS_PEER" => Some("VEIL_VPS_WS_PEER"),
-        "VEIL_VPS_TOR_SOCKS_ADDR" => Some("VEIL_VPS_TOR_SOCKS_ADDR"),
-        _ => None,
-    }
-}
-
-fn apply_settings_db_overrides(path: &Path) {
-    let store = match SettingsStore::open(path) {
-        Ok(store) => store,
-        Err(err) => {
-            warn!("settings db unavailable at {}: {}", path.display(), err);
-            return;
-        }
-    };
-
-    let entries = match store.list() {
-        Ok(entries) => entries,
-        Err(err) => {
-            warn!("settings db list failed at {}: {}", path.display(), err);
-            return;
-        }
-    };
-
-    let mut applied = 0usize;
-    for (raw_key, raw_value) in entries {
-        let Some(key) = normalize_settings_key(&raw_key) else {
-            continue;
-        };
-        let value = raw_value.trim();
-        std::env::set_var(key, value);
-        applied = applied.saturating_add(1);
-    }
-
-    if applied > 0 {
-        info!(
-            "applied {} runtime setting overrides from {}",
-            applied,
-            path.display()
-        );
-    }
-}
 
 #[tokio::main]
 async fn main() {
@@ -992,50 +130,7 @@ async fn main() {
         }
     }
 
-    if let Some(Commands::Settings { db, action }) = &cli.command {
-        let store = match SettingsStore::open(db) {
-            Ok(store) => store,
-            Err(err) => {
-                error!("settings db open failed: {err}");
-                std::process::exit(1);
-            }
-        };
-
-        match action {
-            SettingsCommands::List => match store.list() {
-                Ok(items) => {
-                    for (k, v) in items {
-                        println!("{k}={v}");
-                    }
-                }
-                Err(err) => {
-                    error!("{err}");
-                    std::process::exit(1);
-                }
-            },
-            SettingsCommands::Get { key } => {
-                if let Some(v) = store.get(key) {
-                    println!("{v}");
-                } else {
-                    std::process::exit(3);
-                }
-            }
-            SettingsCommands::Set { key, value } => {
-                if let Err(err) = store.set(key, value.trim()) {
-                    error!("{err}");
-                    std::process::exit(1);
-                }
-                println!("ok");
-            }
-            SettingsCommands::Delete { key } => match store.delete(key) {
-                Ok(true) => println!("deleted"),
-                Ok(false) => std::process::exit(3),
-                Err(err) => {
-                    error!("{err}");
-                    std::process::exit(1);
-                }
-            },
-        }
+    if maybe_handle_settings_command(cli.command.as_ref()) {
         return;
     }
 
@@ -1085,6 +180,7 @@ async fn main() {
     let ble_mtu = config.ble_mtu;
     let peer_db_path = config.peer_db_path.clone();
     let max_dynamic_peers = config.max_dynamic_peers;
+    let max_peer_db_rows = max_dynamic_peers.saturating_mul(2).max(1);
 
     let quic_bind = config.quic_bind.clone();
     let ws_url = config.ws_url.clone().filter(|s| !s.trim().is_empty());
@@ -1323,11 +419,11 @@ async fn main() {
         #[cfg(feature = "ble")]
         ble_adapter,
     );
-    let ws_enabled = fallback_adapter.ws.is_some();
-    let ws_server_enabled = fallback_adapter.ws_server.is_some();
-    let tor_enabled = fallback_adapter.tor.is_some();
+    let ws_enabled = fallback_adapter.ws_enabled();
+    let ws_server_enabled = fallback_adapter.ws_server_enabled();
+    let tor_enabled = fallback_adapter.tor_enabled();
     #[cfg(feature = "ble")]
-    let ble_enabled_runtime = fallback_adapter.ble.is_some();
+    let ble_enabled_runtime = fallback_adapter.ble_enabled();
     let fallback_peers = parse_fallback_peers(
         ws_peer,
         tor_peers,
@@ -1338,44 +434,32 @@ async fn main() {
     let discovered_fast = Arc::new(Mutex::new(HashSet::new()));
     let discovered_fallback = Arc::new(Mutex::new(HashSet::new()));
 
-    let fast_adapter = RecordingAdapter::new(fast_adapter_raw, Arc::clone(&discovered_fast));
-    let fallback_adapter =
-        RecordingAdapter::new(fallback_adapter, Arc::clone(&discovered_fallback));
+    let fast_adapter = RecordingAdapter::new_bounded(
+        fast_adapter_raw,
+        Arc::clone(&discovered_fast),
+        max_dynamic_peers,
+    );
+    let fallback_adapter = RecordingAdapter::new_bounded(
+        fallback_adapter,
+        Arc::clone(&discovered_fallback),
+        max_dynamic_peers,
+    );
 
     let peer_db = open_peer_db(&peer_db_path);
     let discovered_seed = peer_db
         .as_ref()
         .map(|conn| load_peer_list(conn, max_dynamic_peers))
         .unwrap_or_default();
-    {
-        let mut guard = discovered_fast.lock().unwrap_or_else(|e| e.into_inner());
-        for peer in discovered_seed.iter().filter(|p| {
-            !p.starts_with("ws:")
-                && !p.starts_with("wssrv:")
-                && !p.starts_with("tor:")
-                && !p.starts_with("ble:")
-        }) {
-            guard.insert(peer.to_string());
-        }
-    }
-    let fallback_seed = parse_fallback_peer_strings(&discovered_seed);
-    {
-        let mut guard = discovered_fallback
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        for peer in fallback_seed {
-            if fallback_peer_supported(
-                &peer,
-                ws_enabled,
-                ws_server_enabled,
-                tor_enabled,
-                #[cfg(feature = "ble")]
-                ble_enabled_runtime,
-            ) {
-                guard.insert(peer);
-            }
-        }
-    }
+    seed_discovered_peers(
+        &discovered_seed,
+        &discovered_fast,
+        &discovered_fallback,
+        ws_enabled,
+        ws_server_enabled,
+        tor_enabled,
+        #[cfg(feature = "ble")]
+        ble_enabled_runtime,
+    );
 
     let bridge_namespace = Namespace(nostr_bridge_namespace);
     let bridge_tag = derive_channel_feed_tag(&node_pubkey, bridge_namespace, &nostr_bridge_channel);
@@ -1470,35 +554,21 @@ async fn main() {
             log_buffer: Arc::clone(&log_buffer),
             runtime_config: Arc::clone(&runtime_config),
         };
-        let router = http_server::build_router(app_state);
-        let bind_addr: std::net::SocketAddr =
-            format!("{health_bind}:{health_port}").parse().unwrap();
-        let listener = match tokio::net::TcpListener::bind(bind_addr).await {
-            Ok(listener) => listener,
-            Err(err) => {
-                error!("health server bind failed on {bind_addr}: {err}");
-                return;
-            }
-        };
-        tokio::spawn(async move {
-            if let Err(err) = axum::serve(listener, router).await {
-                error!("health server error: {err}");
-            }
-        });
+        if let Err(err) =
+            http_server::spawn_health_server(app_state, &health_bind, health_port).await
+        {
+            error!("{err}");
+            return;
+        }
     }
 
     let mut now_step = 0_u64;
     loop {
-        if shutdown.load(Ordering::Relaxed) {
-            if let Err(err) = save_state_to_path(&state_path, &mut runtime.state) {
-                error!("snapshot failed on shutdown: {err}");
-            }
+        if handle_shutdown_if_requested(&shutdown, &state_path, &mut runtime.state) {
             break;
         }
         let metrics_ref = Arc::clone(&metrics);
-        metrics_ref
-            .nostr_bridge_relays_configured
-            .store(nostr_bridge_relays.len() as u64, Ordering::Relaxed);
+        set_nostr_bridge_relays_configured(metrics_ref.as_ref(), nostr_bridge_relays.len());
 
         // Sync runtime config from Mutex
         {
@@ -1508,60 +578,23 @@ async fn main() {
 
         let discovered_fast_snapshot = runtime.fast_adapter.snapshot_seen();
         let discovered_fallback_snapshot = runtime.fallback_adapter.snapshot_seen();
-        let fast_peer_list = merge_peers(&fast_peers, &discovered_fast_snapshot, max_dynamic_peers);
-        let fallback_peer_list = merge_peers(
+        let (fast_peer_list, fallback_peer_list) = compute_peer_lists(
+            &fast_peers,
             &fallback_peers,
+            &discovered_fast_snapshot,
             &discovered_fallback_snapshot,
             max_dynamic_peers,
         );
 
         if let Some(rx) = &mut nostr_bridge_rx {
-            for _ in 0..64 {
-                match rx.try_recv() {
-                    Ok(item) => {
-                        info!(
-                            "nostr bridge: relay={} event={} bytes={}",
-                            item.source_relay,
-                            item.source_event_id,
-                            item.payload.len()
-                        );
-                        metrics_ref
-                            .nostr_bridge_events_total
-                            .fetch_add(1, Ordering::Relaxed);
-                        metrics_ref
-                            .nostr_bridge_payload_bytes_total
-                            .fetch_add(item.payload.len() as u64, Ordering::Relaxed);
-
-                        // Add to local feed history for immediate display
-                        if let Ok(bundle) =
-                            serde_json::from_slice::<veil_schema_feed::FeedBundle>(&item.payload)
-                        {
-                            let mut guard = feed_history.lock().unwrap_or_else(|e| e.into_inner());
-                            if guard.len() >= 50 {
-                                guard.pop_front();
-                            }
-                            let mut value = serde_json::to_value(bundle).unwrap_or_default();
-                            if let Some(obj) = value.as_object_mut() {
-                                obj.insert(
-                                    "source_relay".to_string(),
-                                    serde_json::Value::String(item.source_relay.clone()),
-                                );
-                            }
-                            guard.push_back(value);
-                            info!(
-                                "nostr bridge: added post to local history (relay={})",
-                                item.source_relay
-                            );
-                        } else {
-                            warn!("nostr bridge: received payload that failed to parse as FeedBundle (relay={})", item.source_relay);
-                        }
-
-                        bridge_batcher.enqueue(item.payload);
-                    }
-                    Err(_) => break,
-                }
-            }
-            let _ = publish_queue_tick_multi_lane(
+            drain_bridged_items(
+                rx,
+                metrics_ref.as_ref(),
+                &feed_history,
+                &mut bridge_batcher,
+                64,
+            );
+            publish_bridge_batch(
                 &mut runtime.state,
                 &mut runtime.fast_adapter,
                 &mut runtime.fallback_adapter,
@@ -1593,121 +626,46 @@ async fn main() {
             &fallback_peer_list,
             NodeRuntimeCallbacks {
                 on_delivered: Some(&mut |_root, payload| {
-                    metrics_ref.delivered.fetch_add(1, Ordering::Relaxed);
-                    metrics_ref.delivered_total.fetch_add(1, Ordering::Relaxed);
-
-                    // Handle Discovery
-                    if let Ok(msg) =
-                        serde_json::from_slice::<veil_android_node::DiscoveryMessage>(payload)
-                    {
-                        if let Some(contact) = msg.contact {
-                            let mut guard = discovery_table_ref
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
-                            guard.insert(contact.peer_id.clone(), contact);
-                        }
-                        for contact in msg.contacts {
-                            let mut guard = discovery_table_ref
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
-                            guard.insert(contact.peer_id.clone(), contact);
-                        }
-                    }
-
-                    // Attempt to parse feed bundles for public display
-                    if let Ok(bundle) =
-                        serde_json::from_slice::<veil_schema_feed::FeedBundle>(payload)
-                    {
-                        let mut guard = feed_history_ref.lock().unwrap_or_else(|e| e.into_inner());
-                        if guard.len() >= 50 {
-                            guard.pop_front();
-                        }
-                        guard.push_back(serde_json::to_value(bundle).unwrap_or_default());
-                        info!("runtime: delivered post added to history");
-                    } else if let Ok(batch) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload)
-                    {
-                        for item in batch {
-                            if let Ok(bundle) =
-                                serde_json::from_slice::<veil_schema_feed::FeedBundle>(&item)
-                            {
-                                let mut guard =
-                                    feed_history_ref.lock().unwrap_or_else(|e| e.into_inner());
-                                if guard.len() >= 50 {
-                                    guard.pop_front();
-                                }
-                                guard.push_back(serde_json::to_value(bundle).unwrap_or_default());
-                                info!("runtime: delivered batched post added to history");
-                            }
-                        }
-                    } else {
-                        // Debug log only to avoid noise for non-feed payloads (DMs, etc)
-                        debug!("runtime: delivered payload is not a standard FeedBundle or Batch");
-                    }
+                    handle_runtime_delivered_payload(
+                        payload,
+                        metrics_ref.as_ref(),
+                        &discovery_table_ref,
+                        &feed_history_ref,
+                    )
                 }),
                 on_send_failure: Some(&mut |count| {
-                    metrics_ref
-                        .send_failures
-                        .fetch_add(count as u64, Ordering::Relaxed);
+                    note_send_failures(metrics_ref.as_ref(), count);
                 }),
                 on_ack_cleared: Some(&mut |count| {
-                    metrics_ref
-                        .ack_clears
-                        .fetch_add(count as u64, Ordering::Relaxed);
+                    note_ack_clears(metrics_ref.as_ref(), count);
                 }),
                 ..NodeRuntimeCallbacks::default()
             },
         );
         now_step = now_step.saturating_add(1);
-        metrics.ticks.fetch_add(1, Ordering::Relaxed);
+        note_tick(metrics.as_ref());
 
-        if last_snapshot.elapsed() >= snapshot_interval {
-            if let Err(err) = save_state_to_path(&state_path, &mut runtime.state) {
-                error!("snapshot failed: {err}");
-            }
-            let mut fast_snapshot = runtime.fast_adapter.snapshot_seen();
-            fast_snapshot.sort();
-            let mut fallback_snapshot =
-                encode_fallback_peers(&runtime.fallback_adapter.snapshot_seen());
-            fallback_snapshot.sort();
-            let mut merged = fast_snapshot;
-            merged.extend(fallback_snapshot);
-            merged.sort();
-            merged.dedup();
-            if let Some(conn) = peer_db.as_ref() {
-                save_peer_list(conn, &merged);
-            }
-            {
-                let mut guard = peer_snapshot.lock().unwrap_or_else(|e| e.into_inner());
-                *guard = merged;
-            }
-            last_snapshot = Instant::now();
-        }
+        maybe_snapshot_state(
+            &mut last_snapshot,
+            snapshot_interval,
+            &state_path,
+            &mut runtime.state,
+            peer_db.as_ref(),
+            &peer_snapshot,
+            runtime.fast_adapter.snapshot_seen(),
+            runtime.fallback_adapter.snapshot_seen(),
+            max_peer_db_rows,
+        );
 
         if last_health_log.elapsed() >= health_log_interval {
             let health = runtime.transport_health();
-            metrics
-                .last_fast_outbound_ok
-                .store(health.fast_lane.outbound_send_ok, Ordering::Relaxed);
-            metrics
-                .last_fast_outbound_err
-                .store(health.fast_lane.outbound_send_err, Ordering::Relaxed);
-            metrics
-                .last_fallback_outbound_ok
-                .store(health.fallback_lane.outbound_send_ok, Ordering::Relaxed);
-            metrics
-                .last_fallback_outbound_err
-                .store(health.fallback_lane.outbound_send_err, Ordering::Relaxed);
-            metrics
-                .last_fast_inbound
-                .store(health.fast_lane.inbound_received, Ordering::Relaxed);
-            metrics
-                .last_fallback_inbound
-                .store(health.fallback_lane.inbound_received, Ordering::Relaxed);
-            info!(
-                "fast_lane: {:?}, fallback_lane: {:?}",
-                health.fast_lane, health.fallback_lane
+            maybe_log_transport_health(
+                &mut last_health_log,
+                health_log_interval,
+                metrics.as_ref(),
+                &health.fast_lane,
+                &health.fallback_lane,
             );
-            last_health_log = Instant::now();
         }
 
         tokio::time::sleep(tick_interval).await;
@@ -1773,6 +731,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn nostr_bridge_payload_publishes_and_android_receives_feed_bundle() {
+        use sha2::{Digest, Sha256};
         use std::net::TcpListener;
         use std::thread;
         use std::time::Duration;
@@ -1795,15 +754,38 @@ mod tests {
         let relay_listener = TcpListener::bind("127.0.0.1:0").expect("bind relay");
         let relay_addr = relay_listener.local_addr().expect("relay addr");
         let relay_url = format!("ws://{relay_addr}");
+        let relay_signer = NostrSigner::from_secret([0x21; 32]).expect("valid relay signer");
+        let relay_pubkey = hex::encode(relay_signer.public_key());
+        let relay_created_at = 1_700_000_123u64;
+        let relay_content = "bridge e2e hello";
+        let relay_canonical = serde_json::json!([
+            0,
+            relay_pubkey,
+            relay_created_at,
+            1,
+            serde_json::json!([]),
+            relay_content
+        ]);
+        let relay_event_id = hex::encode(Sha256::digest(relay_canonical.to_string().as_bytes()));
+        let relay_event_id_bytes = hex::decode(&relay_event_id).expect("relay event id hex");
+        let relay_event_id_bytes =
+            <[u8; 32]>::try_from(relay_event_id_bytes.as_slice()).expect("relay event id bytes");
+        let relay_sig = hex::encode(
+            relay_signer
+                .sign(&relay_event_id_bytes)
+                .expect("relay event should sign"),
+        );
         let event_message = serde_json::json!([
             "EVENT",
             "veil-bridge",
             {
-                "id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                "pubkey": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                "id": relay_event_id,
+                "pubkey": relay_pubkey,
                 "kind": 1,
-                "created_at": 1_700_000_123u64,
-                "content": "bridge e2e hello"
+                "created_at": relay_created_at,
+                "tags": [],
+                "content": relay_content,
+                "sig": relay_sig
             }
         ])
         .to_string();

@@ -12,11 +12,11 @@ use serde::Deserialize;
 use serde_json::json;
 use tower_http::cors::CorsLayer;
 
+use crate::metrics_state::MetricsState;
+use crate::nostr_secret::decode_nostr_secret_input;
 use crate::settings_db::SettingsStore;
-use crate::{
-    decode_nostr_secret_input, logger::LogBuffer, now_unix_secs, AdminAuthState, AdminLoginRequest,
-    AdminSettingUpsertRequest, MetricsState,
-};
+use crate::time_utils::now_unix_secs;
+use crate::{logger::LogBuffer, AdminAuthState, AdminLoginRequest, AdminSettingUpsertRequest};
 use veil_crypto::signing::{NostrSigner, Signer};
 
 #[derive(Clone)]
@@ -67,6 +67,31 @@ pub fn build_router(state: VpsAppState) -> Router {
         .route("/ws", get(ws_error_handler))
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+pub async fn spawn_health_server(
+    state: VpsAppState,
+    health_bind: &str,
+    health_port: u16,
+) -> Result<(), String> {
+    let router = build_router(state);
+    let bind_addr: std::net::SocketAddr =
+        format!("{health_bind}:{health_port}")
+            .parse()
+            .map_err(|err| {
+                format!(
+                "health server bind address parse failed for {health_bind}:{health_port}: {err}"
+            )
+            })?;
+    let listener = tokio::net::TcpListener::bind(bind_addr)
+        .await
+        .map_err(|err| format!("health server bind failed on {bind_addr}: {err}"))?;
+    tokio::spawn(async move {
+        if let Err(err) = axum::serve(listener, router).await {
+            tracing::error!("health server error: {err}");
+        }
+    });
+    Ok(())
 }
 
 async fn ws_error_handler() -> impl IntoResponse {
