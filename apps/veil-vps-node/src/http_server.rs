@@ -12,6 +12,10 @@ use serde::Deserialize;
 use serde_json::json;
 use tower_http::cors::CorsLayer;
 
+use crate::discovery_contacts::{
+    normalize_pubkey_hex, sanitize_discovery_contact, upsert_discovery_contact,
+    DISCOVERY_GOSSIP_IMPORT_LIMIT, DISCOVERY_MAX_CONTACTS,
+};
 use crate::http_admin_policy::{
     admin_policy_block, admin_policy_config_set, admin_policy_mute, admin_policy_summary,
     admin_policy_trust, admin_policy_unblock, admin_policy_unmute, admin_policy_untrust,
@@ -22,6 +26,11 @@ use crate::settings_db::SettingsStore;
 use crate::time_utils::now_unix_secs;
 use crate::{logger::LogBuffer, AdminAuthState, AdminLoginRequest, AdminSettingUpsertRequest};
 use veil_crypto::signing::{NostrSigner, Signer};
+
+const DISCOVERY_NEIGHBOR_SAMPLE_LIMIT: usize = 16;
+const DISCOVERY_GOSSIP_RESPONSE_SAMPLE_LIMIT: usize = 24;
+const DISCOVERY_LOOKUP_DEFAULT_LIMIT: usize = 16;
+const DISCOVERY_LOOKUP_MAX_LIMIT: usize = 256;
 
 #[derive(Clone)]
 pub struct VpsAppState {
@@ -514,17 +523,24 @@ async fn discovery_announce(
     State(state): State<VpsAppState>,
     Json(request): Json<veil_android_node::DiscoveryAnnounceRequest>,
 ) -> impl IntoResponse {
+    let Some(contact) = sanitize_discovery_contact(request.contact) else {
+        return Json(veil_android_node::DiscoveryAnnounceResponse {
+            accepted: false,
+            neighbors: Vec::new(),
+        });
+    };
+    let announced_peer_id = contact.peer_id.clone();
     let mut table = state
         .discovery_table
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    table.insert(request.contact.peer_id.clone(), request.contact.clone());
+    upsert_discovery_contact(&mut table, contact, DISCOVERY_MAX_CONTACTS);
 
     // Simple logic: return some other known contacts
     let neighbors: Vec<_> = table
         .values()
-        .filter(|c| c.peer_id != request.contact.peer_id)
-        .take(16)
+        .filter(|c| c.peer_id != announced_peer_id)
+        .take(DISCOVERY_NEIGHBOR_SAMPLE_LIMIT)
         .cloned()
         .collect();
 
@@ -542,20 +558,7 @@ async fn discovery_lookup(
         .discovery_table
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let contacts = if let Some(peer_id) = request.peer_id {
-        table
-            .get(&peer_id)
-            .map(|c| vec![c.clone()])
-            .unwrap_or_default()
-    } else if let Some(pubkey_hex) = request.pubkey_hex {
-        table
-            .values()
-            .filter(|c| c.pubkey_hex == pubkey_hex)
-            .cloned()
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let contacts = discovery_lookup_contacts(&table, &request);
 
     Json(veil_android_node::DiscoveryLookupResponse { contacts })
 }
@@ -568,11 +571,154 @@ async fn discovery_gossip(
         .discovery_table
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    for contact in request.contacts {
-        table.insert(contact.peer_id.clone(), contact);
+    for contact in request
+        .contacts
+        .into_iter()
+        .filter_map(sanitize_discovery_contact)
+        .take(DISCOVERY_GOSSIP_IMPORT_LIMIT)
+    {
+        upsert_discovery_contact(&mut table, contact, DISCOVERY_MAX_CONTACTS);
     }
 
     // Sample some contacts to return
-    let contacts: Vec<_> = table.values().take(24).cloned().collect();
+    let contacts: Vec<_> = table
+        .values()
+        .take(DISCOVERY_GOSSIP_RESPONSE_SAMPLE_LIMIT)
+        .cloned()
+        .collect();
     Json(veil_android_node::DiscoveryGossipResponse { contacts })
+}
+
+fn discovery_lookup_contacts(
+    table: &HashMap<String, veil_android_node::ContactBundle>,
+    request: &veil_android_node::DiscoveryLookupRequest,
+) -> Vec<veil_android_node::ContactBundle> {
+    let limit = request
+        .limit
+        .unwrap_or(DISCOVERY_LOOKUP_DEFAULT_LIMIT)
+        .min(DISCOVERY_LOOKUP_MAX_LIMIT);
+    if limit == 0 {
+        return Vec::new();
+    }
+    if let Some(peer_id) = request
+        .peer_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|peer_id| !peer_id.is_empty())
+    {
+        return table
+            .get(peer_id)
+            .cloned()
+            .into_iter()
+            .take(limit)
+            .collect();
+    }
+    if let Some(pubkey_hex) = request.pubkey_hex.as_deref().and_then(normalize_pubkey_hex) {
+        return table
+            .values()
+            .filter(|contact| contact.pubkey_hex == pubkey_hex)
+            .take(limit)
+            .cloned()
+            .collect();
+    }
+    Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{
+        discovery_lookup_contacts, sanitize_discovery_contact, upsert_discovery_contact,
+        DISCOVERY_LOOKUP_DEFAULT_LIMIT,
+    };
+    use veil_android_node::{ContactBundle, DiscoveryLookupRequest};
+
+    fn contact(peer_id: &str, pubkey_hex: &str) -> ContactBundle {
+        ContactBundle {
+            peer_id: peer_id.to_string(),
+            ws_url: None,
+            quic_addr: None,
+            pubkey_hex: pubkey_hex.to_string(),
+            rpc_url: None,
+            lan_addrs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn sanitize_discovery_contact_normalizes_and_rejects_invalid_values() {
+        let valid = ContactBundle {
+            peer_id: "  peer-a  ".to_string(),
+            ws_url: Some(" ws://example.com/ws ".to_string()),
+            quic_addr: Some(" 127.0.0.1:5000 ".to_string()),
+            pubkey_hex: "AA".repeat(32),
+            rpc_url: Some(" https://example.com/rpc ".to_string()),
+            lan_addrs: vec![" 10.0.0.1:9333 ".to_string(), String::new()],
+        };
+        let sanitized = sanitize_discovery_contact(valid).expect("contact should sanitize");
+        assert_eq!(sanitized.peer_id, "peer-a");
+        assert_eq!(sanitized.pubkey_hex, "aa".repeat(32));
+        assert_eq!(sanitized.ws_url.as_deref(), Some("ws://example.com/ws"));
+        assert_eq!(sanitized.quic_addr.as_deref(), Some("127.0.0.1:5000"));
+        assert_eq!(
+            sanitized.rpc_url.as_deref(),
+            Some("https://example.com/rpc")
+        );
+        assert_eq!(sanitized.lan_addrs, vec!["10.0.0.1:9333".to_string()]);
+
+        assert!(sanitize_discovery_contact(contact("peer-b", "zzzz")).is_none());
+    }
+
+    #[test]
+    fn upsert_discovery_contact_caps_table_size() {
+        let mut table = HashMap::new();
+        for idx in 0..8 {
+            let peer = format!("peer-{idx}");
+            let pubkey = format!("{:064x}", idx + 1);
+            upsert_discovery_contact(&mut table, contact(&peer, &pubkey), 4);
+        }
+        assert_eq!(table.len(), 4);
+        assert!(table.contains_key("peer-7"));
+    }
+
+    #[test]
+    fn discovery_lookup_contacts_applies_default_and_requested_limits() {
+        let mut table = HashMap::new();
+        let pubkey = "ab".repeat(32);
+        for idx in 0..5 {
+            let peer = format!("peer-{idx}");
+            table.insert(peer.clone(), contact(&peer, &pubkey));
+        }
+
+        let default_limited = discovery_lookup_contacts(
+            &table,
+            &DiscoveryLookupRequest {
+                peer_id: None,
+                pubkey_hex: Some(pubkey.clone()),
+                limit: None,
+            },
+        );
+        assert_eq!(default_limited.len(), DISCOVERY_LOOKUP_DEFAULT_LIMIT.min(5));
+
+        let requested_limited = discovery_lookup_contacts(
+            &table,
+            &DiscoveryLookupRequest {
+                peer_id: None,
+                pubkey_hex: Some(pubkey.clone()),
+                limit: Some(2),
+            },
+        );
+        assert_eq!(requested_limited.len(), 2);
+
+        let by_peer = discovery_lookup_contacts(
+            &table,
+            &DiscoveryLookupRequest {
+                peer_id: Some("peer-3".to_string()),
+                pubkey_hex: None,
+                limit: Some(10),
+            },
+        );
+        assert_eq!(by_peer.len(), 1);
+        assert_eq!(by_peer[0].peer_id, "peer-3");
+    }
 }

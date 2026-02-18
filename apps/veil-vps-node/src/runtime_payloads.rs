@@ -5,6 +5,10 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, info, warn};
 use veil_node::batch::FeedBatcher;
 
+use crate::discovery_contacts::{
+    sanitize_discovery_contact, upsert_discovery_contact, DISCOVERY_GOSSIP_IMPORT_LIMIT,
+    DISCOVERY_MAX_CONTACTS,
+};
 use crate::metrics_state::MetricsState;
 use crate::nostr_bridge::BridgedItem;
 
@@ -62,14 +66,8 @@ pub(super) fn handle_runtime_delivered_payload(
     metrics.delivered_total.fetch_add(1, Ordering::Relaxed);
 
     if let Ok(msg) = serde_json::from_slice::<veil_android_node::DiscoveryMessage>(payload) {
-        if let Some(contact) = msg.contact {
-            let mut guard = discovery_table.lock().unwrap_or_else(|e| e.into_inner());
-            guard.insert(contact.peer_id.clone(), contact);
-        }
-        for contact in msg.contacts {
-            let mut guard = discovery_table.lock().unwrap_or_else(|e| e.into_inner());
-            guard.insert(contact.peer_id.clone(), contact);
-        }
+        let mut guard = discovery_table.lock().unwrap_or_else(|e| e.into_inner());
+        ingest_discovery_contacts(&mut guard, msg);
     }
 
     if let Ok(bundle) = serde_json::from_slice::<veil_schema_feed::FeedBundle>(payload) {
@@ -104,12 +102,49 @@ fn push_feed_history(
     guard.push_back(value);
 }
 
+fn ingest_discovery_contacts(
+    table: &mut HashMap<String, veil_android_node::ContactBundle>,
+    msg: veil_android_node::DiscoveryMessage,
+) {
+    if let Some(contact) = msg.contact.and_then(sanitize_discovery_contact) {
+        upsert_discovery_contact(table, contact, DISCOVERY_MAX_CONTACTS);
+    }
+    for contact in msg
+        .contacts
+        .into_iter()
+        .take(DISCOVERY_GOSSIP_IMPORT_LIMIT)
+        .filter_map(sanitize_discovery_contact)
+    {
+        upsert_discovery_contact(table, contact, DISCOVERY_MAX_CONTACTS);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, Mutex};
 
-    use super::push_feed_history;
+    use super::{
+        ingest_discovery_contacts, push_feed_history, DISCOVERY_GOSSIP_IMPORT_LIMIT,
+        DISCOVERY_MAX_CONTACTS,
+    };
+    use veil_android_node::{ContactBundle, DiscoveryMessage};
+
+    fn gossip_message(
+        contacts: Vec<ContactBundle>,
+        contact: Option<ContactBundle>,
+    ) -> DiscoveryMessage {
+        serde_json::from_value(serde_json::json!({
+            "kind": "gossip",
+            "contact": contact,
+            "contacts": contacts,
+            "target_peer_id": null,
+            "target_pubkey": null,
+            "reply_to": null,
+            "ttl": 1
+        }))
+        .expect("gossip message should deserialize")
+    }
 
     #[test]
     fn push_feed_history_caps_at_limit() {
@@ -128,5 +163,73 @@ mod tests {
             guard.back().and_then(|v| v.get("i")),
             Some(&serde_json::json!(54))
         );
+    }
+
+    #[test]
+    fn ingest_discovery_contacts_limits_single_message_import_count() {
+        let mut table = HashMap::new();
+        let contacts = (0..600)
+            .map(|idx| ContactBundle {
+                peer_id: format!("peer-{idx}"),
+                ws_url: None,
+                quic_addr: None,
+                pubkey_hex: format!("{:064x}", idx + 1),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let msg = gossip_message(contacts, None);
+
+        ingest_discovery_contacts(&mut table, msg);
+        assert_eq!(table.len(), DISCOVERY_GOSSIP_IMPORT_LIMIT);
+    }
+
+    #[test]
+    fn ingest_discovery_contacts_sanitizes_and_caps_table_growth() {
+        let mut table = HashMap::new();
+        for batch in 0..12 {
+            let mut contacts = Vec::new();
+            for idx in 0..300 {
+                let id = batch * 300 + idx;
+                contacts.push(ContactBundle {
+                    peer_id: format!(" peer-{id} "),
+                    ws_url: Some(" ws://example.test/ws ".to_string()),
+                    quic_addr: None,
+                    pubkey_hex: format!("{:064X}", id + 10_000),
+                    rpc_url: None,
+                    lan_addrs: vec![" 10.0.0.1:9333 ".to_string(), String::new()],
+                });
+            }
+            contacts.push(ContactBundle {
+                peer_id: format!("invalid-{batch}"),
+                ws_url: None,
+                quic_addr: None,
+                pubkey_hex: "not-hex".to_string(),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            });
+            let msg = gossip_message(
+                contacts,
+                Some(ContactBundle {
+                    peer_id: format!(" root-{batch} "),
+                    ws_url: None,
+                    quic_addr: None,
+                    pubkey_hex: format!("{:064X}", batch + 1),
+                    rpc_url: None,
+                    lan_addrs: Vec::new(),
+                }),
+            );
+            ingest_discovery_contacts(&mut table, msg);
+        }
+
+        assert_eq!(table.len(), DISCOVERY_MAX_CONTACTS);
+        assert!(table.values().all(|contact| {
+            let trimmed_peer = contact.peer_id.trim();
+            trimmed_peer == contact.peer_id
+                && contact.pubkey_hex.len() == 64
+                && contact.pubkey_hex.chars().all(|c| c.is_ascii_hexdigit())
+                && contact.pubkey_hex.chars().all(|c| !c.is_ascii_uppercase())
+        }));
+        assert!(!table.keys().any(|key| key.starts_with("invalid-")));
     }
 }

@@ -65,37 +65,47 @@ pub(super) fn init_transport_setup(
     })
     .map_err(|err| format!("fatal: quic adapter failed to start: {err}"))?;
 
-    let ws_adapter = ws_url.map(|url| {
-        WebSocketAdapter::connect(WebSocketAdapterConfig {
-            url,
-            peer_id: ws_peer_id.clone(),
-            reconnect: true,
-            reconnect_initial: Duration::from_millis(250),
-            reconnect_max: Duration::from_secs(10),
-            outbound_queue_capacity: 1024,
-            inbound_queue_capacity: 4096,
-            max_payload_hint: Some(64 * 1024),
-        })
-        .expect("websocket adapter should start")
-    });
+    let ws_adapter = if let Some(url) = ws_url {
+        Some(
+            WebSocketAdapter::connect(WebSocketAdapterConfig {
+                url,
+                peer_id: ws_peer_id.clone(),
+                reconnect: true,
+                reconnect_initial: Duration::from_millis(250),
+                reconnect_max: Duration::from_secs(10),
+                outbound_queue_capacity: 1024,
+                inbound_queue_capacity: 4096,
+                max_payload_hint: Some(64 * 1024),
+            })
+            .map_err(|err| format!("fatal: websocket adapter failed to start: {err}"))?,
+        )
+    } else {
+        None
+    };
 
-    let ws_server_adapter = ws_listen.map(|addr| {
+    let ws_server_adapter = if let Some(addr) = ws_listen {
         let adapter = WebSocketServerAdapter::listen(WebSocketServerAdapterConfig::new(&addr))
-            .expect("websocket server should start");
+            .map_err(|err| format!("fatal: websocket server failed to start: {err}"))?;
         info!("websocket server listening on {addr}");
-        adapter
-    });
+        Some(adapter)
+    } else {
+        None
+    };
 
-    let tor_adapter = tor_socks_addr.map(|addr| {
-        TorSocksAdapter::connect(TorSocksAdapterConfig {
-            socks_proxy_addr: addr,
-            connect_timeout: Duration::from_secs(8),
-            send_timeout: Duration::from_secs(8),
-            outbound_queue_capacity: 1024,
-            max_payload_hint: Some(64 * 1024),
-        })
-        .expect("tor adapter should start")
-    });
+    let tor_adapter = if let Some(addr) = tor_socks_addr {
+        Some(
+            TorSocksAdapter::connect(TorSocksAdapterConfig {
+                socks_proxy_addr: addr,
+                connect_timeout: Duration::from_secs(8),
+                send_timeout: Duration::from_secs(8),
+                outbound_queue_capacity: 1024,
+                max_payload_hint: Some(64 * 1024),
+            })
+            .map_err(|err| format!("fatal: tor adapter failed to start: {err}"))?,
+        )
+    } else {
+        None
+    };
 
     #[cfg(feature = "ble")]
     let ble_adapter = if ble_enabled {

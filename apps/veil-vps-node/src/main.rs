@@ -10,6 +10,7 @@ use tracing::{error, info};
 mod admin_auth;
 mod cli;
 mod config;
+mod discovery_contacts;
 mod fallback_peers;
 mod fallback_transport;
 mod http_admin_policy;

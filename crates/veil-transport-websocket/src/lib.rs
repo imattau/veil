@@ -12,6 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use thiserror::Error;
 use tokio::sync::{mpsc as tokio_mpsc, oneshot};
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info};
 use veil_transport::adapter::{TransportAdapter, TransportHealthSnapshot};
@@ -92,9 +93,7 @@ struct WebSocketAdapterMetricsInner {
 
 impl WebSocketAdapter {
     pub fn connect(config: WebSocketAdapterConfig) -> Result<Self, WebSocketAdapterError> {
-        if config.url.trim().is_empty() {
-            return Err(WebSocketAdapterError::UrlInvalid("empty url".to_string()));
-        }
+        validate_websocket_url(&config.url)?;
 
         let (outbound_tx, outbound_rx) =
             tokio_mpsc::channel::<Vec<u8>>(config.outbound_queue_capacity);
@@ -147,6 +146,27 @@ impl WebSocketAdapter {
             reconnect_attempts: self.metrics.reconnect_attempts.load(Ordering::Relaxed),
         }
     }
+}
+
+fn validate_websocket_url(url: &str) -> Result<(), WebSocketAdapterError> {
+    if url.trim().is_empty() {
+        return Err(WebSocketAdapterError::UrlInvalid("empty url".to_string()));
+    }
+    let request = url
+        .into_client_request()
+        .map_err(|err| WebSocketAdapterError::UrlInvalid(err.to_string()))?;
+    let uri = request.uri();
+    if !matches!(uri.scheme_str(), Some("ws" | "wss")) {
+        return Err(WebSocketAdapterError::UrlInvalid(
+            "scheme must be ws:// or wss://".to_string(),
+        ));
+    }
+    if uri.host().is_none() {
+        return Err(WebSocketAdapterError::UrlInvalid(
+            "missing host in websocket URL".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 impl Drop for WebSocketAdapter {
@@ -632,5 +652,23 @@ mod tests {
             .send(&"ws://127.0.0.1:65535/ws".to_string(), b"payload")
             .expect_err("mismatched peer should fail");
         assert!(matches!(err, WebSocketAdapterError::PeerMismatch));
+    }
+
+    #[test]
+    fn client_adapter_rejects_malformed_url() {
+        let config = WebSocketAdapterConfig::new("not-a-url", "peer-a");
+        let err = WebSocketAdapter::connect(config)
+            .err()
+            .expect("invalid URL should fail");
+        assert!(matches!(err, WebSocketAdapterError::UrlInvalid(_)));
+    }
+
+    #[test]
+    fn client_adapter_rejects_non_websocket_scheme() {
+        let config = WebSocketAdapterConfig::new("http://example.com/ws", "peer-a");
+        let err = WebSocketAdapter::connect(config)
+            .err()
+            .expect("http URL should fail");
+        assert!(matches!(err, WebSocketAdapterError::UrlInvalid(_)));
     }
 }

@@ -1,41 +1,43 @@
 use super::{
     connect_with_timeout, current_unix, is_event_already_seen, map_event_to_payload,
     note_seen_duplicate_checkpoint, parse_nostr_event_message, reconnect_backoff,
-    reserve_and_send_bridged_item, reserve_bridge_slot, verify_nostr_event_authenticity,
-    BridgeEnqueueError, ConnectRelayError, NextFrameError, NostrBridgeState, NostrEvent,
-    NOSTR_EVENT_MAX_FUTURE_SKEW_SECS,
+    reconnect_backoff_raw_ms, reserve_and_send_bridged_item, reserve_bridge_slot,
+    verify_nostr_event_authenticity, BridgeEnqueueError, ConnectRelayError, NextFrameError,
+    NostrBridgeState, NostrEvent, NOSTR_EVENT_MAX_FUTURE_SKEW_SECS,
 };
 use sha2::{Digest, Sha256};
 use veil_crypto::signing::{NostrSigner, Signer};
 use veil_schema_feed::FeedBundle;
 
 #[test]
-fn reconnect_backoff_increases_exponentially_and_caps() {
-    use std::time::Duration;
-    assert_eq!(
-        reconnect_backoff(1, 2_000, 120_000),
-        Duration::from_millis(2_000)
-    );
-    assert_eq!(
-        reconnect_backoff(2, 2_000, 120_000),
-        Duration::from_millis(4_000)
-    );
-    assert_eq!(
-        reconnect_backoff(3, 2_000, 120_000),
-        Duration::from_millis(8_000)
-    );
-    assert_eq!(
-        reconnect_backoff(4, 2_000, 120_000),
-        Duration::from_millis(16_000)
-    );
-    assert_eq!(
-        reconnect_backoff(10, 2_000, 120_000),
-        Duration::from_millis(120_000)
-    );
-    assert_eq!(
-        reconnect_backoff(20, 2_000, 120_000),
-        Duration::from_millis(120_000)
-    );
+fn reconnect_backoff_raw_increases_exponentially_and_caps() {
+    assert_eq!(reconnect_backoff_raw_ms(1, 2_000, 120_000), 2_000);
+    assert_eq!(reconnect_backoff_raw_ms(2, 2_000, 120_000), 4_000);
+    assert_eq!(reconnect_backoff_raw_ms(3, 2_000, 120_000), 8_000);
+    assert_eq!(reconnect_backoff_raw_ms(4, 2_000, 120_000), 16_000);
+    assert_eq!(reconnect_backoff_raw_ms(10, 2_000, 120_000), 120_000);
+    assert_eq!(reconnect_backoff_raw_ms(20, 2_000, 120_000), 120_000);
+}
+
+#[test]
+fn reconnect_backoff_adds_bounded_jitter() {
+    use std::collections::HashSet;
+
+    let mut observed = HashSet::new();
+    for _ in 0..64 {
+        let delay = reconnect_backoff(3, 2_000, 120_000).as_millis() as u64;
+        assert!((6_400..=9_600).contains(&delay));
+        observed.insert(delay);
+    }
+    assert!(observed.len() > 1);
+}
+
+#[test]
+fn reconnect_backoff_cap_stays_within_bounds() {
+    for _ in 0..32 {
+        let delay = reconnect_backoff(20, 2_000, 120_000).as_millis() as u64;
+        assert!((96_000..=120_000).contains(&delay));
+    }
 }
 
 #[test]

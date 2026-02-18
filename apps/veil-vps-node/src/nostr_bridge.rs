@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use rand::Rng;
 use serde_json::json;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -84,10 +85,23 @@ pub fn start_nostr_bridge(config: NostrBridgeConfig) -> tokio::sync::mpsc::Recei
 }
 
 fn reconnect_backoff(attempts: u32, base_ms: u64, max_ms: u64) -> Duration {
+    let raw_ms = reconnect_backoff_raw_ms(attempts, base_ms, max_ms);
+    let jitter_window_ms = (raw_ms / 5).max(1);
+    let lower_ms = raw_ms.saturating_sub(jitter_window_ms).max(base_ms);
+    let upper_ms = raw_ms.saturating_add(jitter_window_ms).min(max_ms);
+    let delay_ms = if lower_ms >= upper_ms {
+        raw_ms
+    } else {
+        rand::thread_rng().gen_range(lower_ms..=upper_ms)
+    };
+    Duration::from_millis(delay_ms)
+}
+
+fn reconnect_backoff_raw_ms(attempts: u32, base_ms: u64, max_ms: u64) -> u64 {
     let exponent = attempts.saturating_sub(1).min(10);
     let factor = 1u64.checked_shl(exponent).unwrap_or(u64::MAX);
     let raw = base_ms.saturating_mul(factor);
-    Duration::from_millis(raw.min(max_ms).max(base_ms))
+    raw.min(max_ms).max(base_ms)
 }
 
 async fn relay_loop(
