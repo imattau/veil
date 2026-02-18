@@ -12,6 +12,10 @@ use serde::Deserialize;
 use serde_json::json;
 use tower_http::cors::CorsLayer;
 
+use crate::http_admin_policy::{
+    admin_policy_block, admin_policy_config_set, admin_policy_mute, admin_policy_summary,
+    admin_policy_trust, admin_policy_unblock, admin_policy_unmute, admin_policy_untrust,
+};
 use crate::metrics_state::MetricsState;
 use crate::nostr_secret::decode_nostr_secret_input;
 use crate::settings_db::SettingsStore;
@@ -101,7 +105,7 @@ async fn ws_error_handler() -> impl IntoResponse {
     )
 }
 
-fn admin_authenticated(headers: &HeaderMap, admin: &AdminAuthState) -> bool {
+pub(crate) fn admin_authenticated(headers: &HeaderMap, admin: &AdminAuthState) -> bool {
     let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) else {
         return false;
     };
@@ -571,163 +575,4 @@ async fn discovery_gossip(
     // Sample some contacts to return
     let contacts: Vec<_> = table.values().take(24).cloned().collect();
     Json(veil_android_node::DiscoveryGossipResponse { contacts })
-}
-
-// --- Admin Policy Handlers ---
-
-async fn admin_policy_summary(
-    State(state): State<VpsAppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    if !admin_authenticated(&headers, &state.admin_auth) {
-        return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
-    }
-    let config = state
-        .runtime_config
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let summary = config.wot_policy.summary();
-    Json(summary).into_response()
-}
-
-async fn admin_policy_config_set(
-    State(state): State<VpsAppState>,
-    headers: HeaderMap,
-    Json(payload): Json<veil_node::policy::WotConfig>,
-) -> impl IntoResponse {
-    if !admin_authenticated(&headers, &state.admin_auth) {
-        return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
-    }
-    let mut config = state
-        .runtime_config
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    config.wot_policy.update_config(payload);
-    (StatusCode::OK, Json(json!({"ok": true}))).into_response()
-}
-
-async fn admin_policy_trust(
-    State(state): State<VpsAppState>,
-    headers: HeaderMap,
-    Json(payload): Json<veil_android_node::PolicySetRequest>,
-) -> impl IntoResponse {
-    if !admin_authenticated(&headers, &state.admin_auth) {
-        return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
-    }
-    let mut config = state
-        .runtime_config
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
-        if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            config.wot_policy.trust(pubkey);
-            return (StatusCode::OK, Json(json!({"ok": true}))).into_response();
-        }
-    }
-    (StatusCode::BAD_REQUEST, "invalid pubkey hex").into_response()
-}
-
-async fn admin_policy_untrust(
-    State(state): State<VpsAppState>,
-    headers: HeaderMap,
-    Json(payload): Json<veil_android_node::PolicySetRequest>,
-) -> impl IntoResponse {
-    if !admin_authenticated(&headers, &state.admin_auth) {
-        return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
-    }
-    let mut config = state
-        .runtime_config
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
-        if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            config.wot_policy.untrust(pubkey);
-            return (StatusCode::OK, Json(json!({"ok": true}))).into_response();
-        }
-    }
-    (StatusCode::BAD_REQUEST, "invalid pubkey hex").into_response()
-}
-
-async fn admin_policy_mute(
-    State(state): State<VpsAppState>,
-    headers: HeaderMap,
-    Json(payload): Json<veil_android_node::PolicySetRequest>,
-) -> impl IntoResponse {
-    if !admin_authenticated(&headers, &state.admin_auth) {
-        return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
-    }
-    let mut config = state
-        .runtime_config
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
-        if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            config.wot_policy.mute(pubkey);
-            return (StatusCode::OK, Json(json!({"ok": true}))).into_response();
-        }
-    }
-    (StatusCode::BAD_REQUEST, "invalid pubkey hex").into_response()
-}
-
-async fn admin_policy_unmute(
-    State(state): State<VpsAppState>,
-    headers: HeaderMap,
-    Json(payload): Json<veil_android_node::PolicySetRequest>,
-) -> impl IntoResponse {
-    if !admin_authenticated(&headers, &state.admin_auth) {
-        return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
-    }
-    let mut config = state
-        .runtime_config
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
-        if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            config.wot_policy.unmute(pubkey);
-            return (StatusCode::OK, Json(json!({"ok": true}))).into_response();
-        }
-    }
-    (StatusCode::BAD_REQUEST, "invalid pubkey hex").into_response()
-}
-
-async fn admin_policy_block(
-    State(state): State<VpsAppState>,
-    headers: HeaderMap,
-    Json(payload): Json<veil_android_node::PolicySetRequest>,
-) -> impl IntoResponse {
-    if !admin_authenticated(&headers, &state.admin_auth) {
-        return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
-    }
-    let mut config = state
-        .runtime_config
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
-        if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            config.wot_policy.block(pubkey);
-            return (StatusCode::OK, Json(json!({"ok": true}))).into_response();
-        }
-    }
-    (StatusCode::BAD_REQUEST, "invalid pubkey hex").into_response()
-}
-
-async fn admin_policy_unblock(
-    State(state): State<VpsAppState>,
-    headers: HeaderMap,
-    Json(payload): Json<veil_android_node::PolicySetRequest>,
-) -> impl IntoResponse {
-    if !admin_authenticated(&headers, &state.admin_auth) {
-        return (StatusCode::UNAUTHORIZED, "admin auth required").into_response();
-    }
-    let mut config = state
-        .runtime_config
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Ok(bytes) = hex::decode(&payload.pubkey_hex) {
-        if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
-            config.wot_policy.unblock(pubkey);
-            return (StatusCode::OK, Json(json!({"ok": true}))).into_response();
-        }
-    }
-    (StatusCode::BAD_REQUEST, "invalid pubkey hex").into_response()
 }

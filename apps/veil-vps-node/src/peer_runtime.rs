@@ -22,7 +22,10 @@ pub(super) fn seed_discovered_peers(
     {
         let mut guard = discovered_fast.lock().unwrap_or_else(|e| e.into_inner());
         for peer in discovered_seed.iter().filter(|p| is_fast_peer_seed(p)) {
-            guard.insert(peer.to_string());
+            let peer = peer.trim();
+            if !peer.is_empty() {
+                guard.insert(peer.to_string());
+            }
         }
     }
 
@@ -86,6 +89,9 @@ where
 
 fn is_fast_peer_seed(peer: &&String) -> bool {
     let peer = peer.trim();
+    if peer.is_empty() {
+        return false;
+    }
     !peer
         .get(..3)
         .map(|p| p.eq_ignore_ascii_case("ws:"))
@@ -120,10 +126,12 @@ fn merge_snapshot_strings(fast_seen: Vec<String>, fallback_seen: Vec<FallbackPee
 mod tests {
     use super::{compute_peer_lists, is_fast_peer_seed, merge_snapshot_strings};
     use crate::fallback_transport::FallbackPeer;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn is_fast_peer_seed_filters_transport_prefixes() {
         assert!(is_fast_peer_seed(&&"peer-a".to_string()));
+        assert!(!is_fast_peer_seed(&&"  ".to_string()));
         assert!(!is_fast_peer_seed(&&"ws:relay-a".to_string()));
         assert!(!is_fast_peer_seed(&&"WS:relay-a".to_string()));
         assert!(!is_fast_peer_seed(&&"wssrv:127.0.0.1:8080".to_string()));
@@ -134,6 +142,36 @@ mod tests {
         assert!(!is_fast_peer_seed(
             &&"  BLE:AA:BB:CC:DD:EE:FF  ".to_string()
         ));
+    }
+
+    #[test]
+    fn seed_discovered_peers_trims_fast_seed_entries() {
+        let discovered_fast = Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let discovered_fallback = Arc::new(Mutex::new(std::collections::HashSet::new()));
+        super::seed_discovered_peers(
+            &[
+                "  fast-peer-a  ".to_string(),
+                " ".to_string(),
+                "WS:relay-a".to_string(),
+            ],
+            &discovered_fast,
+            &discovered_fallback,
+            true,
+            false,
+            false,
+            #[cfg(feature = "ble")]
+            false,
+        );
+
+        let fast_guard = discovered_fast.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(fast_guard.contains("fast-peer-a"));
+        assert!(!fast_guard.contains(""));
+        drop(fast_guard);
+
+        let fallback_guard = discovered_fallback
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert!(fallback_guard.contains(&FallbackPeer::WebSocket("relay-a".to_string())));
     }
 
     #[test]

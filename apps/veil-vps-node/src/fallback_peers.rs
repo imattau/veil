@@ -22,14 +22,23 @@ pub(super) fn parse_fallback_peers(
 ) -> Vec<FallbackPeer> {
     let mut peers = Vec::new();
     if let Some(ws_peer) = ws_peer {
-        peers.push(FallbackPeer::WebSocket(ws_peer));
+        let ws_peer = ws_peer.trim();
+        if !ws_peer.is_empty() {
+            peers.push(FallbackPeer::WebSocket(ws_peer.to_string()));
+        }
     }
     for peer in tor_peers {
-        peers.push(FallbackPeer::Tor(peer));
+        let peer = peer.trim();
+        if !peer.is_empty() {
+            peers.push(FallbackPeer::Tor(peer.to_string()));
+        }
     }
     #[cfg(feature = "ble")]
     for peer in ble_peers {
-        peers.push(FallbackPeer::Ble(BlePeer::new(peer)));
+        let peer = peer.trim();
+        if !peer.is_empty() {
+            peers.push(FallbackPeer::Ble(BlePeer::new(peer.to_string())));
+        }
     }
     peers
 }
@@ -126,8 +135,29 @@ pub(super) fn merge_peers<T: Clone + Eq + Hash>(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_fallback_peer_strings;
+    use super::{parse_fallback_peer_strings, parse_fallback_peers};
     use crate::fallback_transport::FallbackPeer;
+
+    #[test]
+    fn parse_fallback_peers_trims_and_filters_empty_entries() {
+        let peers = parse_fallback_peers(
+            Some("  ws-peer  ".to_string()),
+            vec![
+                "  peer-a.onion:5000  ".to_string(),
+                "".to_string(),
+                "   ".to_string(),
+            ],
+            #[cfg(feature = "ble")]
+            vec![],
+        );
+        assert_eq!(
+            peers,
+            vec![
+                FallbackPeer::WebSocket("ws-peer".to_string()),
+                FallbackPeer::Tor("peer-a.onion:5000".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn parse_fallback_peer_strings_accepts_case_insensitive_prefixes() {
