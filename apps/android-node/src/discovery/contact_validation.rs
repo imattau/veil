@@ -41,7 +41,10 @@ pub(super) fn sanitize_contact(
             if trimmed.is_empty() || trimmed.len() > max_lan_addr_len {
                 return Some(None);
             }
-            Some(seen.insert(trimmed.to_string()).then(|| trimmed.to_string()))
+            Some(
+                seen.insert(trimmed.to_string())
+                    .then(|| trimmed.to_string()),
+            )
         })
         .flatten()
         .take(max_lan_addrs)

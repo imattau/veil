@@ -32,8 +32,8 @@ impl ContactBook {
             .iter_mut()
             .find(|existing| existing.peer_id == contact.peer_id)
         {
-            let identity_matches = existing.pubkey_hex.is_empty()
-                || existing.pubkey_hex == contact.pubkey_hex;
+            let identity_matches =
+                existing.pubkey_hex.is_empty() || existing.pubkey_hex == contact.pubkey_hex;
             if identity_matches {
                 if let Some(ws_url) = contact.ws_url.clone() {
                     existing.ws_url = Some(ws_url);

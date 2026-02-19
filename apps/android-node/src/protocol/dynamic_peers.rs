@@ -32,11 +32,7 @@ impl DynamicPeerStore {
                 MAX_DYNAMIC_FAST_PEERS,
             );
         }
-        if let Some(ws_url) = contact
-            .ws_url
-            .as_deref()
-            .and_then(normalize_dynamic_ws_url)
-        {
+        if let Some(ws_url) = contact.ws_url.as_deref().and_then(normalize_dynamic_ws_url) {
             push_unique_bounded(
                 &mut self.fallback_peers,
                 &mut self.fallback_peer_set,
