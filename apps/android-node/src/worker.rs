@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use tokio::time::sleep;
 
 use crate::api::QueueWorkerConfig;
@@ -192,17 +194,12 @@ fn retry_backoff_with_jitter_ms(attempts: u32, base_ms: u64, max_ms: u64, jitter
         return upper;
     }
     let span = upper - base_ms;
-    let key = ((jitter_key >> 64) as u64) ^ (jitter_key as u64) ^ u64::from(attempts);
-    let jitter = stable_mix64(key) % (span.saturating_add(1));
+    let mut seed = [0_u8; 32];
+    seed[..16].copy_from_slice(&jitter_key.to_le_bytes());
+    seed[16..20].copy_from_slice(&attempts.to_le_bytes());
+    let mut rng = StdRng::from_seed(seed);
+    let jitter = rng.gen_range(0..=span);
     base_ms.saturating_add(jitter)
-}
-
-fn stable_mix64(mut x: u64) -> u64 {
-    x ^= x >> 33;
-    x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    x ^= x >> 33;
-    x = x.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
-    x ^ (x >> 33)
 }
 
 fn now_millis() -> u64 {

@@ -143,10 +143,10 @@ impl ProtocolEngine {
         namespace: Namespace,
         tag: [u8; 32],
     ) -> Result<(), String> {
+        let (fast_peers, fallback_peers) = self.publish_peer_lists().await?;
         let mut runtime = self.inner.lock().await;
         enqueue_payload(&mut runtime, payload);
         let step = self.steps.fetch_add(1, Ordering::Relaxed) + 1;
-        let (fast_peers, fallback_peers) = self.publish_peer_lists().await?;
         tick_publish(
             &mut runtime,
             namespace,
@@ -168,10 +168,10 @@ impl ProtocolEngine {
         if payloads.is_empty() {
             return Ok(());
         }
+        let (fast_peers, fallback_peers) = self.publish_peer_lists().await?;
         let mut runtime = self.inner.lock().await;
         enqueue_payload_batch(&mut runtime, payloads);
         let step = self.steps.fetch_add(1, Ordering::Relaxed) + 1;
-        let (fast_peers, fallback_peers) = self.publish_peer_lists().await?;
         tick_publish(
             &mut runtime,
             namespace,

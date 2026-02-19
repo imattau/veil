@@ -28,8 +28,7 @@ pub(in crate::server) fn bad_request(code: &str, message: &str) -> Response {
 }
 
 pub(in crate::server) fn valid_pubkey_hex(value: &str) -> bool {
-    let mut key = [0u8; 32];
-    hex::decode_to_slice(value, &mut key).is_ok()
+    parse_hex_32(value).is_some()
 }
 
 pub(in crate::server) fn valid_channel(value: &str) -> bool {
@@ -37,9 +36,7 @@ pub(in crate::server) fn valid_channel(value: &str) -> bool {
 }
 
 pub(in crate::server) fn hex_to_pubkey(value: &str) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    let _ = hex::decode_to_slice(value, &mut out);
-    out
+    parse_hex_32(value).unwrap_or([0u8; 32])
 }
 
 pub(in crate::server) fn current_unix_seconds() -> u64 {
@@ -47,4 +44,25 @@ pub(in crate::server) fn current_unix_seconds() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn parse_hex_32(value: &str) -> Option<[u8; 32]> {
+    <[u8; 32] as hex::FromHex>::from_hex(value).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hex_to_pubkey, valid_pubkey_hex};
+
+    #[test]
+    fn valid_pubkey_hex_requires_exact_32_bytes() {
+        assert!(valid_pubkey_hex(&"11".repeat(32)));
+        assert!(!valid_pubkey_hex("11"));
+        assert!(!valid_pubkey_hex(&"zz".repeat(32)));
+    }
+
+    #[test]
+    fn hex_to_pubkey_returns_zeroes_for_invalid_input() {
+        assert_eq!(hex_to_pubkey("zz"), [0u8; 32]);
+    }
 }

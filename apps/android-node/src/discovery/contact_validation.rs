@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::api::ContactBundle;
 
 pub(super) fn bounded_gossip_contacts(requested: usize, max_contacts: usize) -> usize {
@@ -34,14 +36,14 @@ pub(super) fn sanitize_contact(
     contact.lan_addrs = contact
         .lan_addrs
         .into_iter()
-        .filter_map(|addr| {
+        .scan(HashSet::new(), |seen, addr| {
             let trimmed = addr.trim();
             if trimmed.is_empty() || trimmed.len() > max_lan_addr_len {
-                None
-            } else {
-                Some(trimmed.to_string())
+                return Some(None);
             }
+            Some(seen.insert(trimmed.to_string()).then(|| trimmed.to_string()))
         })
+        .flatten()
         .take(max_lan_addrs)
         .collect();
     Some(contact)
@@ -101,6 +103,27 @@ mod tests {
         assert_eq!(sanitized.quic_addr.as_deref(), Some("127.0.0.1:5000"));
         assert_eq!(sanitized.rpc_url.as_deref(), Some("https://relay"));
         assert_eq!(sanitized.lan_addrs, vec!["10.0.0.2:9333".to_string()]);
+    }
+
+    #[test]
+    fn sanitize_contact_deduplicates_lan_addrs() {
+        let contact = ContactBundle {
+            peer_id: "peer-a".to_string(),
+            ws_url: None,
+            quic_addr: None,
+            pubkey_hex: "11".repeat(32),
+            rpc_url: None,
+            lan_addrs: vec![
+                " 10.0.0.2:9333 ".to_string(),
+                "10.0.0.2:9333".to_string(),
+                "10.0.0.3:9333".to_string(),
+            ],
+        };
+        let sanitized = sanitize_contact(contact, 128, 1024, 256, 8).expect("sanitized");
+        assert_eq!(
+            sanitized.lan_addrs,
+            vec!["10.0.0.2:9333".to_string(), "10.0.0.3:9333".to_string()]
+        );
     }
 
     #[test]

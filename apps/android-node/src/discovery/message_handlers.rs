@@ -2,7 +2,7 @@ use crate::api::ContactBundle;
 use crate::protocol::ProtocolEngine;
 use crate::state::NodeState;
 
-use super::{DiscoveryKind, DiscoveryMessage};
+use super::{is_local_identity_contact, DiscoveryKind, DiscoveryMessage};
 
 const ANNOUNCE_NEIGHBOR_LIMIT: usize = 12;
 const LOOKUP_CONTACT_LIMIT: usize = 16;
@@ -18,7 +18,9 @@ pub(super) async fn handle_discovery_message(
     match msg.kind {
         DiscoveryKind::Announce => {
             let contact = sanitize_contact(msg.contact?)?;
-            if contact.peer_id == protocol.peer_id() {
+            let local_peer_id = protocol.peer_id();
+            let local_pubkey = state.identity().public_key;
+            if is_local_identity_contact(&contact, &local_peer_id, local_pubkey) {
                 return None;
             }
             state.add_contact(contact.clone());
@@ -50,21 +52,29 @@ pub(super) async fn handle_discovery_message(
                     return None;
                 }
             }
+            let local_peer_id = protocol.peer_id();
+            let local_pubkey = state.identity().public_key;
             ingest_contacts(
                 state,
                 protocol,
                 msg.contacts,
                 max_contacts,
+                &local_peer_id,
+                local_pubkey,
                 sanitize_contact,
             )
             .await;
         }
         DiscoveryKind::Gossip => {
+            let local_peer_id = protocol.peer_id();
+            let local_pubkey = state.identity().public_key;
             ingest_contacts(
                 state,
                 protocol,
                 msg.contacts,
                 max_contacts,
+                &local_peer_id,
+                local_pubkey,
                 sanitize_contact,
             )
             .await;
@@ -78,6 +88,8 @@ async fn ingest_contacts(
     protocol: &ProtocolEngine,
     contacts: Vec<ContactBundle>,
     max_contacts: usize,
+    local_peer_id: &str,
+    local_pubkey: [u8; 32],
     sanitize_contact: fn(ContactBundle) -> Option<ContactBundle>,
 ) {
     for contact in contacts
@@ -85,6 +97,9 @@ async fn ingest_contacts(
         .filter_map(sanitize_contact)
         .take(max_contacts)
     {
+        if is_local_identity_contact(&contact, local_peer_id, local_pubkey) {
+            continue;
+        }
         state.add_contact(contact.clone());
         protocol.add_contact(&contact).await;
     }

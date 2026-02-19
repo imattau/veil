@@ -1,7 +1,13 @@
+use std::collections::HashSet;
+
 pub(super) fn merge_unique_peers(configured: &[String], dynamic: &[String]) -> Vec<String> {
     let mut merged = configured.to_vec();
+    let mut seen = HashSet::with_capacity(configured.len().saturating_add(dynamic.len()));
+    for peer in configured {
+        seen.insert(peer.clone());
+    }
     for peer in dynamic {
-        if !merged.contains(peer) {
+        if seen.insert(peer.clone()) {
             merged.push(peer.clone());
         }
     }

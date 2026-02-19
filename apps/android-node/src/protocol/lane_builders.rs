@@ -107,12 +107,11 @@ pub(super) fn build_fallback_adapter(config: &ProtocolConfig) -> Result<Fallback
         // 2. Add WebSocket URLs from fallback peers.
         for peer in &config.fallback_peers {
             let peer = peer.trim();
-            if is_ws_url(peer) && !seen_ws.contains(peer) {
+            if is_ws_url(peer) && seen_ws.insert(peer.to_string()) {
                 let ws =
                     crate::adapters::build_ws_adapter(peer.to_string(), config.peer_id.clone())
                         .map_err(|e| e.to_string())?;
                 lanes.push(LaneAdapter::WebSocket(ws));
-                seen_ws.insert(peer.to_string());
             }
         }
     }

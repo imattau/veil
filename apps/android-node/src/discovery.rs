@@ -130,6 +130,7 @@ impl DiscoveryWorker {
         let gossip_limit = bounded_gossip_contacts(self.config.max_gossip_contacts);
         let contacts = self.state.contacts();
         let http_targets = collect_http_targets(&self.config.bootstrap_urls, &contacts);
+        let local_pubkey = self.state.identity().public_key;
 
         let target_count = http_targets.len();
         let contact_count = contacts.len();
@@ -138,6 +139,7 @@ impl DiscoveryWorker {
             let payload = DiscoveryGossipRequest {
                 contacts: self.state.discovery_sample(gossip_limit),
             };
+            let local_peer_id = self.protocol.peer_id();
             tracing::info!(
                 "Starting HTTP discovery gossip with {} targets (known contacts: {})",
                 target_count,
@@ -152,6 +154,8 @@ impl DiscoveryWorker {
                 let protocol = Arc::clone(&self.protocol);
                 let http = self.http.clone();
                 let auth_token = self.config.auth_token.clone();
+                let local_peer_id = local_peer_id.clone();
+                let local_pubkey = local_pubkey;
                 handles.spawn(async move {
                     let url = join_discovery_endpoint(&target, "discovery/gossip");
                     let request =
@@ -166,6 +170,13 @@ impl DiscoveryWorker {
                                     .filter_map(sanitize_contact)
                                     .take(DISCOVERY_MAX_CONTACTS)
                                 {
+                                    if is_local_identity_contact(
+                                        &contact,
+                                        &local_peer_id,
+                                        local_pubkey,
+                                    ) {
+                                        continue;
+                                    }
                                     state.add_contact(contact.clone());
                                     let _ = protocol.add_contact(&contact).await;
                                     new_contacts += 1;
@@ -321,6 +332,20 @@ fn sanitize_contact(contact: ContactBundle) -> Option<ContactBundle> {
         DISCOVERY_MAX_LAN_ADDR_LEN,
         DISCOVERY_MAX_LAN_ADDRS,
     )
+}
+
+pub(crate) fn is_local_identity_contact(
+    contact: &ContactBundle,
+    local_peer_id: &str,
+    local_pubkey: [u8; 32],
+) -> bool {
+    if contact.peer_id == local_peer_id {
+        return true;
+    }
+    let mut pubkey = [0u8; 32];
+    hex::decode_to_slice(&contact.pubkey_hex, &mut pubkey)
+        .map(|_| pubkey == local_pubkey)
+        .unwrap_or(false)
 }
 
 pub fn sanitize_discovery_contact(contact: ContactBundle) -> Option<ContactBundle> {
@@ -604,5 +629,89 @@ mod tests {
         assert_eq!(handled, Some(()));
         assert_eq!(state.contacts().len(), 1);
         assert!(state.contacts().iter().any(|c| c.peer_id == "peer-ok"));
+    }
+
+    #[tokio::test]
+    async fn discovery_payload_announce_ignores_local_pubkey_spoof() {
+        let state = NodeState::new("test");
+        let identity = state.identity();
+        let protocol = ProtocolEngine::new(crate::default_protocol_config(
+            "ws://127.0.0.1:9/ws".to_string(),
+            "node-a".to_string(),
+            32,
+            identity.public_key,
+            identity.encrypt_key,
+            identity.signer(),
+        ))
+        .expect("protocol init");
+        let announce = DiscoveryMessage::announce(ContactBundle {
+            peer_id: "peer-spoof".to_string(),
+            ws_url: Some("ws://spoof.example/ws".to_string()),
+            quic_addr: Some("127.0.0.1:9409".to_string()),
+            pubkey_hex: hex::encode(identity.public_key),
+            rpc_url: None,
+            lan_addrs: Vec::new(),
+        });
+        let payload = serde_json::to_vec(&announce).expect("encode announce");
+
+        let handled = handle_discovery_payload(&state, &protocol, &payload).await;
+        assert_eq!(handled, None);
+        assert!(state.contacts().is_empty());
+        let (fast, fallback) = protocol.dynamic_peer_snapshot().await;
+        assert!(fast.is_empty());
+        assert!(fallback.is_empty());
+    }
+
+    #[tokio::test]
+    async fn discovery_payload_gossip_ignores_self_contact() {
+        let state = NodeState::new("test");
+        let identity = state.identity();
+        let protocol = ProtocolEngine::new(crate::default_protocol_config(
+            "ws://127.0.0.1:9/ws".to_string(),
+            "node-a".to_string(),
+            32,
+            identity.public_key,
+            identity.encrypt_key,
+            identity.signer(),
+        ))
+        .expect("protocol init");
+        let gossip = DiscoveryMessage::gossip(vec![
+            ContactBundle {
+                peer_id: "node-a".to_string(),
+                ws_url: Some("ws://self.example/ws".to_string()),
+                quic_addr: Some("127.0.0.1:9400".to_string()),
+                pubkey_hex: "aa".repeat(32),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            },
+            ContactBundle {
+                peer_id: "peer-ok".to_string(),
+                ws_url: Some("ws://peer-ok.example/ws".to_string()),
+                quic_addr: Some("127.0.0.1:9401".to_string()),
+                pubkey_hex: "bb".repeat(32),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            },
+            ContactBundle {
+                peer_id: "peer-spoof-local".to_string(),
+                ws_url: Some("ws://spoof.example/ws".to_string()),
+                quic_addr: Some("127.0.0.1:9402".to_string()),
+                pubkey_hex: hex::encode(identity.public_key),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            },
+        ]);
+        let payload = serde_json::to_vec(&gossip).expect("encode gossip");
+
+        let handled = handle_discovery_payload(&state, &protocol, &payload).await;
+        assert_eq!(handled, Some(()));
+
+        let contacts = state.contacts();
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts[0].peer_id, "peer-ok");
+
+        let (fast, fallback) = protocol.dynamic_peer_snapshot().await;
+        assert_eq!(fast, vec!["127.0.0.1:9401".to_string()]);
+        assert_eq!(fallback, vec!["ws://peer-ok.example/ws".to_string()]);
     }
 }

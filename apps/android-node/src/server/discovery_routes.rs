@@ -1,9 +1,9 @@
 use super::*;
 
-use crate::api::ContactBundle;
+use crate::api::{ContactBundle, DiscoveryAnnounceResponse};
 use crate::discovery::{
     handle_discovery_announce, handle_discovery_gossip, handle_discovery_lookup,
-    sanitize_discovery_contact, DiscoveryMessage,
+    is_local_identity_contact, sanitize_discovery_contact, DiscoveryMessage,
 };
 
 const MAX_DISCOVERY_CONTACTS_PER_REQUEST: usize = 64;
@@ -20,6 +20,15 @@ pub(super) async fn discovery_announce(
     let Some(contact) = sanitize_discovery_contact(request.contact) else {
         return bad_request("invalid_contact", "contact is invalid");
     };
+    let local_peer_id = state.protocol.peer_id();
+    let local_pubkey = state.node.identity().public_key;
+    if is_local_identity_contact(&contact, &local_peer_id, local_pubkey) {
+        return Json(DiscoveryAnnounceResponse {
+            accepted: false,
+            neighbors: Vec::new(),
+        })
+        .into_response();
+    }
     state.protocol.add_contact(&contact).await;
     let response = handle_discovery_announce(
         &state.node,
@@ -65,10 +74,13 @@ pub(super) async fn discovery_gossip(
     if !authorized(&headers, &state.auth_token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
+    let local_peer_id = state.protocol.peer_id();
+    let local_pubkey = state.node.identity().public_key;
     let contacts: Vec<ContactBundle> = request
         .contacts
         .into_iter()
         .filter_map(sanitize_discovery_contact)
+        .filter(|contact| !is_local_identity_contact(contact, &local_peer_id, local_pubkey))
         .take(MAX_DISCOVERY_CONTACTS_PER_REQUEST)
         .collect();
     for contact in &contacts {

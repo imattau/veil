@@ -72,6 +72,81 @@ async fn discovery_announce_rejects_invalid_contact() {
 }
 
 #[tokio::test]
+async fn discovery_announce_ignores_self_contact() {
+    let state = test_state();
+    let app = build_router(state.clone());
+    let contact = ContactBundle {
+        peer_id: "test-node".to_string(),
+        ws_url: Some("ws://self.example/ws".to_string()),
+        quic_addr: Some("127.0.0.1:9012".to_string()),
+        pubkey_hex: "aa".repeat(32),
+        rpc_url: None,
+        lan_addrs: Vec::new(),
+    };
+    let body = serde_json::to_string(&DiscoveryAnnounceRequest { contact }).unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/discovery/announce")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header("x-veil-token", "secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap_or_else(|_| Bytes::new());
+    let parsed: DiscoveryAnnounceResponse = serde_json::from_slice(&bytes).unwrap();
+    assert!(!parsed.accepted);
+    assert!(state.node.contacts().is_empty());
+    let (fast, fallback) = state.protocol.dynamic_peer_snapshot().await;
+    assert!(fast.is_empty());
+    assert!(fallback.is_empty());
+}
+
+#[tokio::test]
+async fn discovery_announce_ignores_local_pubkey_spoof() {
+    let state = test_state();
+    let app = build_router(state.clone());
+    let local_pubkey_hex = state.node.identity().public_key_hex();
+    let contact = ContactBundle {
+        peer_id: "peer-spoof".to_string(),
+        ws_url: Some("ws://spoof.example/ws".to_string()),
+        quic_addr: Some("127.0.0.1:9013".to_string()),
+        pubkey_hex: local_pubkey_hex,
+        rpc_url: None,
+        lan_addrs: Vec::new(),
+    };
+    let body = serde_json::to_string(&DiscoveryAnnounceRequest { contact }).unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/discovery/announce")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header("x-veil-token", "secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap_or_else(|_| Bytes::new());
+    let parsed: DiscoveryAnnounceResponse = serde_json::from_slice(&bytes).unwrap();
+    assert!(!parsed.accepted);
+    assert!(state.node.contacts().is_empty());
+    let (fast, fallback) = state.protocol.dynamic_peer_snapshot().await;
+    assert!(fast.is_empty());
+    assert!(fallback.is_empty());
+}
+
+#[tokio::test]
 async fn discovery_lookup_returns_contacts() {
     let app = build_router(test_state());
     let contact = ContactBundle {
@@ -178,4 +253,61 @@ async fn discovery_lookup_rejects_invalid_pubkey() {
         .unwrap_or_else(|_| Bytes::new());
     let parsed: ErrorResponse = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(parsed.code, "invalid_pubkey");
+}
+
+#[tokio::test]
+async fn discovery_gossip_ignores_self_contact() {
+    let state = test_state();
+    let app = build_router(state.clone());
+    let local_pubkey_hex = state.node.identity().public_key_hex();
+    let body = serde_json::to_string(&DiscoveryGossipRequest {
+        contacts: vec![
+            ContactBundle {
+                peer_id: "test-node".to_string(),
+                ws_url: Some("ws://self.example/ws".to_string()),
+                quic_addr: Some("127.0.0.1:9020".to_string()),
+                pubkey_hex: "aa".repeat(32),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            },
+            ContactBundle {
+                peer_id: "peer-z".to_string(),
+                ws_url: Some("ws://peer-z.example/ws".to_string()),
+                quic_addr: Some("127.0.0.1:9021".to_string()),
+                pubkey_hex: "bb".repeat(32),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            },
+            ContactBundle {
+                peer_id: "peer-spoof".to_string(),
+                ws_url: Some("ws://spoof.example/ws".to_string()),
+                quic_addr: Some("127.0.0.1:9022".to_string()),
+                pubkey_hex: local_pubkey_hex,
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            },
+        ],
+    })
+    .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/discovery/gossip")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header("x-veil-token", "secret")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let contacts = state.node.contacts();
+    assert_eq!(contacts.len(), 1);
+    assert_eq!(contacts[0].peer_id, "peer-z");
+
+    let (fast, fallback) = state.protocol.dynamic_peer_snapshot().await;
+    assert_eq!(fast, vec!["127.0.0.1:9021".to_string()]);
+    assert_eq!(fallback, vec!["ws://peer-z.example/ws".to_string()]);
 }

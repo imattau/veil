@@ -3,11 +3,19 @@ use super::{
     is_ws_url, ProtocolEngine,
 };
 use crate::api::ContactBundle;
+use crate::discovery::discovery_tag;
 use veil_core::types::NAMESPACE_PUBLIC_FEED;
 use veil_core::{Epoch, Namespace, ObjectRoot};
-use veil_crypto::signing::{NostrSigner, Signer};
+use veil_crypto::aead::XChaCha20Poly1305Cipher;
+use veil_crypto::signing::{NostrSigner, NostrVerifier, Signer};
 use veil_fec::profile::ErasureCodingMode;
 use veil_fec::sharder::{derive_object_root, object_to_shards_with_mode};
+use veil_node::batch::FeedBatcher;
+use veil_node::config::NodeRuntimeConfig;
+use veil_node::runtime::RuntimeStats;
+use veil_node::service::PublisherRuntime;
+use veil_node::state::NodeState;
+use veil_transport::adapter::InMemoryAdapter;
 
 #[test]
 fn default_protocol_config_enables_network_efficiency_policies() {
@@ -266,4 +274,67 @@ async fn media_round_trip_integration() {
 
     // Should return the UNWRAPPED media bytes
     assert_eq!(reconstructed_content, media_payload);
+}
+
+#[tokio::test]
+async fn publish_with_tag_rejects_empty_peers_without_buffering_payload() {
+    let signer = NostrSigner::from_secret([0x61; 32]).expect("valid secret");
+    let pubkey = signer.public_key();
+    let cfg = super::ProtocolConfig {
+        ws_url: None,
+        quic_bind_addr: "0.0.0.0:0".to_string(),
+        quic_server_name: None,
+        quic_trusted_certs: Vec::new(),
+        tor_socks: None,
+        peer_id: "node-empty-peers".to_string(),
+        namespace: Namespace(32),
+        discovery_namespace: Namespace(4096),
+        encrypt_key: [0xAB; 32],
+        identity_pubkey: pubkey,
+        signer: signer.clone(),
+        fast_peers: Vec::new(),
+        fallback_peers: Vec::new(),
+        runtime_config: NodeRuntimeConfig::default(),
+        cache_state_path: None,
+    };
+    let mut runtime = PublisherRuntime::new(
+        NodeState::default(),
+        FeedBatcher::default(),
+        crate::adapters::MultiLaneAdapter::new(vec![crate::adapters::LaneAdapter::InMemory(
+            InMemoryAdapter::default(),
+        )]),
+        crate::adapters::MultiLaneAdapter::new(vec![crate::adapters::LaneAdapter::InMemory(
+            InMemoryAdapter::default(),
+        )]),
+        cfg.runtime_config.clone(),
+        cfg.encrypt_key,
+        Some(signer),
+        XChaCha20Poly1305Cipher,
+    );
+    runtime
+        .state
+        .subscriptions
+        .insert(discovery_tag(cfg.discovery_namespace));
+    let protocol = ProtocolEngine {
+        inner: std::sync::Arc::new(tokio::sync::Mutex::new(runtime)),
+        config: cfg,
+        steps: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        runtime_stats: std::sync::Arc::new(tokio::sync::Mutex::new(RuntimeStats::default())),
+        verifier: NostrVerifier,
+        identity_pubkey: std::sync::Arc::new(tokio::sync::Mutex::new(pubkey)),
+        dynamic_peers: std::sync::Arc::new(tokio::sync::Mutex::new(
+            super::dynamic_peers::DynamicPeerStore::default(),
+        )),
+    };
+
+    let namespace = Namespace(32);
+    let tag = [0xCD; 32];
+    let err = protocol
+        .publish_with_tag(b"payload".to_vec(), namespace, tag)
+        .await
+        .expect_err("publish should fail when no peers are configured");
+    assert_eq!(err, "no peers configured for publish");
+
+    let runtime = protocol.inner.lock().await;
+    assert_eq!(runtime.batcher.len(), 0);
 }

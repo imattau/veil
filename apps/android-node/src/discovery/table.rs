@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use rand::seq::SliceRandom;
+use rand::seq::IteratorRandom;
 use rand::thread_rng;
 
 use super::lookup_keys::{contact_key, key_for_peer, key_for_pubkey, xor_distance};
@@ -18,6 +18,9 @@ impl DiscoveryTable {
     }
 
     pub fn lookup(&self, key: &[u8; 32], limit: usize) -> Vec<ContactBundle> {
+        if limit == 0 || self.contacts.is_empty() {
+            return Vec::new();
+        }
         let mut contacts: Vec<_> = self
             .contacts
             .values()
@@ -28,22 +31,27 @@ impl DiscoveryTable {
                 (distance, contact)
             })
             .collect();
-        contacts.sort_by(|a, b| a.0.cmp(&b.0));
-        contacts
-            .into_iter()
-            .take(limit)
-            .map(|(_, contact)| contact)
-            .collect()
+        let take = limit.min(contacts.len());
+        if take < contacts.len() {
+            let nth = take - 1;
+            contacts.select_nth_unstable_by(nth, |a, b| a.0.cmp(&b.0));
+            contacts.truncate(take);
+        }
+        contacts.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        contacts.into_iter().map(|(_, contact)| contact).collect()
     }
 
     pub fn sample(&self, max: usize) -> Vec<ContactBundle> {
-        let mut entries: Vec<_> = self.contacts.values().cloned().collect();
-        if entries.len() <= max {
-            return entries;
+        if self.contacts.len() <= max {
+            return self.contacts.values().cloned().collect();
         }
-        entries.shuffle(&mut thread_rng());
-        entries.truncate(max);
-        entries
+        let mut rng = thread_rng();
+        self.contacts
+            .values()
+            .choose_multiple(&mut rng, max)
+            .into_iter()
+            .cloned()
+            .collect()
     }
 }
 
@@ -91,6 +99,8 @@ impl DiscoveryStateHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::{key_for_peer, DiscoveryTable};
     use crate::api::ContactBundle;
 
@@ -124,5 +134,36 @@ mod tests {
         let results = table.lookup(&key, 2);
         assert_eq!(results.len(), 2);
         assert!(results.iter().any(|c| c.peer_id == "alpha"));
+    }
+
+    #[test]
+    fn lookup_zero_limit_returns_empty_without_sorting() {
+        let mut table = DiscoveryTable::default();
+        table.upsert(make_contact(
+            "alpha",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ));
+        let key = key_for_peer("alpha");
+        let results = table.lookup(&key, 0);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn sample_caps_count_without_duplicates() {
+        let mut table = DiscoveryTable::default();
+        for i in 0..64usize {
+            table.upsert(make_contact(
+                &format!("peer-{i}"),
+                &format!("{:064x}", i + 1),
+            ));
+        }
+
+        let sample = table.sample(16);
+        assert_eq!(sample.len(), 16);
+        let unique: HashSet<_> = sample
+            .iter()
+            .map(|contact| contact.peer_id.clone())
+            .collect();
+        assert_eq!(unique.len(), sample.len());
     }
 }

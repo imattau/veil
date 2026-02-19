@@ -65,13 +65,7 @@ fn is_public_ws_url(url: &str) -> bool {
     let Some(host) = parsed.host_str() else {
         return false;
     };
-    if host.eq_ignore_ascii_case("localhost") {
-        return false;
-    }
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return !(ip.is_loopback() || ip.is_unspecified());
-    }
-    true
+    host_is_public(host)
 }
 
 fn is_public_quic_addr(addr: &str) -> bool {
@@ -89,11 +83,32 @@ fn is_public_quic_addr(addr: &str) -> bool {
         host.to_string()
     };
 
+    host_is_public(&host)
+}
+
+fn host_is_public(host: &str) -> bool {
     if host.eq_ignore_ascii_case("localhost") {
         return false;
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
-        return !(ip.is_loopback() || ip.is_unspecified());
+        return match ip {
+            IpAddr::V4(v4) => {
+                !(v4.is_private()
+                    || v4.is_loopback()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_documentation()
+                    || v4.is_unspecified()
+                    || v4.is_multicast())
+            }
+            IpAddr::V6(v6) => {
+                !(v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_multicast()
+                    || v6.is_unicast_link_local()
+                    || v6.is_unique_local())
+            }
+        };
     }
     true
 }
@@ -130,6 +145,7 @@ mod tests {
     fn ws_url_public_filter_uses_url_parser() {
         assert!(is_public_ws_url("wss://relay.example/ws"));
         assert!(is_public_ws_url("ws://1.2.3.4:8080/ws"));
+        assert!(!is_public_ws_url("ws://192.168.1.10:8080/ws"));
         assert!(!is_public_ws_url("ws://127.0.0.1:7788/ws"));
         assert!(!is_public_ws_url("ws://localhost:7788/ws"));
         assert!(!is_public_ws_url("ws://0.0.0.0:7788/ws"));
@@ -140,6 +156,7 @@ mod tests {
     fn quic_addr_public_filter_uses_socketaddr_parser() {
         assert!(is_public_quic_addr("1.2.3.4:9443"));
         assert!(is_public_quic_addr("relay.example:9443"));
+        assert!(!is_public_quic_addr("10.0.0.8:9443"));
         assert!(!is_public_quic_addr("127.0.0.1:9443"));
         assert!(!is_public_quic_addr("0.0.0.0:9443"));
         assert!(!is_public_quic_addr("[::1]:9443"));

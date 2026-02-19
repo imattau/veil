@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use crate::api::ContactBundle;
@@ -31,21 +32,26 @@ impl ContactBook {
             .iter_mut()
             .find(|existing| existing.peer_id == contact.peer_id)
         {
-            if existing.ws_url.is_none() {
-                existing.ws_url = contact.ws_url.clone();
-            }
-            if existing.quic_addr.is_none() {
-                existing.quic_addr = contact.quic_addr.clone();
-            }
-            if existing.rpc_url.is_none() {
-                existing.rpc_url = contact.rpc_url.clone();
-            }
-            if existing.pubkey_hex.is_empty() {
-                existing.pubkey_hex = contact.pubkey_hex.clone();
-            }
-            for addr in &contact.lan_addrs {
-                if !existing.lan_addrs.contains(addr) {
-                    existing.lan_addrs.push(addr.clone());
+            let identity_matches = existing.pubkey_hex.is_empty()
+                || existing.pubkey_hex == contact.pubkey_hex;
+            if identity_matches {
+                if let Some(ws_url) = contact.ws_url.clone() {
+                    existing.ws_url = Some(ws_url);
+                }
+                if let Some(quic_addr) = contact.quic_addr.clone() {
+                    existing.quic_addr = Some(quic_addr);
+                }
+                if let Some(rpc_url) = contact.rpc_url.clone() {
+                    existing.rpc_url = Some(rpc_url);
+                }
+                if existing.pubkey_hex.is_empty() {
+                    existing.pubkey_hex = contact.pubkey_hex.clone();
+                }
+                let mut seen_lan: HashSet<String> = existing.lan_addrs.iter().cloned().collect();
+                for addr in &contact.lan_addrs {
+                    if seen_lan.insert(addr.clone()) {
+                        existing.lan_addrs.push(addr.clone());
+                    }
                 }
             }
             existing.clone()
