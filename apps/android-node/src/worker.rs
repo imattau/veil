@@ -141,10 +141,11 @@ impl QueueWorker {
                     } else {
                         for item in executable {
                             let attempts = worker.state.attempts_for(&item);
-                            let backoff = retry_backoff_ms(
+                            let backoff = retry_backoff_with_jitter_ms(
                                 attempts,
                                 worker.config.backoff_base_ms,
                                 worker.config.backoff_max_ms,
+                                item.id.as_u128(),
                             );
                             worker.state.complete_failure(item, backoff);
                         }
@@ -185,6 +186,25 @@ fn retry_backoff_ms(attempts: u32, base_ms: u64, max_ms: u64) -> u64 {
     bounded.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
+fn retry_backoff_with_jitter_ms(attempts: u32, base_ms: u64, max_ms: u64, jitter_key: u128) -> u64 {
+    let upper = retry_backoff_ms(attempts, base_ms, max_ms);
+    if upper <= base_ms {
+        return upper;
+    }
+    let span = upper - base_ms;
+    let key = ((jitter_key >> 64) as u64) ^ (jitter_key as u64) ^ u64::from(attempts);
+    let jitter = stable_mix64(key) % (span.saturating_add(1));
+    base_ms.saturating_add(jitter)
+}
+
+fn stable_mix64(mut x: u64) -> u64 {
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    x ^ (x >> 33)
+}
+
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -220,7 +240,12 @@ fn queued_payload_to_bytes(payload: &str) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_worker_config, queued_payload_to_bytes, retry_backoff_ms};
+    use std::collections::HashSet;
+
+    use super::{
+        normalize_worker_config, queued_payload_to_bytes, retry_backoff_ms,
+        retry_backoff_with_jitter_ms,
+    };
     use crate::api::QueueWorkerConfig;
 
     #[test]
@@ -282,5 +307,21 @@ mod tests {
         assert_eq!(retry_backoff_ms(2, 500, 20_000), 1_000);
         assert_eq!(retry_backoff_ms(3, 500, 20_000), 2_000);
         assert_eq!(retry_backoff_ms(20, 500, 20_000), 20_000);
+    }
+
+    #[test]
+    fn retry_backoff_with_jitter_stays_bounded_and_varies_by_key() {
+        let base = 500;
+        let max = 20_000;
+        let attempts = 4;
+        let upper = retry_backoff_ms(attempts, base, max);
+        let mut seen = HashSet::new();
+        for key in 0u128..16 {
+            let value = retry_backoff_with_jitter_ms(attempts, base, max, key);
+            assert!(value >= base);
+            assert!(value <= upper);
+            seen.insert(value);
+        }
+        assert!(seen.len() > 1);
     }
 }

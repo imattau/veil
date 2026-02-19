@@ -1,8 +1,30 @@
 use crate::api::LaneDetail;
 
-use super::StateInner;
+use super::{emit_event_locked, StateInner};
 
-pub(super) fn apply_lane_health_update(
+pub(super) fn mark_lane_health(
+    inner: &mut StateInner,
+    lane: &str,
+    connected: bool,
+    last_error: Option<String>,
+) {
+    apply_lane_health_update(inner, lane, connected, last_error.clone());
+    emit_event_locked(
+        inner,
+        "lane_health",
+        serde_json::json!({
+            "lane": lane,
+            "connected": connected,
+            "last_error": last_error,
+        }),
+    );
+}
+
+pub(super) fn mark_lane_details(inner: &mut StateInner, details: Vec<LaneDetail>) {
+    apply_lane_details(inner, details);
+}
+
+fn apply_lane_health_update(
     inner: &mut StateInner,
     lane: &str,
     connected: bool,
@@ -13,7 +35,7 @@ pub(super) fn apply_lane_health_update(
     target.last_error = last_error;
 }
 
-pub(super) fn apply_lane_details(inner: &mut StateInner, details: Vec<LaneDetail>) {
+fn apply_lane_details(inner: &mut StateInner, details: Vec<LaneDetail>) {
     inner.lane_details = details.clone();
     inner.quic = Default::default();
     inner.websocket = Default::default();

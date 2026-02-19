@@ -3,38 +3,48 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::Engine;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::api::{
     ContactBundle, EventEnvelope, LaneDetail, LaneHealth, PublishRequest, StatusResponse,
 };
-use crate::secure_message::{
-    decrypt_direct_message_payload, decrypt_group_key_share_payload, decrypt_group_message_payload,
-};
 use crate::state_store::{IdentityRecord, QueueItem, StateStore, StoreSnapshot};
 use veil_crypto::signing::{NostrSigner, Signer};
 use veil_node::policy::{EndorsementIngestResult, LocalWotPolicy, WotConfig, WotSummary};
 mod contact_book;
 mod contact_mutations;
+mod event_stream;
+mod group_keys;
 mod identity_group_keys;
 mod lane_health;
+mod payload_events;
 mod payload_parsing;
 mod policy_lists;
 mod policy_mutations;
 mod projections;
+mod queue_ops;
 mod queue_retry;
 use self::contact_book::ContactBook;
 use self::contact_mutations::{execute_contact_mutation, ContactMutation};
-use self::identity_group_keys::{
-    decode_hex_32, generate_group_key_entry, generate_identity, parse_group_keys, parse_identity,
+use self::event_stream::{
+    emit_status_event, feed_snapshot, subscribe_events_receiver, subscribe_events_since,
+    subscribe_tag, subscriptions_snapshot, unsubscribe_tag,
 };
-use self::lane_health::{apply_lane_details, apply_lane_health_update};
-use self::payload_parsing::{parse_endorsements, parse_feed_bundles};
+use self::group_keys::{
+    ensure_group_key as ensure_group_key_inner, rotate_group_key as rotate_group_key_inner,
+};
+use self::identity_group_keys::{
+    decode_hex_32, generate_identity, parse_group_keys, parse_identity,
+};
+use self::lane_health::{
+    mark_lane_details as mark_lane_details_inner, mark_lane_health as mark_lane_health_inner,
+};
+use self::payload_events::{emit_local_feed_bundle_event, emit_payload_events};
+use self::payload_parsing::parse_endorsements;
 use self::policy_lists::export_policy_lists;
 use self::policy_mutations::{apply_pubkey_mutation, PolicyPubkeyMutation};
-use self::projections::{snapshot_from_inner, status_from_inner, update_queue_counts};
+use self::projections::{snapshot_from_inner, status_from_inner};
 use self::queue_retry::RetrySchedule;
 #[cfg(test)]
 const MAX_CONTACTS_TOTAL: usize = contact_book::MAX_CONTACTS_TOTAL;
@@ -190,22 +200,7 @@ impl NodeState {
 
     pub fn enqueue_publish(&self, request: PublishRequest) -> Uuid {
         let mut inner = self.inner.lock().expect("state lock");
-        let message_id = Uuid::new_v4();
-        inner.queue.push_back(QueueItem {
-            id: message_id,
-            namespace: request.namespace,
-            payload: request.payload,
-        });
-        update_queue_counts(&mut inner);
-        let pending = inner.queue_pending;
-        emit_event_locked(
-            &mut inner,
-            "publish_queued",
-            serde_json::json!({
-                "message_id": message_id,
-                "pending": pending,
-            }),
-        );
+        let message_id = queue_ops::enqueue_request(&mut inner, request);
         if let Some(store) = &inner.store {
             store.persist(&snapshot_from_inner(&inner));
         }
@@ -214,21 +209,7 @@ impl NodeState {
 
     pub fn take_next_queued(&self, now_ms: u64) -> Option<QueueItem> {
         let mut inner = self.inner.lock().expect("state lock");
-        let queue_len = inner.queue.len();
-        if queue_len == 0 || !inner.retry_schedule.due_for_queue(queue_len, now_ms) {
-            return None;
-        }
-        let index = inner
-            .queue
-            .iter()
-            .position(|item| inner.retry_schedule.is_due(item.id, now_ms))?;
-        let item = inner.queue.remove(index)?;
-        inner.retry_schedule.unschedule(item.id);
-        inner.queue_inflight = inner.queue_inflight.saturating_add(1);
-        let attempts = inner.queue_attempts.entry(item.id).or_insert(0);
-        *attempts += 1;
-        update_queue_counts(&mut inner);
-        Some(item)
+        queue_ops::take_due_item(&mut inner, now_ms)
     }
 
     pub fn take_next_queued_batch(
@@ -238,87 +219,19 @@ impl NodeState {
         target_batch_bytes: usize,
         max_item_bytes: usize,
     ) -> Vec<QueueItem> {
-        if max_items == 0 {
-            return Vec::new();
-        }
         let mut inner = self.inner.lock().expect("state lock");
-        let queue_len = inner.queue.len();
-        if queue_len == 0 || !inner.retry_schedule.due_for_queue(queue_len, now_ms) {
-            return Vec::new();
-        }
-        let first_index = match inner
-            .queue
-            .iter()
-            .position(|item| inner.retry_schedule.is_due(item.id, now_ms))
-        {
-            Some(index) => index,
-            None => return Vec::new(),
-        };
-
-        let mut batch = Vec::with_capacity(max_items);
-        let first = match inner.queue.remove(first_index) {
-            Some(item) => item,
-            None => return Vec::new(),
-        };
-        inner.retry_schedule.unschedule(first.id);
-        let namespace = first.namespace;
-        let mut total_bytes = first.payload.len();
-        inner.queue_inflight = inner.queue_inflight.saturating_add(1);
-        let attempts = inner.queue_attempts.entry(first.id).or_insert(0);
-        *attempts += 1;
-        batch.push(first);
-
-        // Only aggregate additional small items. Large payloads still flow as
-        // single-item publishes to avoid starving queue order.
-        if total_bytes <= max_item_bytes && target_batch_bytes > total_bytes {
-            let mut index = 0usize;
-            while index < inner.queue.len()
-                && batch.len() < max_items
-                && total_bytes < target_batch_bytes
-            {
-                let due = inner.retry_schedule.is_due(inner.queue[index].id, now_ms);
-                if !due {
-                    index += 1;
-                    continue;
-                }
-                let candidate = &inner.queue[index];
-                if candidate.namespace != namespace {
-                    index += 1;
-                    continue;
-                }
-                let item_len = candidate.payload.len();
-                if item_len > max_item_bytes || total_bytes + item_len > target_batch_bytes {
-                    index += 1;
-                    continue;
-                }
-                let item = match inner.queue.remove(index) {
-                    Some(item) => item,
-                    None => continue,
-                };
-                inner.retry_schedule.unschedule(item.id);
-                total_bytes += item.payload.len();
-                inner.queue_inflight = inner.queue_inflight.saturating_add(1);
-                let attempts = inner.queue_attempts.entry(item.id).or_insert(0);
-                *attempts += 1;
-                batch.push(item);
-            }
-        }
-
-        update_queue_counts(&mut inner);
-        batch
+        queue_ops::take_due_batch(
+            &mut inner,
+            now_ms,
+            max_items,
+            target_batch_bytes,
+            max_item_bytes,
+        )
     }
 
     pub fn complete_success(&self, item: &QueueItem) {
         let mut inner = self.inner.lock().expect("state lock");
-        inner.queue_inflight = inner.queue_inflight.saturating_sub(1);
-        inner.queue_attempts.remove(&item.id);
-        inner.retry_schedule.unschedule(item.id);
-        emit_event_locked(
-            &mut inner,
-            "publish_sent",
-            serde_json::json!({ "message_id": item.id }),
-        );
-        update_queue_counts(&mut inner);
+        queue_ops::mark_success(&mut inner, item);
         if let Some(store) = &inner.store {
             store.persist(&snapshot_from_inner(&inner));
         }
@@ -326,23 +239,7 @@ impl NodeState {
 
     pub fn complete_failure(&self, item: QueueItem, retry_after_ms: u64) {
         let mut inner = self.inner.lock().expect("state lock");
-        inner.queue_failed = inner.queue_failed.saturating_add(1);
-        inner.queue_inflight = inner.queue_inflight.saturating_sub(1);
-        let message_id = item.id;
-        let attempts = inner.queue_attempts.get(&message_id).copied().unwrap_or(0);
-        let next_attempt = now_millis().saturating_add(retry_after_ms);
-        inner.retry_schedule.schedule(message_id, next_attempt);
-        inner.queue.push_back(item);
-        emit_event_locked(
-            &mut inner,
-            "publish_failed",
-            serde_json::json!({
-                "message_id": message_id,
-                "attempts": attempts,
-                "retry_after_ms": retry_after_ms,
-            }),
-        );
-        update_queue_counts(&mut inner);
+        queue_ops::mark_failure(&mut inner, item, retry_after_ms, now_millis());
         if let Some(store) = &inner.store {
             store.persist(&snapshot_from_inner(&inner));
         }
@@ -350,18 +247,7 @@ impl NodeState {
 
     pub fn drop_item(&self, item: &QueueItem) {
         let mut inner = self.inner.lock().expect("state lock");
-        inner.queue_inflight = inner.queue_inflight.saturating_sub(1);
-        inner.queue_attempts.remove(&item.id);
-        inner.retry_schedule.unschedule(item.id);
-        emit_event_locked(
-            &mut inner,
-            "publish_failed",
-            serde_json::json!({
-                "message_id": item.id,
-                "dropped": true,
-            }),
-        );
-        update_queue_counts(&mut inner);
+        queue_ops::mark_dropped(&mut inner, item);
         if let Some(store) = &inner.store {
             store.persist(&snapshot_from_inner(&inner));
         }
@@ -369,23 +255,17 @@ impl NodeState {
 
     pub fn attempts_for(&self, item: &QueueItem) -> u32 {
         let inner = self.inner.lock().expect("state lock");
-        inner.queue_attempts.get(&item.id).copied().unwrap_or(0)
+        queue_ops::attempts_for(&inner, item)
     }
 
     pub fn get_feed(&self, limit: usize) -> Vec<EventEnvelope> {
         let inner = self.inner.lock().expect("state lock");
-        inner
-            .event_buffer
-            .iter()
-            .rev()
-            .take(limit)
-            .cloned()
-            .collect()
+        feed_snapshot(&inner, limit)
     }
 
     pub fn get_subscriptions(&self) -> Vec<String> {
         let inner = self.inner.lock().expect("state lock");
-        inner.subscriptions.iter().cloned().collect()
+        subscriptions_snapshot(&inner)
     }
 
     pub fn export_identity(&self) -> (String, String) {
@@ -508,21 +388,12 @@ impl NodeState {
 
     pub fn mark_lane_health(&self, lane: &str, connected: bool, last_error: Option<String>) {
         let mut inner = self.inner.lock().expect("state lock");
-        apply_lane_health_update(&mut inner, lane, connected, last_error.clone());
-        emit_event_locked(
-            &mut inner,
-            "lane_health",
-            serde_json::json!({
-                "lane": lane,
-                "connected": connected,
-                "last_error": last_error,
-            }),
-        );
+        mark_lane_health_inner(&mut inner, lane, connected, last_error);
     }
 
     pub fn mark_lane_details(&self, details: Vec<LaneDetail>) {
         let mut inner = self.inner.lock().expect("state lock");
-        apply_lane_details(&mut inner, details);
+        mark_lane_details_inner(&mut inner, details);
     }
 
     pub fn emit_payload(
@@ -535,58 +406,19 @@ impl NodeState {
         flags: u16,
     ) {
         let mut inner = self.inner.lock().expect("state lock");
-        if let Some(material) = decrypt_group_key_share_payload(inner.identity.secret_key, payload)
-        {
-            inner
-                .group_keys
-                .entry(material.group_id.clone())
-                .or_default()
-                .insert(material.key_id.clone(), material.key);
-            emit_event_locked(
-                &mut inner,
-                "group_key_updated",
-                serde_json::json!({
-                    "group_id": material.group_id,
-                    "key_id": material.key_id,
-                }),
-            );
+        let group_key_updated = emit_payload_events(
+            &mut inner,
+            object_root,
+            payload,
+            namespace,
+            epoch,
+            tag,
+            flags,
+        );
+        if group_key_updated {
             if let Some(store) = &inner.store {
                 store.persist(&snapshot_from_inner(&inner));
             }
-        }
-        let feed_bundles = parse_feed_bundles(payload);
-        let payload_for_event = decrypt_direct_message_payload(inner.identity.secret_key, payload)
-            .or_else(|| {
-                decrypt_group_message_payload(payload, |group_id, key_id| {
-                    inner
-                        .group_keys
-                        .get(group_id)
-                        .and_then(|keys| keys.get(key_id))
-                        .copied()
-                })
-            })
-            .unwrap_or_else(|| payload.to_vec());
-        emit_event_locked(
-            &mut inner,
-            "payload",
-            serde_json::json!({
-                "object_root": hex::encode(object_root),
-                "payload_b64": base64::engine::general_purpose::STANDARD.encode(payload_for_event),
-                "namespace": namespace,
-                "epoch": epoch,
-                "tag": hex::encode(tag),
-                "flags": flags,
-            }),
-        );
-        for bundle in feed_bundles {
-            let mut value = serde_json::to_value(bundle).unwrap_or_default();
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert(
-                    "object_root".to_string(),
-                    serde_json::json!(hex::encode(object_root)),
-                );
-            }
-            emit_event_locked(&mut inner, "feed_bundle", value);
         }
     }
 
@@ -628,17 +460,17 @@ impl NodeState {
 
     pub fn subscribe(&self, tag: &str) -> bool {
         let mut inner = self.inner.lock().expect("state lock");
-        inner.subscriptions.insert(tag.to_string())
+        subscribe_tag(&mut inner, tag)
     }
 
     pub fn unsubscribe(&self, tag: &str) -> bool {
         let mut inner = self.inner.lock().expect("state lock");
-        inner.subscriptions.remove(tag)
+        unsubscribe_tag(&mut inner, tag)
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<EventEnvelope> {
         let inner = self.inner.lock().expect("state lock");
-        inner.events.subscribe()
+        subscribe_events_receiver(&inner)
     }
 
     pub fn subscribe_events_since(
@@ -646,26 +478,12 @@ impl NodeState {
         since: Option<u64>,
     ) -> (Vec<EventEnvelope>, broadcast::Receiver<EventEnvelope>) {
         let inner = self.inner.lock().expect("state lock");
-        let backlog = match since {
-            Some(seq) => inner
-                .event_buffer
-                .iter()
-                .filter(|event| event.seq > seq)
-                .cloned()
-                .collect(),
-            None => Vec::new(),
-        };
-        (backlog, inner.events.subscribe())
+        subscribe_events_since(&inner, since)
     }
 
     pub fn emit_status_event(&self) -> EventEnvelope {
         let mut inner = self.inner.lock().expect("state lock");
-        let status = status_from_inner(&inner);
-        emit_event_locked(
-            &mut inner,
-            "node_status",
-            serde_json::to_value(status).unwrap_or_default(),
-        )
+        emit_status_event(&mut inner)
     }
 
     pub fn persist(&self) {
@@ -675,47 +493,25 @@ impl NodeState {
 
     pub fn ensure_group_key(&self, group_id: &str) -> (String, [u8; 32]) {
         let mut inner = self.inner.lock().expect("state lock");
-        if let Some(keys) = inner.group_keys.get(group_id) {
-            if let Some((key_id, key)) = keys.iter().next() {
-                return (key_id.clone(), *key);
-            }
-        }
-        let (key_id, key) = generate_group_key_entry();
-        inner
-            .group_keys
-            .entry(group_id.to_string())
-            .or_default()
-            .insert(key_id.clone(), key);
+        let material = ensure_group_key_inner(&mut inner, group_id);
         if let Some(store) = &inner.store {
             store.persist(&snapshot_from_inner(&inner));
         }
-        (key_id, key)
+        material
     }
 
     pub fn rotate_group_key(&self, group_id: &str) -> (String, [u8; 32]) {
         let mut inner = self.inner.lock().expect("state lock");
-        let (key_id, key) = generate_group_key_entry();
-        inner
-            .group_keys
-            .entry(group_id.to_string())
-            .or_default()
-            .insert(key_id.clone(), key);
+        let material = rotate_group_key_inner(&mut inner, group_id);
         if let Some(store) = &inner.store {
             store.persist(&snapshot_from_inner(&inner));
         }
-        (key_id, key)
+        material
     }
 
     pub fn inject_local_feed_bundle(&self, bundle: serde_json::Value, object_root: [u8; 32]) {
         let mut inner = self.inner.lock().expect("state lock");
-        let mut value = bundle;
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert(
-                "object_root".to_string(),
-                serde_json::json!(hex::encode(object_root)),
-            );
-        }
-        emit_event_locked(&mut inner, "feed_bundle", value);
+        emit_local_feed_bundle_event(&mut inner, bundle, object_root);
     }
 
     fn mutate_policy(&self, mutate: impl FnOnce(&mut LocalWotPolicy)) {
@@ -779,346 +575,4 @@ fn now_millis() -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::secure_message::{
-        encrypt_direct_message_payload, encrypt_group_key_share_payload,
-        encrypt_group_message_payload,
-    };
-    use tempfile::tempdir;
-    use veil_crypto::signing::Signer;
-    use veil_schema_feed::BundleMeta;
-
-    #[test]
-    fn persists_queue_to_disk() {
-        let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("node_state.json");
-        let state = NodeState::new_with_store("0.1-test", Some(path.clone()));
-        let _ = state.enqueue_publish(PublishRequest {
-            namespace: 32,
-            payload: "hello".to_string(),
-        });
-
-        let restored = NodeState::new_with_store("0.1-test", Some(path));
-        let status = restored.status();
-        assert_eq!(status.queue.pending, 1);
-    }
-
-    #[test]
-    fn lane_details_update_summary() {
-        let state = NodeState::new("0.1-test");
-        state.mark_lane_details(vec![
-            LaneDetail {
-                role: "fast".to_string(),
-                lane: "quic".to_string(),
-                connected: true,
-                last_error: None,
-                last_error_code: None,
-                stats: crate::api::LaneStats::default(),
-            },
-            LaneDetail {
-                role: "fallback".to_string(),
-                lane: "websocket".to_string(),
-                connected: false,
-                last_error: Some("send_error".to_string()),
-                last_error_code: Some("500".to_string()),
-                stats: crate::api::LaneStats::default(),
-            },
-        ]);
-
-        let status = state.status();
-        assert_eq!(status.lanes.details.len(), 2);
-        assert!(status.lanes.quic.connected);
-        assert!(!status.lanes.websocket.connected);
-        assert_eq!(
-            status.lanes.websocket.last_error.as_deref(),
-            Some("send_error")
-        );
-    }
-
-    #[test]
-    fn identity_persists_across_restart() {
-        let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("node_state.json");
-        let state = NodeState::new_with_store("0.1-test", Some(path.clone()));
-        let first = state.identity();
-        let restored = NodeState::new_with_store("0.1-test", Some(path));
-        let second = restored.identity();
-        assert_eq!(first.public_key, second.public_key);
-        assert_eq!(first.secret_key, second.secret_key);
-    }
-
-    #[test]
-    fn policy_persists_across_restart() {
-        let dir = tempdir().expect("tempdir");
-        let path = dir.path().join("node_state.json");
-        let state = NodeState::new_with_store("0.1-test", Some(path.clone()));
-        state.trust_pubkey([0x11; 32]);
-
-        let restored = NodeState::new_with_store("0.1-test", Some(path));
-        let summary = restored.policy_summary();
-        assert_eq!(summary.trusted, 1);
-    }
-
-    #[test]
-    fn endorsement_payload_updates_policy() {
-        let state = NodeState::new("0.1-test");
-        let endorsement =
-            veil_schema_feed::FeedBundle::Endorsement(veil_schema_feed::EndorsementBundle {
-                meta: BundleMeta {
-                    version: 1,
-                    created_at: 1_700_000_060,
-                },
-                channel_id: "general".to_string(),
-                endorser_pubkey_hex: "aa".repeat(32),
-                publisher_pubkey_hex: "bb".repeat(32),
-                at_step: 10,
-            });
-        let payload = serde_json::to_vec(&endorsement).expect("encode");
-        assert!(state.ingest_endorsement_payload(&payload, 10));
-        let summary = state.policy_summary();
-        assert_eq!(summary.endorsements, 1);
-    }
-
-    #[test]
-    fn queue_retries_with_backoff() {
-        let state = NodeState::new("0.1-test");
-        let _ = state.enqueue_publish(PublishRequest {
-            namespace: 32,
-            payload: "hello".to_string(),
-        });
-        let item = state.take_next_queued(now_millis()).expect("item");
-        let status = state.status();
-        assert_eq!(status.queue.pending, 0);
-        assert_eq!(status.queue.inflight, 1);
-
-        state.complete_failure(item, 0);
-        let status = state.status();
-        assert_eq!(status.queue.pending, 1);
-        assert_eq!(status.queue.inflight, 0);
-        assert_eq!(status.queue.failed, 1);
-
-        let item = state.take_next_queued(now_millis()).expect("item");
-        state.complete_success(&item);
-        let status = state.status();
-        assert_eq!(status.queue.pending, 0);
-        assert_eq!(status.queue.inflight, 0);
-    }
-
-    #[test]
-    fn queue_retry_deadline_blocks_until_due() {
-        let state = NodeState::new("0.1-test");
-        let _ = state.enqueue_publish(PublishRequest {
-            namespace: 32,
-            payload: "hello".to_string(),
-        });
-        let item = state.take_next_queued(now_millis()).expect("item");
-        state.complete_failure(item, 60_000);
-
-        assert!(state.take_next_queued(now_millis()).is_none());
-        let future = now_millis().saturating_add(61_000);
-        assert!(state.take_next_queued(future).is_some());
-    }
-
-    #[test]
-    fn take_next_queued_batch_groups_small_same_namespace_items() {
-        let state = NodeState::new("0.1-test");
-        let _ = state.enqueue_publish(PublishRequest {
-            namespace: 32,
-            payload: "a".repeat(32),
-        });
-        let _ = state.enqueue_publish(PublishRequest {
-            namespace: 32,
-            payload: "b".repeat(24),
-        });
-        // Different namespace should not be coalesced into the same batch.
-        let _ = state.enqueue_publish(PublishRequest {
-            namespace: 64,
-            payload: "c".repeat(24),
-        });
-
-        let batch = state.take_next_queued_batch(now_millis(), 16, 96 * 1024, 4 * 1024);
-        assert_eq!(batch.len(), 2);
-        assert!(batch.iter().all(|item| item.namespace == 32));
-
-        for item in &batch {
-            state.complete_success(item);
-        }
-
-        let next = state
-            .take_next_queued(now_millis())
-            .expect("remaining item");
-        assert_eq!(next.namespace, 64);
-    }
-
-    #[test]
-    fn take_next_queued_batch_leaves_large_payload_as_single_item() {
-        let state = NodeState::new("0.1-test");
-        let _ = state.enqueue_publish(PublishRequest {
-            namespace: 32,
-            payload: "x".repeat(8 * 1024),
-        });
-        let _ = state.enqueue_publish(PublishRequest {
-            namespace: 32,
-            payload: "y".repeat(32),
-        });
-
-        let batch = state.take_next_queued_batch(now_millis(), 16, 96 * 1024, 4 * 1024);
-        assert_eq!(batch.len(), 1);
-        assert_eq!(batch[0].payload.len(), 8 * 1024);
-
-        state.complete_success(&batch[0]);
-        let next = state
-            .take_next_queued(now_millis())
-            .expect("small item remains");
-        assert_eq!(next.payload.len(), 32);
-    }
-
-    #[test]
-    fn emits_feed_bundle_event() {
-        let state = NodeState::new("0.1-test");
-        let mut rx = state.subscribe_events();
-        let bundle = veil_schema_feed::FeedBundle::Post(veil_schema_feed::PostBundle {
-            meta: BundleMeta {
-                version: 1,
-                created_at: 1_700_000_040,
-            },
-            channel_id: "general".to_string(),
-            author_pubkey_hex: "aa".repeat(32),
-            text: "hello".to_string(),
-            media_roots: vec![],
-            reply_to_root: None,
-        });
-        let payload = serde_json::to_vec(&bundle).expect("encode");
-        state.emit_payload(&[0x11; 32], &payload, 32, 1, &[0x22; 32], 0);
-        let first = rx.try_recv().expect("event");
-        assert_eq!(first.event, "payload");
-        let second = rx.try_recv().expect("event");
-        assert_eq!(second.event, "feed_bundle");
-    }
-
-    #[test]
-    fn injects_local_feed_bundle() {
-        let state = NodeState::new("0.1-test");
-        let mut rx = state.subscribe_events();
-
-        let bundle = serde_json::json!({
-            "kind": "post",
-            "text": "local post"
-        });
-        let root = [0x99; 32];
-
-        state.inject_local_feed_bundle(bundle, root);
-
-        let event = rx.try_recv().expect("should receive event");
-        assert_eq!(event.event, "feed_bundle");
-        assert_eq!(event.data["text"], "local post");
-        assert_eq!(event.data["object_root"], hex::encode(root));
-    }
-
-    #[test]
-    fn emits_decrypted_payload_for_direct_message_envelope() {
-        let state = NodeState::new("0.1-test");
-        let mut rx = state.subscribe_events();
-        let identity = state.identity();
-        let recipient_pubkey_hex = hex::encode(identity.public_key);
-        let sender_secret = [7u8; 32];
-        let sender_pubkey_hex = hex::encode(
-            veil_crypto::signing::NostrSigner::from_secret(sender_secret)
-                .expect("sender")
-                .public_key(),
-        );
-        let encrypted = encrypt_direct_message_payload(
-            sender_secret,
-            &sender_pubkey_hex,
-            &recipient_pubkey_hex,
-            b"hello secret",
-        )
-        .expect("encrypt");
-        state.emit_payload(&[0x44; 32], &encrypted, 32, 1, &[0x22; 32], 0);
-        let first = rx.try_recv().expect("payload event");
-        assert_eq!(first.event, "payload");
-        let payload_b64 = first
-            .data
-            .get("payload_b64")
-            .and_then(|v| v.as_str())
-            .expect("payload b64");
-        let plaintext = base64::engine::general_purpose::STANDARD
-            .decode(payload_b64)
-            .expect("decode");
-        assert_eq!(plaintext, b"hello secret");
-    }
-
-    #[test]
-    fn emits_decrypted_payload_for_group_message_envelope() {
-        let state = NodeState::new("0.1-test");
-        let mut rx = state.subscribe_events();
-        let identity = state.identity();
-        let local_pubkey_hex = hex::encode(identity.public_key);
-        let sender_secret = [6u8; 32];
-        let sender_pubkey_hex = hex::encode(
-            veil_crypto::signing::NostrSigner::from_secret(sender_secret)
-                .expect("sender")
-                .public_key(),
-        );
-        let share = encrypt_group_key_share_payload(
-            sender_secret,
-            &sender_pubkey_hex,
-            &local_pubkey_hex,
-            "group-alpha",
-            "k1",
-            [2u8; 32],
-        )
-        .expect("share");
-        state.emit_payload(&[0x46; 32], &share, 32, 1, &[0x22; 32], 0);
-        let encrypted =
-            encrypt_group_message_payload("group-alpha", "k1", [2u8; 32], b"hello group secret")
-                .expect("encrypt");
-        state.emit_payload(&[0x45; 32], &encrypted, 32, 1, &[0x22; 32], 0);
-        let mut found = false;
-        for _ in 0..6 {
-            let event = rx.try_recv().expect("event");
-            if event.event != "payload" {
-                continue;
-            }
-            let payload_b64 = event
-                .data
-                .get("payload_b64")
-                .and_then(|v| v.as_str())
-                .expect("payload b64");
-            let plaintext = base64::engine::general_purpose::STANDARD
-                .decode(payload_b64)
-                .expect("decode");
-            if plaintext == b"hello group secret" {
-                found = true;
-                break;
-            }
-        }
-        assert!(found);
-    }
-
-    #[test]
-    fn add_contact_caps_total_and_evicts_from_discovery_index() {
-        let state = NodeState::new("0.1-test");
-        for index in 0..(MAX_CONTACTS_TOTAL + 5) {
-            state.add_contact(ContactBundle {
-                peer_id: format!("peer-{index}"),
-                ws_url: Some(format!("ws://relay-{index}.example/ws")),
-                quic_addr: Some(format!("127.0.0.1:{}", 10_000 + (index % 50_000))),
-                pubkey_hex: format!("{:064x}", index + 1),
-                rpc_url: None,
-                lan_addrs: Vec::new(),
-            });
-        }
-
-        let contacts = state.contacts();
-        assert_eq!(contacts.len(), MAX_CONTACTS_TOTAL);
-        assert!(!contacts.iter().any(|contact| contact.peer_id == "peer-0"));
-        assert!(contacts
-            .iter()
-            .any(|contact| contact.peer_id == format!("peer-{}", MAX_CONTACTS_TOTAL + 4)));
-
-        let lookup = state.discovery_lookup_peer("peer-0", MAX_CONTACTS_TOTAL);
-        assert!(!lookup.iter().any(|contact| contact.peer_id == "peer-0"));
-    }
-}
+mod tests;
