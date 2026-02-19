@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -30,8 +29,8 @@ use veil_core::ObjectRoot;
 use veil_fec::sharder::{derive_object_root, reconstruct_object_padded_with_mode};
 use veil_node::persistence::load_state_or_default;
 
-const MAX_DYNAMIC_PEER_ID_LEN: usize = 128;
-const MAX_DYNAMIC_ENDPOINT_LEN: usize = 1024;
+mod dynamic_peers;
+use self::dynamic_peers::DynamicPeerStore;
 
 #[derive(Debug, Clone)]
 pub struct ProtocolConfig {
@@ -62,9 +61,7 @@ pub struct ProtocolEngine {
     runtime_stats: Arc<Mutex<RuntimeStats>>,
     verifier: NostrVerifier,
     identity_pubkey: Arc<Mutex<[u8; 32]>>,
-    dynamic_fast_peers: Arc<Mutex<Vec<String>>>,
-    dynamic_fallback_peers: Arc<Mutex<Vec<String>>>,
-    dynamic_peer_map: Arc<Mutex<HashMap<String, [u8; 32]>>>,
+    dynamic_peers: Arc<Mutex<DynamicPeerStore>>,
 }
 
 impl ProtocolEngine {
@@ -97,9 +94,7 @@ impl ProtocolEngine {
             runtime_stats: Arc::new(Mutex::new(RuntimeStats::default())),
             verifier: NostrVerifier,
             identity_pubkey: Arc::new(Mutex::new(identity_pubkey)),
-            dynamic_fast_peers: Arc::new(Mutex::new(Vec::new())),
-            dynamic_fallback_peers: Arc::new(Mutex::new(Vec::new())),
-            dynamic_peer_map: Arc::new(Mutex::new(HashMap::new())),
+            dynamic_peers: Arc::new(Mutex::new(DynamicPeerStore::default())),
         })
     }
 
@@ -269,13 +264,9 @@ impl ProtocolEngine {
         // 2. For each channel name, derive tags for self and all contacts
         for channel in channels {
             // If it looks like a hex tag, add it directly
-            if channel.len() == 64 {
-                if let Ok(bytes) = hex::decode(channel) {
-                    if let Ok(tag) = <[u8; 32]>::try_from(bytes.as_slice()) {
-                        tags.push(tag);
-                        continue;
-                    }
-                }
+            if let Some(tag) = decode_hex_32(channel) {
+                tags.push(tag);
+                continue;
             }
 
             // Otherwise treat as channel name
@@ -285,14 +276,12 @@ impl ProtocolEngine {
                 channel,
             ));
             for contact in contacts {
-                if let Ok(bytes) = hex::decode(&contact.pubkey_hex) {
-                    if let Ok(pubkey) = <[u8; 32]>::try_from(bytes.as_slice()) {
-                        tags.push(veil_core::tags::derive_channel_feed_tag(
-                            &pubkey,
-                            self.config.namespace,
-                            channel,
-                        ));
-                    }
+                if let Some(pubkey) = decode_hex_32(&contact.pubkey_hex) {
+                    tags.push(veil_core::tags::derive_channel_feed_tag(
+                        &pubkey,
+                        self.config.namespace,
+                        channel,
+                    ));
                 }
             }
         }
@@ -350,70 +339,14 @@ impl ProtocolEngine {
     }
 
     pub async fn add_contact(&self, contact: &crate::api::ContactBundle) {
-        if let Some(quic_addr) = contact
-            .quic_addr
-            .as_deref()
-            .and_then(normalize_dynamic_endpoint)
-        {
-            let mut peers = self.dynamic_fast_peers.lock().await;
-            if !peers.contains(&quic_addr) {
-                peers.push(quic_addr);
-            }
-        }
-        if let Some(ws_url) = contact
-            .ws_url
-            .as_deref()
-            .and_then(normalize_dynamic_endpoint)
-        {
-            let mut peers = self.dynamic_fallback_peers.lock().await;
-            if !peers.contains(&ws_url) {
-                peers.push(ws_url);
-            }
-        }
-        if let (Some(peer_id), Some(key)) = (
-            normalize_dynamic_peer_id(&contact.peer_id),
-            decode_peer_pubkey_hex(&contact.pubkey_hex),
-        ) {
-            let mut map = self.dynamic_peer_map.lock().await;
-            map.insert(peer_id, key);
-        }
+        self.dynamic_peers.lock().await.add_contact(contact);
     }
 
     pub async fn sync_contacts(&self, contacts: &[crate::api::ContactBundle]) {
-        let mut fast = Vec::<String>::new();
-        let mut fallback = Vec::<String>::new();
-        let mut peer_map = HashMap::<String, [u8; 32]>::new();
-
-        for contact in contacts {
-            if let Some(quic_addr) = contact
-                .quic_addr
-                .as_deref()
-                .and_then(normalize_dynamic_endpoint)
-            {
-                if !fast.contains(&quic_addr) {
-                    fast.push(quic_addr);
-                }
-            }
-            if let Some(ws_url) = contact
-                .ws_url
-                .as_deref()
-                .and_then(normalize_dynamic_endpoint)
-            {
-                if !fallback.contains(&ws_url) {
-                    fallback.push(ws_url);
-                }
-            }
-            if let (Some(peer_id), Some(key)) = (
-                normalize_dynamic_peer_id(&contact.peer_id),
-                decode_peer_pubkey_hex(&contact.pubkey_hex),
-            ) {
-                peer_map.insert(peer_id, key);
-            }
-        }
-
-        *self.dynamic_fast_peers.lock().await = fast;
-        *self.dynamic_fallback_peers.lock().await = fallback;
-        *self.dynamic_peer_map.lock().await = peer_map;
+        self.dynamic_peers
+            .lock()
+            .await
+            .replace_from_contacts(contacts);
     }
 
     pub async fn get_cached_shard(&self, shard_id: [u8; 32]) -> Option<Vec<u8>> {
@@ -646,7 +579,7 @@ impl ProtocolEngine {
             encrypt_key,
             ..
         } = &mut *runtime;
-        let dynamic = self.dynamic_peer_map.lock().await.clone();
+        let dynamic = self.dynamic_peers.lock().await.peer_map().clone();
         let resolver = |peer: &String| {
             dynamic
                 .get(peer)
@@ -690,8 +623,8 @@ impl ProtocolEngine {
 
     async fn fast_peers(&self) -> Vec<String> {
         let mut peers = self.config.fast_peers.clone();
-        let dynamic = self.dynamic_fast_peers.lock().await;
-        for peer in dynamic.iter() {
+        let dynamic = self.dynamic_peers.lock().await;
+        for peer in dynamic.fast_peers() {
             if !peers.contains(peer) {
                 peers.push(peer.clone());
             }
@@ -701,8 +634,8 @@ impl ProtocolEngine {
 
     async fn fallback_peers(&self) -> Vec<String> {
         let mut peers = self.config.fallback_peers.clone();
-        let dynamic = self.dynamic_fallback_peers.lock().await;
-        for peer in dynamic.iter() {
+        let dynamic = self.dynamic_peers.lock().await;
+        for peer in dynamic.fallback_peers() {
             if !peers.contains(peer) {
                 peers.push(peer.clone());
             }
@@ -728,42 +661,19 @@ impl ProtocolEngine {
 
     #[cfg(test)]
     pub(crate) async fn dynamic_peer_snapshot(&self) -> (Vec<String>, Vec<String>) {
-        (
-            self.dynamic_fast_peers.lock().await.clone(),
-            self.dynamic_fallback_peers.lock().await.clone(),
-        )
+        let dynamic = self.dynamic_peers.lock().await;
+        let (fast, fallback, _) = dynamic.snapshots();
+        (fast, fallback)
     }
-}
 
-fn normalize_dynamic_peer_id(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed.len() > MAX_DYNAMIC_PEER_ID_LEN {
-        None
-    } else {
-        Some(trimmed.to_string())
+    #[cfg(test)]
+    pub(crate) async fn dynamic_peer_map_snapshot(
+        &self,
+    ) -> std::collections::HashMap<String, [u8; 32]> {
+        let dynamic = self.dynamic_peers.lock().await;
+        let (_, _, peer_map) = dynamic.snapshots();
+        peer_map
     }
-}
-
-fn normalize_dynamic_endpoint(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed.len() > MAX_DYNAMIC_ENDPOINT_LEN {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-fn decode_peer_pubkey_hex(value: &str) -> Option<[u8; 32]> {
-    if value.len() != 64 {
-        return None;
-    }
-    let bytes = hex::decode(value).ok()?;
-    if bytes.len() != 32 {
-        return None;
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&bytes);
-    Some(key)
 }
 
 pub fn default_protocol_config(
@@ -832,19 +742,31 @@ fn derive_server_name(peer: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    let without_scheme = trimmed
-        .strip_prefix("quic://")
-        .or_else(|| trimmed.strip_prefix("https://"))
-        .or_else(|| trimmed.strip_prefix("http://"))
-        .or_else(|| trimmed.strip_prefix("wss://"))
-        .or_else(|| trimmed.strip_prefix("ws://"))
-        .unwrap_or(trimmed);
-    let host = without_scheme.split(':').next().unwrap_or(without_scheme);
+    if let Ok(url) = reqwest::Url::parse(trimmed) {
+        return url.host_str().map(ToString::to_string);
+    }
+    if let Ok(addr) = trimmed.parse::<std::net::SocketAddr>() {
+        return Some(addr.ip().to_string());
+    }
+    let host = trimmed.split(':').next().unwrap_or(trimmed);
     if host.is_empty() {
         None
     } else {
         Some(host.to_string())
     }
+}
+
+fn decode_hex_32(value: &str) -> Option<[u8; 32]> {
+    let mut out = [0u8; 32];
+    hex::decode_to_slice(value, &mut out).ok()?;
+    Some(out)
+}
+
+fn is_ws_url(value: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value.trim()) else {
+        return false;
+    };
+    matches!(url.scheme(), "ws" | "wss")
 }
 
 fn build_ws_fast(config: &ProtocolConfig) -> Result<LaneAdapter, String> {
@@ -922,22 +844,25 @@ fn build_fallback_adapter(config: &ProtocolConfig) -> Result<FallbackAdapter, St
     if !has_ws_in_fast {
         // 1. Add explicitly configured primary ws_url
         if let Some(ws_url) = &config.ws_url {
-            if !ws_url.trim().is_empty() {
-                let ws = crate::adapters::build_ws_adapter(ws_url.clone(), config.peer_id.clone())
-                    .map_err(|e| e.to_string())?;
+            let ws_url = ws_url.trim();
+            if !ws_url.is_empty() && is_ws_url(ws_url) {
+                let ws =
+                    crate::adapters::build_ws_adapter(ws_url.to_string(), config.peer_id.clone())
+                        .map_err(|e| e.to_string())?;
                 lanes.push(LaneAdapter::WebSocket(ws));
-                seen_ws.insert(ws_url.clone());
+                seen_ws.insert(ws_url.to_string());
             }
         }
 
         // 2. Add any WebSocket URLs from fallback_peers (from WS_PEERS env var)
         for peer in &config.fallback_peers {
-            if (peer.starts_with("ws://") || peer.starts_with("wss://")) && !seen_ws.contains(peer)
-            {
-                let ws = crate::adapters::build_ws_adapter(peer.clone(), config.peer_id.clone())
-                    .map_err(|e| e.to_string())?;
+            let peer = peer.trim();
+            if is_ws_url(peer) && !seen_ws.contains(peer) {
+                let ws =
+                    crate::adapters::build_ws_adapter(peer.to_string(), config.peer_id.clone())
+                        .map_err(|e| e.to_string())?;
                 lanes.push(LaneAdapter::WebSocket(ws));
-                seen_ws.insert(peer.clone());
+                seen_ws.insert(peer.to_string());
             }
         }
     }
@@ -958,7 +883,10 @@ fn build_fallback_adapter(config: &ProtocolConfig) -> Result<FallbackAdapter, St
 
 #[cfg(test)]
 mod tests {
-    use super::{default_protocol_config, erasure_mode_from_shards, ProtocolEngine};
+    use super::{
+        decode_hex_32, default_protocol_config, derive_server_name, erasure_mode_from_shards,
+        is_ws_url, ProtocolEngine,
+    };
     use crate::api::ContactBundle;
     use veil_core::types::NAMESPACE_PUBLIC_FEED;
     use veil_core::{Epoch, Namespace, ObjectRoot};
@@ -1004,6 +932,40 @@ mod tests {
         assert_eq!(mode, ErasureCodingMode::Systematic);
     }
 
+    #[test]
+    fn derive_server_name_parses_urls_and_host_port_fallback() {
+        assert_eq!(
+            derive_server_name("quic://node.example:9443"),
+            Some("node.example".to_string())
+        );
+        assert_eq!(
+            derive_server_name("wss://relay.example/ws"),
+            Some("relay.example".to_string())
+        );
+        assert_eq!(
+            derive_server_name("127.0.0.1:9443"),
+            Some("127.0.0.1".to_string())
+        );
+        assert_eq!(derive_server_name(""), None);
+        assert_eq!(derive_server_name(":"), None);
+    }
+
+    #[test]
+    fn is_ws_url_accepts_only_ws_and_wss() {
+        assert!(is_ws_url("ws://relay.example/ws"));
+        assert!(is_ws_url("wss://relay.example/ws"));
+        assert!(!is_ws_url("https://relay.example/ws"));
+        assert!(!is_ws_url("ws://"));
+        assert!(!is_ws_url("relay.example"));
+    }
+
+    #[test]
+    fn decode_hex_32_requires_exact_length_and_hex() {
+        assert_eq!(decode_hex_32(&"aa".repeat(32)), Some([0xAA; 32]));
+        assert!(decode_hex_32("aa").is_none());
+        assert!(decode_hex_32(&"zz".repeat(32)).is_none());
+    }
+
     #[tokio::test]
     async fn add_contact_normalizes_and_deduplicates_dynamic_endpoints() {
         let signer = NostrSigner::from_secret([0x33; 32]).expect("valid secret");
@@ -1038,9 +1000,8 @@ mod tests {
         };
         protocol.add_contact(&duplicate).await;
 
-        let fast = protocol.dynamic_fast_peers.lock().await.clone();
-        let fallback = protocol.dynamic_fallback_peers.lock().await.clone();
-        let peer_map = protocol.dynamic_peer_map.lock().await.clone();
+        let (fast, fallback) = protocol.dynamic_peer_snapshot().await;
+        let peer_map = protocol.dynamic_peer_map_snapshot().await;
 
         assert_eq!(fast, vec!["127.0.0.1:9444".to_string()]);
         assert_eq!(fallback, vec!["ws://example.com/ws".to_string()]);
@@ -1062,7 +1023,7 @@ mod tests {
         ))
         .expect("protocol init");
 
-        let too_long_endpoint = "x".repeat(super::MAX_DYNAMIC_ENDPOINT_LEN + 1);
+        let too_long_endpoint = "x".repeat(1024 + 1);
         let contacts = vec![
             ContactBundle {
                 peer_id: " peer-a ".to_string(),
@@ -1084,14 +1045,61 @@ mod tests {
 
         protocol.sync_contacts(&contacts).await;
 
-        let fast = protocol.dynamic_fast_peers.lock().await.clone();
-        let fallback = protocol.dynamic_fallback_peers.lock().await.clone();
-        let peer_map = protocol.dynamic_peer_map.lock().await.clone();
+        let (fast, fallback) = protocol.dynamic_peer_snapshot().await;
+        let peer_map = protocol.dynamic_peer_map_snapshot().await;
 
         assert_eq!(fast, vec!["127.0.0.1:9555".to_string()]);
         assert_eq!(fallback, vec!["ws://peer-a/ws".to_string()]);
         assert_eq!(peer_map.len(), 1);
         assert!(peer_map.contains_key("peer-a"));
+    }
+
+    #[tokio::test]
+    async fn add_contact_caps_dynamic_peer_storage() {
+        let signer = NostrSigner::from_secret([0x51; 32]).expect("valid secret");
+        let pubkey = signer.public_key();
+        let protocol = ProtocolEngine::new(default_protocol_config(
+            "ws://127.0.0.1:1/ws".to_string(),
+            "node-c".to_string(),
+            32,
+            pubkey,
+            [0xCC; 32],
+            signer,
+        ))
+        .expect("protocol init");
+
+        for index in 0..(super::dynamic_peers::MAX_DYNAMIC_PEER_BINDINGS + 8) {
+            let contact = ContactBundle {
+                peer_id: format!("peer-{index}"),
+                ws_url: Some(format!("ws://peer-{index}.example/ws")),
+                quic_addr: Some(format!("127.0.0.1:{}", 20_000 + index)),
+                pubkey_hex: format!("{:064x}", index + 1),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            };
+            protocol.add_contact(&contact).await;
+        }
+
+        let (fast, fallback) = protocol.dynamic_peer_snapshot().await;
+        let peer_map = protocol.dynamic_peer_map_snapshot().await;
+
+        assert_eq!(fast.len(), super::dynamic_peers::MAX_DYNAMIC_FAST_PEERS);
+        assert_eq!(
+            fallback.len(),
+            super::dynamic_peers::MAX_DYNAMIC_FALLBACK_PEERS
+        );
+        assert_eq!(
+            peer_map.len(),
+            super::dynamic_peers::MAX_DYNAMIC_PEER_BINDINGS
+        );
+        assert!(!fast.contains(&format!(
+            "127.0.0.1:{}",
+            20_000 + super::dynamic_peers::MAX_DYNAMIC_PEER_BINDINGS + 7
+        )));
+        assert!(!peer_map.contains_key(&format!(
+            "peer-{}",
+            super::dynamic_peers::MAX_DYNAMIC_PEER_BINDINGS + 7
+        )));
     }
 
     #[tokio::test]

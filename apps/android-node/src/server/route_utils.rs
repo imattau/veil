@@ -28,7 +28,8 @@ pub(in crate::server) fn bad_request(code: &str, message: &str) -> Response {
 }
 
 pub(in crate::server) fn valid_pubkey_hex(value: &str) -> bool {
-    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
+    let mut key = [0u8; 32];
+    hex::decode_to_slice(value, &mut key).is_ok()
 }
 
 pub(in crate::server) fn valid_channel(value: &str) -> bool {
@@ -37,11 +38,7 @@ pub(in crate::server) fn valid_channel(value: &str) -> bool {
 
 pub(in crate::server) fn hex_to_pubkey(value: &str) -> [u8; 32] {
     let mut out = [0u8; 32];
-    if let Ok(bytes) = hex::decode(value) {
-        if bytes.len() == 32 {
-            out.copy_from_slice(&bytes);
-        }
-    }
+    let _ = hex::decode_to_slice(value, &mut out);
     out
 }
 

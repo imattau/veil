@@ -13,10 +13,11 @@ pub(super) fn collect_http_targets(
     let mut seen = HashSet::new();
 
     let mut push_target = |candidate: &str| {
+        let candidate = candidate.trim();
         if targets.len() >= DISCOVERY_MAX_HTTP_TARGETS {
             return;
         }
-        if !(candidate.starts_with("http://") || candidate.starts_with("https://")) {
+        if !is_http_url(candidate) {
             return;
         }
         if seen.insert(candidate.to_string()) {
@@ -45,10 +46,17 @@ pub(super) fn bounded_http_gossip_concurrency(targets: usize) -> usize {
     }
 }
 
+fn is_http_url(candidate: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(candidate) else {
+        return false;
+    };
+    matches!(url.scheme(), "http" | "https")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_http_gossip_concurrency, collect_http_targets,
+        bounded_http_gossip_concurrency, collect_http_targets, is_http_url,
         DISCOVERY_MAX_CONCURRENT_HTTP_GOSSIP, DISCOVERY_MAX_HTTP_TARGETS,
     };
     use crate::api::ContactBundle;
@@ -83,9 +91,7 @@ mod tests {
 
         let targets = collect_http_targets(&bootstrap, &contacts);
         assert!(targets.len() <= DISCOVERY_MAX_HTTP_TARGETS);
-        assert!(targets
-            .iter()
-            .all(|url| url.starts_with("http://") || url.starts_with("https://")));
+        assert!(targets.iter().all(|url| is_http_url(url)));
         let unique: std::collections::HashSet<_> = targets.iter().collect();
         assert_eq!(unique.len(), targets.len());
         assert_eq!(
@@ -94,6 +100,21 @@ mod tests {
         );
         assert!(targets.iter().any(|url| url == "http://seed-b.example"));
         assert!(targets.iter().any(|url| url == "http://peer-0.example"));
+    }
+
+    #[test]
+    fn collect_http_targets_rejects_malformed_urls() {
+        let bootstrap = vec!["http://".to_string(), "https://ok.example".to_string()];
+        let contacts = vec![ContactBundle {
+            peer_id: "peer-a".to_string(),
+            ws_url: None,
+            quic_addr: None,
+            pubkey_hex: "11".repeat(32),
+            rpc_url: Some("https//missing-colon.example".to_string()),
+            lan_addrs: Vec::new(),
+        }];
+        let targets = collect_http_targets(&bootstrap, &contacts);
+        assert_eq!(targets, vec!["https://ok.example".to_string()]);
     }
 
     #[test]

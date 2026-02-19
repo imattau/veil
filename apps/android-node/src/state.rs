@@ -12,7 +12,6 @@ use crate::api::{
     CacheStatus, ContactBundle, EventEnvelope, LaneDetail, LaneHealth, LaneStatus, PublishRequest,
     QueueStatus, StatusResponse,
 };
-use crate::discovery::{DiscoveryStateHandle, DiscoveryTable};
 use crate::secure_message::{
     decrypt_direct_message_payload, decrypt_group_key_share_payload, decrypt_group_message_payload,
 };
@@ -22,6 +21,11 @@ use veil_node::policy::{
     parse_endorsement_payload, EndorsementIngestResult, LocalWotPolicy, WotConfig, WotSummary,
 };
 use veil_schema_feed::FeedBundle;
+
+mod contact_book;
+use self::contact_book::ContactBook;
+#[cfg(test)]
+const MAX_CONTACTS_TOTAL: usize = contact_book::MAX_CONTACTS_TOTAL;
 
 #[derive(Debug, Clone)]
 pub struct NodeState {
@@ -51,9 +55,8 @@ struct StateInner {
     queue_next_attempt: HashMap<Uuid, u64>,
     identity: NodeIdentity,
     wot_policy: LocalWotPolicy,
-    contacts: Vec<ContactBundle>,
+    contact_book: ContactBook,
     group_keys: HashMap<String, HashMap<String, [u8; 32]>>,
-    discovery: DiscoveryStateHandle,
 }
 
 #[derive(Debug, Clone)]
@@ -105,26 +108,19 @@ impl NodeState {
             .as_deref()
             .and_then(|json| LocalWotPolicy::import_json(json).ok())
             .unwrap_or_default();
-        let contacts = snapshot.contacts.clone();
+        let contact_book = ContactBook::from_contacts(snapshot.contacts.clone());
         let group_keys = parse_group_keys(&snapshot.group_keys);
         let subscriptions: HashSet<String> = snapshot.subscriptions.iter().cloned().collect();
         let event_buffer: VecDeque<EventEnvelope> = VecDeque::from(snapshot.feed_history.clone());
         let event_seq = event_buffer.iter().map(|e| e.seq).max().unwrap_or(0);
 
-        let discovery_table = Arc::new(Mutex::new(DiscoveryTable::default()));
-        {
-            let mut table = discovery_table.lock().expect("discovery lock");
-            for contact in &contacts {
-                table.upsert(contact.clone());
-            }
-        }
         if let Some(store) = &store {
             if snapshot.identity.is_none() {
                 store.persist(&StoreSnapshot {
                     queue: snapshot.queue.clone(),
                     identity: Some(identity.to_record()),
                     policy_json: wot_policy.export_json().ok(),
-                    contacts: contacts.clone(),
+                    contacts: contact_book.contacts(),
                     feed_history: event_buffer.iter().cloned().collect(),
                     subscriptions: subscriptions.iter().cloned().collect(),
                     group_keys: snapshot.group_keys.clone(),
@@ -154,9 +150,8 @@ impl NodeState {
                 queue_next_attempt: HashMap::new(),
                 identity,
                 wot_policy,
-                contacts,
+                contact_book,
                 group_keys,
-                discovery: DiscoveryStateHandle::new(discovery_table),
             })),
         }
     }
@@ -491,76 +486,25 @@ impl NodeState {
 
     pub fn contacts(&self) -> Vec<ContactBundle> {
         let inner = self.inner.lock().expect("state lock");
-        inner.contacts.clone()
+        inner.contact_book.contacts()
     }
 
     pub fn add_contact(&self, contact: ContactBundle) {
         let mut inner = self.inner.lock().expect("state lock");
-        let upsert_contact: Option<ContactBundle>;
-        if let Some(existing) = inner
-            .contacts
-            .iter_mut()
-            .find(|existing| existing.peer_id == contact.peer_id)
-        {
-            if existing.ws_url.is_none() {
-                existing.ws_url = contact.ws_url.clone();
-            }
-            if existing.quic_addr.is_none() {
-                existing.quic_addr = contact.quic_addr.clone();
-            }
-            if existing.rpc_url.is_none() {
-                existing.rpc_url = contact.rpc_url.clone();
-            }
-            if existing.pubkey_hex.is_empty() {
-                existing.pubkey_hex = contact.pubkey_hex.clone();
-            }
-            for addr in &contact.lan_addrs {
-                if !existing.lan_addrs.contains(addr) {
-                    existing.lan_addrs.push(addr.clone());
-                }
-            }
-            upsert_contact = Some(existing.clone());
-        } else {
-            inner.contacts.push(contact.clone());
-            upsert_contact = Some(contact);
-        }
-        if let Some(contact) = upsert_contact {
-            inner.discovery.upsert(contact);
-        }
+        inner.contact_book.add_or_merge(contact);
         self.persist_policy_locked(&mut inner);
     }
 
     pub fn set_contact(&self, contact: ContactBundle) {
         let mut inner = self.inner.lock().expect("state lock");
-        if let Some(existing) = inner
-            .contacts
-            .iter_mut()
-            .find(|existing| existing.peer_id == contact.peer_id)
-        {
-            *existing = contact.clone();
-        } else {
-            inner.contacts.push(contact.clone());
-        }
-        inner.discovery.upsert(contact);
+        inner.contact_book.set(contact);
         self.persist_policy_locked(&mut inner);
     }
 
     pub fn remove_contact(&self, peer_id: &str) -> bool {
         let mut inner = self.inner.lock().expect("state lock");
-        let before = inner.contacts.len();
-        inner.contacts.retain(|contact| contact.peer_id != peer_id);
-        let removed = inner.contacts.len() != before;
+        let removed = inner.contact_book.remove(peer_id);
         if removed {
-            // Rebuild discovery table from remaining contacts to ensure removed peers
-            // are no longer served by local lookup.
-            let table = std::sync::Arc::new(std::sync::Mutex::new(DiscoveryTable::default()));
-            {
-                let mut guard = table.lock().expect("discovery lock");
-                for contact in &inner.contacts {
-                    guard.upsert(contact.clone());
-                }
-            }
-            inner.discovery = DiscoveryStateHandle::new(table);
             self.persist_policy_locked(&mut inner);
         }
         removed
@@ -568,12 +512,12 @@ impl NodeState {
 
     pub fn discovery_lookup_peer(&self, peer_id: &str, limit: usize) -> Vec<ContactBundle> {
         let inner = self.inner.lock().expect("state lock");
-        inner.discovery.lookup_peer(peer_id, limit)
+        inner.contact_book.lookup_peer(peer_id, limit)
     }
 
     pub fn discovery_lookup_pubkey(&self, pubkey_hex: &str, limit: usize) -> Vec<ContactBundle> {
         let inner = self.inner.lock().expect("state lock");
-        inner.discovery.lookup_pubkey(pubkey_hex, limit)
+        inner.contact_book.lookup_pubkey(pubkey_hex, limit)
     }
 
     pub fn discovery_lookup_contact(
@@ -582,12 +526,12 @@ impl NodeState {
         limit: usize,
     ) -> Vec<ContactBundle> {
         let inner = self.inner.lock().expect("state lock");
-        inner.discovery.lookup_contact(contact, limit)
+        inner.contact_book.lookup_contact(contact, limit)
     }
 
     pub fn discovery_sample(&self, max: usize) -> Vec<ContactBundle> {
         let inner = self.inner.lock().expect("state lock");
-        inner.discovery.sample(max)
+        inner.contact_book.sample(max)
     }
 
     pub fn mark_lane_health(&self, lane: &str, connected: bool, last_error: Option<String>) {
@@ -881,7 +825,7 @@ fn snapshot_from_inner(inner: &StateInner) -> StoreSnapshot {
         queue: inner.queue.iter().cloned().collect(),
         identity: Some(inner.identity.to_record()),
         policy_json: inner.wot_policy.export_json().ok(),
-        contacts: inner.contacts.clone(),
+        contacts: inner.contact_book.contacts(),
         feed_history: inner.event_buffer.iter().cloned().collect(),
         subscriptions: inner.subscriptions.iter().cloned().collect(),
         group_keys: flatten_group_keys(&inner.group_keys),
@@ -1339,5 +1283,30 @@ mod tests {
             }
         }
         assert!(found);
+    }
+
+    #[test]
+    fn add_contact_caps_total_and_evicts_from_discovery_index() {
+        let state = NodeState::new("0.1-test");
+        for index in 0..(MAX_CONTACTS_TOTAL + 5) {
+            state.add_contact(ContactBundle {
+                peer_id: format!("peer-{index}"),
+                ws_url: Some(format!("ws://relay-{index}.example/ws")),
+                quic_addr: Some(format!("127.0.0.1:{}", 10_000 + (index % 50_000))),
+                pubkey_hex: format!("{:064x}", index + 1),
+                rpc_url: None,
+                lan_addrs: Vec::new(),
+            });
+        }
+
+        let contacts = state.contacts();
+        assert_eq!(contacts.len(), MAX_CONTACTS_TOTAL);
+        assert!(!contacts.iter().any(|contact| contact.peer_id == "peer-0"));
+        assert!(contacts
+            .iter()
+            .any(|contact| contact.peer_id == format!("peer-{}", MAX_CONTACTS_TOTAL + 4)));
+
+        let lookup = state.discovery_lookup_peer("peer-0", MAX_CONTACTS_TOTAL);
+        assert!(!lookup.iter().any(|contact| contact.peer_id == "peer-0"));
     }
 }

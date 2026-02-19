@@ -1,14 +1,8 @@
 use crate::api::ContactBundle;
 
 pub(super) fn contact_key(contact: &ContactBundle) -> [u8; 32] {
-    if contact.pubkey_hex.len() == 64 {
-        if let Ok(bytes) = hex::decode(&contact.pubkey_hex) {
-            if bytes.len() == 32 {
-                let mut out = [0u8; 32];
-                out.copy_from_slice(&bytes);
-                return out;
-            }
-        }
+    if let Some(key) = decode_pubkey_hex(&contact.pubkey_hex) {
+        return key;
     }
     blake3::hash(contact.peer_id.as_bytes()).into()
 }
@@ -18,18 +12,7 @@ pub(super) fn key_for_peer(peer_id: &str) -> [u8; 32] {
 }
 
 pub(super) fn key_for_pubkey(pubkey_hex: &str) -> Option<[u8; 32]> {
-    if pubkey_hex.len() != 64 {
-        return None;
-    }
-    hex::decode(pubkey_hex).ok().and_then(|bytes| {
-        if bytes.len() == 32 {
-            let mut out = [0u8; 32];
-            out.copy_from_slice(&bytes);
-            Some(out)
-        } else {
-            None
-        }
-    })
+    decode_pubkey_hex(pubkey_hex)
 }
 
 pub(super) fn xor_distance(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
@@ -38,6 +21,12 @@ pub(super) fn xor_distance(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
         out[i] = a[i] ^ b[i];
     }
     out
+}
+
+fn decode_pubkey_hex(pubkey_hex: &str) -> Option<[u8; 32]> {
+    let mut out = [0u8; 32];
+    hex::decode_to_slice(pubkey_hex, &mut out).ok()?;
+    Some(out)
 }
 
 #[cfg(test)]

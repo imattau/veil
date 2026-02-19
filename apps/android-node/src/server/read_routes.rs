@@ -11,12 +11,7 @@ pub(super) async fn fetch_shard(
     if !valid_pubkey_hex(&id) {
         return bad_request("invalid_shard_id", "shard id invalid");
     }
-    let mut shard_id = [0u8; 32];
-    if let Ok(bytes) = hex::decode(&id) {
-        if bytes.len() == 32 {
-            shard_id.copy_from_slice(&bytes);
-        }
-    }
+    let shard_id = hex_to_pubkey(&id);
     let shard = state.protocol.get_cached_shard(shard_id).await;
     match shard {
         Some(bytes) => Json(ShardFetchResponse {
@@ -38,12 +33,7 @@ pub(super) async fn fetch_object(
     if !valid_pubkey_hex(&root) {
         return bad_request("invalid_object_root", "object root invalid");
     }
-    let mut object_root = [0u8; 32];
-    if let Ok(bytes) = hex::decode(&root) {
-        if bytes.len() == 32 {
-            object_root.copy_from_slice(&bytes);
-        }
-    }
+    let object_root = hex_to_pubkey(&root);
     let object = state.protocol.reconstruct_payload(object_root).await;
     match object {
         Some(bytes) => Json(ObjectFetchResponse {

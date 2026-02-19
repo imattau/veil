@@ -98,18 +98,14 @@ async fn main() {
         for entry in raw.split(',') {
             let mut parts = entry.splitn(2, '=');
             let peer = parts.next().unwrap_or("").trim();
-            let hex = parts.next().unwrap_or("").trim();
-            if peer.is_empty() || hex.len() != 64 {
+            let pubkey_hex = parts.next().unwrap_or("").trim();
+            if peer.is_empty() {
                 continue;
             }
-            if let Ok(bytes) = hex::decode(hex) {
-                if bytes.len() == 32 {
-                    let mut key = [0u8; 32];
-                    key.copy_from_slice(&bytes);
-                    protocol_config
-                        .runtime_config
-                        .bind_peer_publisher(peer, key);
-                }
+            if let Some(key) = decode_hex_32(pubkey_hex) {
+                protocol_config
+                    .runtime_config
+                    .bind_peer_publisher(peer, key);
             }
         }
     }
@@ -209,14 +205,7 @@ async fn main() {
             .unwrap_or_default()
             .split(',')
             .map(|value| value.trim().to_string())
-            .filter(|value| {
-                !value.is_empty()
-                    && (value.starts_with("http://")
-                        || value.starts_with("https://")
-                        || value.starts_with("ws://")
-                        || value.starts_with("wss://")
-                        || value.starts_with("quic://"))
-            })
+            .filter(|value| !value.is_empty() && is_supported_discovery_url(value))
             .collect(),
         gossip_interval: std::env::var("VEIL_DISCOVERY_INTERVAL_MS")
             .ok()
@@ -278,6 +267,25 @@ async fn main() {
     serve(addr, state).await;
 }
 
+fn is_supported_discovery_url(value: &str) -> bool {
+    parse_allowed_url_scheme(value, &["http", "https", "ws", "wss", "quic"]).is_some()
+}
+
+fn parse_allowed_url_scheme(value: &str, allowed_schemes: &[&str]) -> Option<reqwest::Url> {
+    let url = reqwest::Url::parse(value).ok()?;
+    if allowed_schemes.iter().any(|scheme| *scheme == url.scheme()) {
+        Some(url)
+    } else {
+        None
+    }
+}
+
+fn decode_hex_32(value: &str) -> Option<[u8; 32]> {
+    let mut out = [0u8; 32];
+    hex::decode_to_slice(value, &mut out).ok()?;
+    Some(out)
+}
+
 fn env_bool(key: &str, default: bool) -> bool {
     std::env::var(key)
         .ok()
@@ -297,4 +305,33 @@ fn env_f64(key: &str, default: f64) -> f64 {
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_hex_32, is_supported_discovery_url};
+
+    #[test]
+    fn supports_expected_discovery_url_schemes() {
+        assert!(is_supported_discovery_url("https://seed.example"));
+        assert!(is_supported_discovery_url("http://seed.example"));
+        assert!(is_supported_discovery_url("wss://relay.example/ws"));
+        assert!(is_supported_discovery_url("ws://relay.example/ws"));
+        assert!(is_supported_discovery_url("quic://node.example:9443"));
+    }
+
+    #[test]
+    fn rejects_invalid_or_unsupported_discovery_urls() {
+        assert!(!is_supported_discovery_url("seed.example"));
+        assert!(!is_supported_discovery_url("ftp://seed.example"));
+        assert!(!is_supported_discovery_url("http://"));
+        assert!(!is_supported_discovery_url("https//missing-colon.example"));
+    }
+
+    #[test]
+    fn decode_hex_32_requires_exact_32_bytes() {
+        assert_eq!(decode_hex_32(&"11".repeat(32)), Some([0x11; 32]));
+        assert!(decode_hex_32("11").is_none());
+        assert!(decode_hex_32(&"zz".repeat(32)).is_none());
+    }
 }

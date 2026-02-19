@@ -59,7 +59,8 @@ fn sanitize_endpoint(value: Option<String>, max_endpoint_len: usize) -> Option<S
 }
 
 pub(super) fn valid_pubkey_hex(value: &str) -> bool {
-    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
+    let mut key = [0u8; 32];
+    hex::decode_to_slice(value, &mut key).is_ok()
 }
 
 #[cfg(test)]
