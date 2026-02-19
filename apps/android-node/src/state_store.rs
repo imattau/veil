@@ -125,7 +125,7 @@ impl StateStore {
     pub fn persist(&self, snapshot: &StoreSnapshot) {
         let mut to_store = snapshot.clone();
         if let (Some(key), Some(identity)) = (self.state_key, to_store.identity.as_mut()) {
-            if identity.secret_key_hex.len() == 64 {
+            if decode_hex_32(&identity.secret_key_hex).is_some() {
                 if let Some((nonce_b64, ciphertext_b64)) =
                     encrypt_secret_hex(key, identity.secret_key_hex.as_bytes())
                 {
@@ -134,7 +134,7 @@ impl StateStore {
                     identity.secret_key_hex.clear();
                 }
             }
-            if identity.encrypt_key_hex.len() == 64 {
+            if decode_hex_32(&identity.encrypt_key_hex).is_some() {
                 if let Some((nonce_b64, ciphertext_b64)) =
                     encrypt_secret_hex(key, identity.encrypt_key_hex.as_bytes())
                 {
@@ -146,7 +146,7 @@ impl StateStore {
         }
         if let Some(key) = self.state_key {
             for record in &mut to_store.group_keys {
-                if record.key_hex.len() == 64 {
+                if decode_hex_32(&record.key_hex).is_some() {
                     if let Some((nonce_b64, ciphertext_b64)) =
                         encrypt_secret_hex(key, record.key_hex.as_bytes())
                     {
@@ -164,13 +164,11 @@ impl StateStore {
 }
 
 fn decode_state_key_hex(value: &str) -> Option<[u8; 32]> {
-    let bytes = hex::decode(value.trim()).ok()?;
-    if bytes.len() != 32 {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Some(out)
+    decode_hex_32(value)
+}
+
+fn decode_hex_32(value: &str) -> Option<[u8; 32]> {
+    <[u8; 32] as hex::FromHex>::from_hex(value.trim()).ok()
 }
 
 fn encrypt_secret_hex(key: [u8; 32], plaintext: &[u8]) -> Option<(String, String)> {

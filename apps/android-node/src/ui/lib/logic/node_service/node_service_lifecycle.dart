@@ -121,7 +121,12 @@ extension NodeServiceLifecycle on NodeService {
           );
           return;
         }
-        await Future.delayed(Duration(milliseconds: 500 * attempts));
+        await Future.delayed(
+          RetryBackoff.linear(
+            attempts: attempts,
+            step: const Duration(milliseconds: 500),
+          ),
+        );
       }
     }
   }
@@ -172,12 +177,17 @@ extension NodeServiceLifecycle on NodeService {
     }
 
     _eventsReconnectAttempts++;
-    final delaySecs = (1 * (1 << (_eventsReconnectAttempts - 1))).clamp(1, 60);
+    final delay = RetryBackoff.exponential(
+      attempts: _eventsReconnectAttempts,
+      base: const Duration(seconds: 1),
+      max: const Duration(seconds: 60),
+    );
+    final delaySecs = delay.inSeconds;
     debugPrint(
       '[NodeService] Scheduling WS reconnect in ${delaySecs}s (attempt $_eventsReconnectAttempts)',
     );
 
-    _eventsReconnectTimer = Timer(Duration(seconds: delaySecs), () async {
+    _eventsReconnectTimer = Timer(delay, () async {
       _eventsReconnectTimer = null;
       if (_disposed || _eventsSub != null || _eventsChannel != null) {
         return;

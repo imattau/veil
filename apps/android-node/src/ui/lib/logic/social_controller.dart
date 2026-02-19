@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import './node_service.dart';
+import './retry_backoff.dart';
 import './zap_controller.dart';
 import './models/node_event.dart';
 

@@ -57,8 +57,12 @@ extension SocialControllerMedia on SocialController {
       } else {
         final fails = (_fetchFailures[root] ?? 0) + 1;
         _fetchFailures[root] = fails;
-        final backoffSecs = (5 * (1 << (fails - 1))).clamp(5, 600);
-        _nextFetchAllowed[root] = now.add(Duration(seconds: backoffSecs));
+        final backoff = RetryBackoff.exponential(
+          attempts: fails,
+          base: const Duration(seconds: 5),
+          max: const Duration(seconds: 600),
+        );
+        _nextFetchAllowed[root] = now.add(backoff);
       }
     } finally {
       _fetchingImages.remove(root);

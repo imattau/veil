@@ -29,11 +29,13 @@ class ZapController extends ChangeNotifier {
         return null;
       }
 
-      final url = 'https://$domain/.well-known/lnurlp/$user';
+      final url = Uri(
+        scheme: 'https',
+        host: domain,
+        pathSegments: ['.well-known', 'lnurlp', user],
+      );
 
-      final res = await _client
-          .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 10));
+      final res = await _client.get(url).timeout(const Duration(seconds: 10));
       if (res.statusCode != 200) return null;
 
       final metadata = jsonDecode(res.body);
@@ -51,9 +53,14 @@ class ZapController extends ChangeNotifier {
       }
 
       final amountMsat = amountSats * 1000;
-      final separator = callback.contains('?') ? '&' : '?';
+      final invoiceUri = callbackUri.replace(
+        queryParameters: {
+          ...callbackUri.queryParameters,
+          'amount': '$amountMsat',
+        },
+      );
       final invoiceRes = await _client
-          .get(Uri.parse('$callback${separator}amount=$amountMsat'))
+          .get(invoiceUri)
           .timeout(const Duration(seconds: 10));
       if (invoiceRes.statusCode != 200) return null;
 

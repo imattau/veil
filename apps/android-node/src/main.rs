@@ -96,13 +96,7 @@ async fn main() {
     }
     if let Ok(raw) = std::env::var("VEIL_NODE_PEER_PUBKEYS") {
         for entry in raw.split(',') {
-            let mut parts = entry.splitn(2, '=');
-            let peer = parts.next().unwrap_or("").trim();
-            let pubkey_hex = parts.next().unwrap_or("").trim();
-            if peer.is_empty() {
-                continue;
-            }
-            if let Some(key) = decode_hex_32(pubkey_hex) {
+            if let Some((peer, key)) = parse_peer_pubkey_binding(entry) {
                 protocol_config
                     .runtime_config
                     .bind_peer_publisher(peer, key);
@@ -130,10 +124,8 @@ async fn main() {
         }
     }
     if let Ok(raw) = std::env::var("VEIL_NODE_QUIC_CERT_HEX") {
-        if let Ok(bytes) = hex::decode(raw.trim()) {
-            if !bytes.is_empty() {
-                protocol_config.quic_trusted_certs = vec![bytes];
-            }
+        if let Some(bytes) = decode_non_empty_hex(raw.trim()) {
+            protocol_config.quic_trusted_certs = vec![bytes];
         }
     }
     if let Ok(raw) = std::env::var("VEIL_DISCOVERY_NAMESPACE") {
@@ -281,9 +273,26 @@ fn parse_allowed_url_scheme(value: &str, allowed_schemes: &[&str]) -> Option<req
 }
 
 fn decode_hex_32(value: &str) -> Option<[u8; 32]> {
-    let mut out = [0u8; 32];
-    hex::decode_to_slice(value, &mut out).ok()?;
-    Some(out)
+    <[u8; 32] as hex::FromHex>::from_hex(value).ok()
+}
+
+fn parse_peer_pubkey_binding(entry: &str) -> Option<(&str, [u8; 32])> {
+    let (peer_raw, pubkey_raw) = entry.split_once('=')?;
+    let peer = peer_raw.trim();
+    if peer.is_empty() {
+        return None;
+    }
+    let key = decode_hex_32(pubkey_raw.trim())?;
+    Some((peer, key))
+}
+
+fn decode_non_empty_hex(value: &str) -> Option<Vec<u8>> {
+    let bytes = hex::decode(value).ok()?;
+    if bytes.is_empty() {
+        None
+    } else {
+        Some(bytes)
+    }
 }
 
 fn env_bool(key: &str, default: bool) -> bool {
@@ -309,7 +318,9 @@ fn env_f64(key: &str, default: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_hex_32, is_supported_discovery_url};
+    use super::{
+        decode_hex_32, decode_non_empty_hex, is_supported_discovery_url, parse_peer_pubkey_binding,
+    };
 
     #[test]
     fn supports_expected_discovery_url_schemes() {
@@ -333,5 +344,23 @@ mod tests {
         assert_eq!(decode_hex_32(&"11".repeat(32)), Some([0x11; 32]));
         assert!(decode_hex_32("11").is_none());
         assert!(decode_hex_32(&"zz".repeat(32)).is_none());
+    }
+
+    #[test]
+    fn parse_peer_pubkey_binding_validates_format_and_hex() {
+        let entry = format!("peer-a={}", "22".repeat(32));
+        let parsed = parse_peer_pubkey_binding(&entry).expect("valid binding");
+        assert_eq!(parsed.0, "peer-a");
+        assert_eq!(parsed.1, [0x22; 32]);
+        assert!(parse_peer_pubkey_binding("peer-a:abcd").is_none());
+        assert!(parse_peer_pubkey_binding("=").is_none());
+        assert!(parse_peer_pubkey_binding("peer-a=zz").is_none());
+    }
+
+    #[test]
+    fn decode_non_empty_hex_rejects_empty_and_invalid() {
+        assert_eq!(decode_non_empty_hex("00"), Some(vec![0x00]));
+        assert!(decode_non_empty_hex("").is_none());
+        assert!(decode_non_empty_hex("zz").is_none());
     }
 }

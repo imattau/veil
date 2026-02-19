@@ -264,13 +264,15 @@ class NodeForegroundService : Service() {
     }
 
     private fun decryptStateKey(encoded: String): ByteArray? {
-        val parts = encoded.split(':')
-        if (parts.size != 2) {
+        val separator = encoded.indexOf(':')
+        if (separator <= 0 || separator >= encoded.lastIndex) {
             return null
         }
+        val ivB64 = encoded.substring(0, separator)
+        val ciphertextB64 = encoded.substring(separator + 1)
         return try {
-            val iv = android.util.Base64.decode(parts[0], android.util.Base64.NO_WRAP)
-            val ciphertext = android.util.Base64.decode(parts[1], android.util.Base64.NO_WRAP)
+            val iv = android.util.Base64.decode(ivB64, android.util.Base64.NO_WRAP)
+            val ciphertext = android.util.Base64.decode(ciphertextB64, android.util.Base64.NO_WRAP)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             val spec = GCMParameterSpec(128, iv)
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateWrappingKey(), spec)

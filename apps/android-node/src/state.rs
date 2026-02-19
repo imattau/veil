@@ -4,26 +4,38 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
-use rand::RngCore;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::api::{
-    CacheStatus, ContactBundle, EventEnvelope, LaneDetail, LaneHealth, LaneStatus, PublishRequest,
-    QueueStatus, StatusResponse,
+    ContactBundle, EventEnvelope, LaneDetail, LaneHealth, PublishRequest, StatusResponse,
 };
 use crate::secure_message::{
     decrypt_direct_message_payload, decrypt_group_key_share_payload, decrypt_group_message_payload,
 };
-use crate::state_store::{GroupKeyRecord, IdentityRecord, QueueItem, StateStore, StoreSnapshot};
+use crate::state_store::{IdentityRecord, QueueItem, StateStore, StoreSnapshot};
 use veil_crypto::signing::{NostrSigner, Signer};
-use veil_node::policy::{
-    parse_endorsement_payload, EndorsementIngestResult, LocalWotPolicy, WotConfig, WotSummary,
-};
-use veil_schema_feed::FeedBundle;
-
+use veil_node::policy::{EndorsementIngestResult, LocalWotPolicy, WotConfig, WotSummary};
 mod contact_book;
+mod contact_mutations;
+mod identity_group_keys;
+mod lane_health;
+mod payload_parsing;
+mod policy_lists;
+mod policy_mutations;
+mod projections;
+mod queue_retry;
 use self::contact_book::ContactBook;
+use self::contact_mutations::{execute_contact_mutation, ContactMutation};
+use self::identity_group_keys::{
+    decode_hex_32, generate_group_key_entry, generate_identity, parse_group_keys, parse_identity,
+};
+use self::lane_health::{apply_lane_details, apply_lane_health_update};
+use self::payload_parsing::{parse_endorsements, parse_feed_bundles};
+use self::policy_lists::export_policy_lists;
+use self::policy_mutations::{apply_pubkey_mutation, PolicyPubkeyMutation};
+use self::projections::{snapshot_from_inner, status_from_inner, update_queue_counts};
+use self::queue_retry::RetrySchedule;
 #[cfg(test)]
 const MAX_CONTACTS_TOTAL: usize = contact_book::MAX_CONTACTS_TOTAL;
 
@@ -52,7 +64,7 @@ struct StateInner {
     store: Option<StateStore>,
     queue: VecDeque<QueueItem>,
     queue_attempts: HashMap<Uuid, u32>,
-    queue_next_attempt: HashMap<Uuid, u64>,
+    retry_schedule: RetrySchedule,
     identity: NodeIdentity,
     wot_policy: LocalWotPolicy,
     contact_book: ContactBook,
@@ -147,7 +159,7 @@ impl NodeState {
                 store,
                 queue: VecDeque::from(snapshot.queue),
                 queue_attempts: HashMap::new(),
-                queue_next_attempt: HashMap::new(),
+                retry_schedule: RetrySchedule::default(),
                 identity,
                 wot_policy,
                 contact_book,
@@ -202,15 +214,16 @@ impl NodeState {
 
     pub fn take_next_queued(&self, now_ms: u64) -> Option<QueueItem> {
         let mut inner = self.inner.lock().expect("state lock");
-        let index = inner.queue.iter().position(|item| {
-            inner
-                .queue_next_attempt
-                .get(&item.id)
-                .copied()
-                .map(|next| now_ms >= next)
-                .unwrap_or(true)
-        })?;
+        let queue_len = inner.queue.len();
+        if queue_len == 0 || !inner.retry_schedule.due_for_queue(queue_len, now_ms) {
+            return None;
+        }
+        let index = inner
+            .queue
+            .iter()
+            .position(|item| inner.retry_schedule.is_due(item.id, now_ms))?;
         let item = inner.queue.remove(index)?;
+        inner.retry_schedule.unschedule(item.id);
         inner.queue_inflight = inner.queue_inflight.saturating_add(1);
         let attempts = inner.queue_attempts.entry(item.id).or_insert(0);
         *attempts += 1;
@@ -229,14 +242,15 @@ impl NodeState {
             return Vec::new();
         }
         let mut inner = self.inner.lock().expect("state lock");
-        let first_index = match inner.queue.iter().position(|item| {
-            inner
-                .queue_next_attempt
-                .get(&item.id)
-                .copied()
-                .map(|next| now_ms >= next)
-                .unwrap_or(true)
-        }) {
+        let queue_len = inner.queue.len();
+        if queue_len == 0 || !inner.retry_schedule.due_for_queue(queue_len, now_ms) {
+            return Vec::new();
+        }
+        let first_index = match inner
+            .queue
+            .iter()
+            .position(|item| inner.retry_schedule.is_due(item.id, now_ms))
+        {
             Some(index) => index,
             None => return Vec::new(),
         };
@@ -246,6 +260,7 @@ impl NodeState {
             Some(item) => item,
             None => return Vec::new(),
         };
+        inner.retry_schedule.unschedule(first.id);
         let namespace = first.namespace;
         let mut total_bytes = first.payload.len();
         inner.queue_inflight = inner.queue_inflight.saturating_add(1);
@@ -261,12 +276,7 @@ impl NodeState {
                 && batch.len() < max_items
                 && total_bytes < target_batch_bytes
             {
-                let due = inner
-                    .queue_next_attempt
-                    .get(&inner.queue[index].id)
-                    .copied()
-                    .map(|next| now_ms >= next)
-                    .unwrap_or(true);
+                let due = inner.retry_schedule.is_due(inner.queue[index].id, now_ms);
                 if !due {
                     index += 1;
                     continue;
@@ -285,6 +295,7 @@ impl NodeState {
                     Some(item) => item,
                     None => continue,
                 };
+                inner.retry_schedule.unschedule(item.id);
                 total_bytes += item.payload.len();
                 inner.queue_inflight = inner.queue_inflight.saturating_add(1);
                 let attempts = inner.queue_attempts.entry(item.id).or_insert(0);
@@ -301,7 +312,7 @@ impl NodeState {
         let mut inner = self.inner.lock().expect("state lock");
         inner.queue_inflight = inner.queue_inflight.saturating_sub(1);
         inner.queue_attempts.remove(&item.id);
-        inner.queue_next_attempt.remove(&item.id);
+        inner.retry_schedule.unschedule(item.id);
         emit_event_locked(
             &mut inner,
             "publish_sent",
@@ -320,7 +331,7 @@ impl NodeState {
         let message_id = item.id;
         let attempts = inner.queue_attempts.get(&message_id).copied().unwrap_or(0);
         let next_attempt = now_millis().saturating_add(retry_after_ms);
-        inner.queue_next_attempt.insert(message_id, next_attempt);
+        inner.retry_schedule.schedule(message_id, next_attempt);
         inner.queue.push_back(item);
         emit_event_locked(
             &mut inner,
@@ -341,7 +352,7 @@ impl NodeState {
         let mut inner = self.inner.lock().expect("state lock");
         inner.queue_inflight = inner.queue_inflight.saturating_sub(1);
         inner.queue_attempts.remove(&item.id);
-        inner.queue_next_attempt.remove(&item.id);
+        inner.retry_schedule.unschedule(item.id);
         emit_event_locked(
             &mut inner,
             "publish_failed",
@@ -386,12 +397,8 @@ impl NodeState {
     }
 
     pub fn import_identity(&self, secret_key_hex: String) -> Result<NodeIdentity, String> {
-        let sec_bytes = hex::decode(&secret_key_hex).map_err(|e| e.to_string())?;
-        if sec_bytes.len() != 32 {
-            return Err("secret key must be 32 bytes".to_string());
-        }
-        let mut secret_key = [0u8; 32];
-        secret_key.copy_from_slice(&sec_bytes);
+        let secret_key = decode_hex_32(&secret_key_hex)
+            .ok_or_else(|| "secret key must be 32 bytes".to_string())?;
         let signer = NostrSigner::from_secret(secret_key)
             .map_err(|_| "secret key is not a valid Nostr secp256k1 secret".to_string())?;
         let public_key = signer.public_key();
@@ -421,45 +428,31 @@ impl NodeState {
     }
 
     pub fn update_policy_config(&self, config: WotConfig) {
-        let mut inner = self.inner.lock().expect("state lock");
-        inner.wot_policy.update_config(config);
-        self.persist_policy_locked(&mut inner);
+        self.mutate_policy(|policy| policy.update_config(config));
     }
 
     pub fn trust_pubkey(&self, pubkey: [u8; 32]) {
-        let mut inner = self.inner.lock().expect("state lock");
-        inner.wot_policy.trust(pubkey);
-        self.persist_policy_locked(&mut inner);
+        self.apply_policy_pubkey_mutation(PolicyPubkeyMutation::Trust, pubkey);
     }
 
     pub fn untrust_pubkey(&self, pubkey: [u8; 32]) {
-        let mut inner = self.inner.lock().expect("state lock");
-        inner.wot_policy.untrust(pubkey);
-        self.persist_policy_locked(&mut inner);
+        self.apply_policy_pubkey_mutation(PolicyPubkeyMutation::Untrust, pubkey);
     }
 
     pub fn mute_pubkey(&self, pubkey: [u8; 32]) {
-        let mut inner = self.inner.lock().expect("state lock");
-        inner.wot_policy.mute(pubkey);
-        self.persist_policy_locked(&mut inner);
+        self.apply_policy_pubkey_mutation(PolicyPubkeyMutation::Mute, pubkey);
     }
 
     pub fn unmute_pubkey(&self, pubkey: [u8; 32]) {
-        let mut inner = self.inner.lock().expect("state lock");
-        inner.wot_policy.unmute(pubkey);
-        self.persist_policy_locked(&mut inner);
+        self.apply_policy_pubkey_mutation(PolicyPubkeyMutation::Unmute, pubkey);
     }
 
     pub fn block_pubkey(&self, pubkey: [u8; 32]) {
-        let mut inner = self.inner.lock().expect("state lock");
-        inner.wot_policy.block(pubkey);
-        self.persist_policy_locked(&mut inner);
+        self.apply_policy_pubkey_mutation(PolicyPubkeyMutation::Block, pubkey);
     }
 
     pub fn unblock_pubkey(&self, pubkey: [u8; 32]) {
-        let mut inner = self.inner.lock().expect("state lock");
-        inner.wot_policy.unblock(pubkey);
-        self.persist_policy_locked(&mut inner);
+        self.apply_policy_pubkey_mutation(PolicyPubkeyMutation::Unblock, pubkey);
     }
 
     pub fn wot_policy(&self) -> LocalWotPolicy {
@@ -469,19 +462,7 @@ impl NodeState {
 
     pub fn policy_lists(&self) -> crate::api::PolicyListsResponse {
         let inner = self.inner.lock().expect("state lock");
-        let json = inner.wot_policy.export_json().ok();
-        let Some(json) = json else {
-            return crate::api::PolicyListsResponse::default();
-        };
-        let parsed = serde_json::from_str::<PolicyJsonLists>(&json).ok();
-        let Some(parsed) = parsed else {
-            return crate::api::PolicyListsResponse::default();
-        };
-        crate::api::PolicyListsResponse {
-            trusted_pubkeys: parsed.trusted.iter().map(hex::encode).collect(),
-            muted_pubkeys: parsed.muted.iter().map(hex::encode).collect(),
-            blocked_pubkeys: parsed.blocked.iter().map(hex::encode).collect(),
-        }
+        export_policy_lists(&inner.wot_policy)
     }
 
     pub fn contacts(&self) -> Vec<ContactBundle> {
@@ -490,24 +471,15 @@ impl NodeState {
     }
 
     pub fn add_contact(&self, contact: ContactBundle) {
-        let mut inner = self.inner.lock().expect("state lock");
-        inner.contact_book.add_or_merge(contact);
-        self.persist_policy_locked(&mut inner);
+        let _ = self.apply_contact_mutation(ContactMutation::AddOrMerge(contact));
     }
 
     pub fn set_contact(&self, contact: ContactBundle) {
-        let mut inner = self.inner.lock().expect("state lock");
-        inner.contact_book.set(contact);
-        self.persist_policy_locked(&mut inner);
+        let _ = self.apply_contact_mutation(ContactMutation::Set(contact));
     }
 
     pub fn remove_contact(&self, peer_id: &str) -> bool {
-        let mut inner = self.inner.lock().expect("state lock");
-        let removed = inner.contact_book.remove(peer_id);
-        if removed {
-            self.persist_policy_locked(&mut inner);
-        }
-        removed
+        self.apply_contact_mutation(ContactMutation::RemoveByPeerId(peer_id.to_string()))
     }
 
     pub fn discovery_lookup_peer(&self, peer_id: &str, limit: usize) -> Vec<ContactBundle> {
@@ -536,13 +508,7 @@ impl NodeState {
 
     pub fn mark_lane_health(&self, lane: &str, connected: bool, last_error: Option<String>) {
         let mut inner = self.inner.lock().expect("state lock");
-        let target = match lane {
-            "quic" => &mut inner.quic,
-            "tor" => &mut inner.tor,
-            _ => &mut inner.websocket,
-        };
-        target.connected = connected;
-        target.last_error = last_error.clone();
+        apply_lane_health_update(&mut inner, lane, connected, last_error.clone());
         emit_event_locked(
             &mut inner,
             "lane_health",
@@ -556,24 +522,7 @@ impl NodeState {
 
     pub fn mark_lane_details(&self, details: Vec<LaneDetail>) {
         let mut inner = self.inner.lock().expect("state lock");
-        inner.lane_details = details.clone();
-        inner.quic = LaneHealth::default();
-        inner.websocket = LaneHealth::default();
-        inner.tor = LaneHealth::default();
-
-        for detail in details {
-            let target = if detail.lane.contains("quic") {
-                &mut inner.quic
-            } else if detail.lane.contains("tor") {
-                &mut inner.tor
-            } else {
-                &mut inner.websocket
-            };
-            target.connected |= detail.connected;
-            if target.last_error.is_none() {
-                target.last_error = detail.last_error.clone();
-            }
-        }
+        apply_lane_details(&mut inner, details);
     }
 
     pub fn emit_payload(
@@ -605,16 +554,7 @@ impl NodeState {
                 store.persist(&snapshot_from_inner(&inner));
             }
         }
-        let mut feed_bundles = Vec::new();
-        if let Ok(bundle) = serde_json::from_slice::<FeedBundle>(payload) {
-            feed_bundles.push(bundle);
-        } else if let Ok(batch) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload) {
-            for item in batch {
-                if let Ok(bundle) = serde_json::from_slice::<FeedBundle>(&item) {
-                    feed_bundles.push(bundle);
-                }
-            }
-        }
+        let feed_bundles = parse_feed_bundles(payload);
         let payload_for_event = decrypt_direct_message_payload(inner.identity.secret_key, payload)
             .or_else(|| {
                 decrypt_group_message_payload(payload, |group_id, key_id| {
@@ -651,16 +591,7 @@ impl NodeState {
     }
 
     pub fn ingest_endorsement_payload(&self, payload: &[u8], now_step: u64) -> bool {
-        let mut endorsements = Vec::new();
-        if let Some(parsed) = parse_endorsement_payload(payload) {
-            endorsements.push(parsed);
-        } else if let Ok(batch) = ciborium::de::from_reader::<Vec<Vec<u8>>, _>(payload) {
-            for item in batch {
-                if let Some(parsed) = parse_endorsement_payload(&item) {
-                    endorsements.push(parsed);
-                }
-            }
-        }
+        let endorsements = parse_endorsements(payload);
         if endorsements.is_empty() {
             return false;
         }
@@ -749,9 +680,7 @@ impl NodeState {
                 return (key_id.clone(), *key);
             }
         }
-        let key_id = random_key_id();
-        let mut key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut key);
+        let (key_id, key) = generate_group_key_entry();
         inner
             .group_keys
             .entry(group_id.to_string())
@@ -765,9 +694,7 @@ impl NodeState {
 
     pub fn rotate_group_key(&self, group_id: &str) -> (String, [u8; 32]) {
         let mut inner = self.inner.lock().expect("state lock");
-        let key_id = random_key_id();
-        let mut key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut key);
+        let (key_id, key) = generate_group_key_entry();
         inner
             .group_keys
             .entry(group_id.to_string())
@@ -791,49 +718,34 @@ impl NodeState {
         emit_event_locked(&mut inner, "feed_bundle", value);
     }
 
+    fn mutate_policy(&self, mutate: impl FnOnce(&mut LocalWotPolicy)) {
+        let mut inner = self.inner.lock().expect("state lock");
+        mutate(&mut inner.wot_policy);
+        self.persist_policy_locked(&mut inner);
+    }
+
+    fn apply_policy_pubkey_mutation(&self, mutation: PolicyPubkeyMutation, pubkey: [u8; 32]) {
+        self.mutate_policy(|policy| apply_pubkey_mutation(policy, mutation, pubkey));
+    }
+
+    fn mutate_contacts(&self, mutate: impl FnOnce(&mut ContactBook) -> bool) -> bool {
+        let mut inner = self.inner.lock().expect("state lock");
+        let changed = mutate(&mut inner.contact_book);
+        if changed {
+            self.persist_policy_locked(&mut inner);
+        }
+        changed
+    }
+
+    fn apply_contact_mutation(&self, mutation: ContactMutation) -> bool {
+        self.mutate_contacts(|book| execute_contact_mutation(book, mutation))
+    }
+
     fn persist_policy_locked(&self, inner: &mut StateInner) {
         if let Some(store) = &inner.store {
             store.persist(&snapshot_from_inner(inner));
         }
     }
-}
-
-fn status_from_inner(inner: &StateInner) -> StatusResponse {
-    StatusResponse {
-        node_id: inner.node_id.clone(),
-        version: inner.version.clone(),
-        lanes: LaneStatus {
-            quic: inner.quic.clone(),
-            websocket: inner.websocket.clone(),
-            tor: inner.tor.clone(),
-            details: inner.lane_details.clone(),
-        },
-        queue: QueueStatus {
-            pending: inner.queue_pending,
-            inflight: inner.queue_inflight,
-            failed: inner.queue_failed,
-        },
-        cache: CacheStatus {
-            entries: inner.cache_entries,
-            bytes: inner.cache_bytes,
-        },
-    }
-}
-
-fn snapshot_from_inner(inner: &StateInner) -> StoreSnapshot {
-    StoreSnapshot {
-        queue: inner.queue.iter().cloned().collect(),
-        identity: Some(inner.identity.to_record()),
-        policy_json: inner.wot_policy.export_json().ok(),
-        contacts: inner.contact_book.contacts(),
-        feed_history: inner.event_buffer.iter().cloned().collect(),
-        subscriptions: inner.subscriptions.iter().cloned().collect(),
-        group_keys: flatten_group_keys(&inner.group_keys),
-    }
-}
-
-fn update_queue_counts(inner: &mut StateInner) {
-    inner.queue_pending = inner.queue.len() as u64;
 }
 
 const EVENT_VERSION: u16 = 1;
@@ -859,126 +771,11 @@ fn emit_event_locked(
     envelope
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct PolicyJsonLists {
-    #[serde(default)]
-    trusted: Vec<[u8; 32]>,
-    #[serde(default)]
-    muted: Vec<[u8; 32]>,
-    #[serde(default)]
-    blocked: Vec<[u8; 32]>,
-}
-
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
-}
-
-fn parse_identity(record: &IdentityRecord) -> Option<NodeIdentity> {
-    if record.public_key_hex.len() != 64 || record.secret_key_hex.len() != 64 {
-        return None;
-    }
-    let pub_bytes = hex::decode(&record.public_key_hex).ok()?;
-    let sec_bytes = hex::decode(&record.secret_key_hex).ok()?;
-    if pub_bytes.len() != 32 || sec_bytes.len() != 32 {
-        return None;
-    }
-    let mut public_key = [0u8; 32];
-    let mut secret_key = [0u8; 32];
-    public_key.copy_from_slice(&pub_bytes);
-    secret_key.copy_from_slice(&sec_bytes);
-    let derived = NostrSigner::from_secret(secret_key).ok()?.public_key();
-    if derived != public_key {
-        return None;
-    }
-
-    let encrypt_key = if record.encrypt_key_hex.len() == 64 {
-        let bytes = hex::decode(&record.encrypt_key_hex).ok()?;
-        if bytes.len() == 32 {
-            let mut key = [0u8; 32];
-            key.copy_from_slice(&bytes);
-            key
-        } else {
-            let mut key = [0u8; 32];
-            rand::thread_rng().fill_bytes(&mut key);
-            key
-        }
-    } else {
-        let mut key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut key);
-        key
-    };
-
-    Some(NodeIdentity {
-        public_key,
-        secret_key,
-        encrypt_key,
-    })
-}
-
-fn parse_group_keys(records: &[GroupKeyRecord]) -> HashMap<String, HashMap<String, [u8; 32]>> {
-    let mut out: HashMap<String, HashMap<String, [u8; 32]>> = HashMap::new();
-    for record in records {
-        if record.group_id.trim().is_empty() || record.key_id.trim().is_empty() {
-            continue;
-        }
-        if record.key_hex.len() != 64 {
-            continue;
-        }
-        let bytes = match hex::decode(&record.key_hex) {
-            Ok(v) if v.len() == 32 => v,
-            _ => continue,
-        };
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&bytes);
-        out.entry(record.group_id.clone())
-            .or_default()
-            .insert(record.key_id.clone(), key);
-    }
-    out
-}
-
-fn flatten_group_keys(
-    group_keys: &HashMap<String, HashMap<String, [u8; 32]>>,
-) -> Vec<GroupKeyRecord> {
-    let mut out = Vec::new();
-    for (group_id, keys) in group_keys {
-        for (key_id, key) in keys {
-            out.push(GroupKeyRecord {
-                group_id: group_id.clone(),
-                key_id: key_id.clone(),
-                key_hex: hex::encode(key),
-                key_enc_nonce_b64: None,
-                key_enc_b64: None,
-            });
-        }
-    }
-    out
-}
-
-fn random_key_id() -> String {
-    let mut value = [0u8; 8];
-    rand::thread_rng().fill_bytes(&mut value);
-    hex::encode(value)
-}
-
-fn generate_identity() -> NodeIdentity {
-    let (secret_key, signer) = loop {
-        let mut secret_key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut secret_key);
-        if let Ok(signer) = NostrSigner::from_secret(secret_key) {
-            break (secret_key, signer);
-        }
-    };
-    let public_key = signer.public_key();
-    let encrypt_key = veil_crypto::keys::derive_encrypt_key(&secret_key);
-    NodeIdentity {
-        public_key,
-        secret_key,
-        encrypt_key,
-    }
 }
 
 #[cfg(test)]
@@ -1106,6 +903,21 @@ mod tests {
         let status = state.status();
         assert_eq!(status.queue.pending, 0);
         assert_eq!(status.queue.inflight, 0);
+    }
+
+    #[test]
+    fn queue_retry_deadline_blocks_until_due() {
+        let state = NodeState::new("0.1-test");
+        let _ = state.enqueue_publish(PublishRequest {
+            namespace: 32,
+            payload: "hello".to_string(),
+        });
+        let item = state.take_next_queued(now_millis()).expect("item");
+        state.complete_failure(item, 60_000);
+
+        assert!(state.take_next_queued(now_millis()).is_none());
+        let future = now_millis().saturating_add(61_000);
+        assert!(state.take_next_queued(future).is_some());
     }
 
     #[test]

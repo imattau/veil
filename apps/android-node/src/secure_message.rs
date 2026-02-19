@@ -257,13 +257,10 @@ fn derive_group_key_legacy(group_id: &str) -> [u8; 32] {
 }
 
 fn pubkey_from_nostr_hex(pubkey_hex: &str) -> Result<PublicKey, String> {
-    if pubkey_hex.len() != 64 {
-        return Err("invalid pubkey length".to_string());
-    }
-    let x_bytes = hex::decode(pubkey_hex).map_err(|e| e.to_string())?;
-    let mut sec1 = Vec::with_capacity(33);
-    sec1.push(0x02); // BIP-340 x-only key implies even Y when compressed.
-    sec1.extend_from_slice(&x_bytes);
+    let mut sec1 = [0u8; 33];
+    sec1[0] = 0x02; // BIP-340 x-only key implies even Y when compressed.
+    hex::decode_to_slice(pubkey_hex, &mut sec1[1..])
+        .map_err(|_| "invalid pubkey hex".to_string())?;
     PublicKey::from_sec1_bytes(&sec1).map_err(|e| e.to_string())
 }
 
@@ -329,5 +326,18 @@ mod tests {
         assert_eq!(material.group_id, "group-1");
         assert_eq!(material.key_id, "k1");
         assert_eq!(material.key, [8u8; 32]);
+    }
+
+    #[test]
+    fn pubkey_from_nostr_hex_rejects_invalid_hex() {
+        assert!(pubkey_from_nostr_hex("abcd").is_err());
+        assert!(pubkey_from_nostr_hex(&"zz".repeat(32)).is_err());
+    }
+
+    #[test]
+    fn pubkey_from_nostr_hex_accepts_valid_pubkey() {
+        let secret = [7u8; 32];
+        let pubkey_hex = pubkey_hex_from_secret(secret).expect("pubkey");
+        assert!(pubkey_from_nostr_hex(&pubkey_hex).is_ok());
     }
 }

@@ -177,9 +177,12 @@ fn normalize_worker_config(config: QueueWorkerConfig) -> QueueWorkerConfig {
 
 fn retry_backoff_ms(attempts: u32, base_ms: u64, max_ms: u64) -> u64 {
     let exponent = attempts.saturating_sub(1).min(10);
-    let factor = 1u64.checked_shl(exponent).unwrap_or(u64::MAX);
-    let raw = base_ms.saturating_mul(factor);
-    raw.min(max_ms).max(base_ms)
+    let factor = 2u32.saturating_pow(exponent);
+    let base = Duration::from_millis(base_ms);
+    let max = Duration::from_millis(max_ms);
+    let scaled = base.saturating_mul(factor);
+    let bounded = scaled.clamp(base, max);
+    bounded.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 fn now_millis() -> u64 {
@@ -189,36 +192,35 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
+#[derive(serde::Deserialize)]
+struct QueuedPayloadEnvelope {
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    payload_b64: Option<String>,
+}
+
 fn queued_payload_to_bytes(payload: &str) -> Vec<u8> {
-    let parsed = match serde_json::from_str::<serde_json::Value>(payload) {
+    let parsed = match serde_json::from_str::<QueuedPayloadEnvelope>(payload) {
         Ok(value) => value,
         Err(_) => return payload.as_bytes().to_vec(),
     };
-    let kind = parsed.get("kind").and_then(|v| v.as_str());
-    if kind == Some("raw_object_b64") {
-        let b64 = match parsed.get("payload_b64").and_then(|v| v.as_str()) {
-            Some(value) => value,
-            None => return payload.as_bytes().to_vec(),
-        };
-        return base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .unwrap_or_else(|_| payload.as_bytes().to_vec());
+    match parsed.kind.as_deref() {
+        Some("raw_object_b64") | Some("raw_b64") => {
+            let Some(b64) = parsed.payload_b64.as_deref() else {
+                return payload.as_bytes().to_vec();
+            };
+            base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .unwrap_or_else(|_| payload.as_bytes().to_vec())
+        }
+        _ => payload.as_bytes().to_vec(),
     }
-    if kind != Some("raw_b64") {
-        return payload.as_bytes().to_vec();
-    }
-    let b64 = match parsed.get("payload_b64").and_then(|v| v.as_str()) {
-        Some(value) => value,
-        None => return payload.as_bytes().to_vec(),
-    };
-    base64::engine::general_purpose::STANDARD
-        .decode(b64)
-        .unwrap_or_else(|_| payload.as_bytes().to_vec())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_worker_config, queued_payload_to_bytes};
+    use super::{normalize_worker_config, queued_payload_to_bytes, retry_backoff_ms};
     use crate::api::QueueWorkerConfig;
 
     #[test]
@@ -235,6 +237,13 @@ mod tests {
     #[test]
     fn non_wrapped_payload_falls_back_to_utf8_bytes() {
         let payload = r#"{"kind":"post","text":"hello"}"#;
+        let bytes = queued_payload_to_bytes(payload);
+        assert_eq!(bytes, payload.as_bytes());
+    }
+
+    #[test]
+    fn wrapped_payload_without_payload_b64_falls_back_to_utf8_bytes() {
+        let payload = r#"{"kind":"raw_b64"}"#;
         let bytes = queued_payload_to_bytes(payload);
         assert_eq!(bytes, payload.as_bytes());
     }
@@ -265,5 +274,13 @@ mod tests {
         assert_eq!(normalized.max_attempts, 3);
         assert_eq!(normalized.backoff_base_ms, 500);
         assert_eq!(normalized.backoff_max_ms, 20_000);
+    }
+
+    #[test]
+    fn retry_backoff_ms_scales_and_caps() {
+        assert_eq!(retry_backoff_ms(1, 500, 20_000), 500);
+        assert_eq!(retry_backoff_ms(2, 500, 20_000), 1_000);
+        assert_eq!(retry_backoff_ms(3, 500, 20_000), 2_000);
+        assert_eq!(retry_backoff_ms(20, 500, 20_000), 20_000);
     }
 }

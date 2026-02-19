@@ -742,24 +742,20 @@ fn derive_server_name(peer: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    if let Ok(url) = reqwest::Url::parse(trimmed) {
-        return url.host_str().map(ToString::to_string);
-    }
     if let Ok(addr) = trimmed.parse::<std::net::SocketAddr>() {
         return Some(addr.ip().to_string());
     }
-    let host = trimmed.split(':').next().unwrap_or(trimmed);
-    if host.is_empty() {
-        None
-    } else {
-        Some(host.to_string())
+    if let Ok(url) = reqwest::Url::parse(trimmed) {
+        return url.host_str().map(ToString::to_string);
     }
+    let with_scheme = format!("quic://{trimmed}");
+    reqwest::Url::parse(&with_scheme)
+        .ok()
+        .and_then(|url| url.host_str().map(ToString::to_string))
 }
 
 fn decode_hex_32(value: &str) -> Option<[u8; 32]> {
-    let mut out = [0u8; 32];
-    hex::decode_to_slice(value, &mut out).ok()?;
-    Some(out)
+    <[u8; 32] as hex::FromHex>::from_hex(value).ok()
 }
 
 fn is_ws_url(value: &str) -> bool {
@@ -946,6 +942,7 @@ mod tests {
             derive_server_name("127.0.0.1:9443"),
             Some("127.0.0.1".to_string())
         );
+        assert_eq!(derive_server_name("[::1]:9443"), Some("::1".to_string()));
         assert_eq!(derive_server_name(""), None);
         assert_eq!(derive_server_name(":"), None);
     }

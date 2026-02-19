@@ -12,6 +12,7 @@ import 'package:web_socket_channel/status.dart' as ws_status;
 import './models/node_event.dart';
 import './models/node_state.dart';
 import './models/profile_data.dart';
+import './retry_backoff.dart';
 
 part 'node_service/node_service_lifecycle.dart';
 part 'node_service/node_service_refresh.dart';
