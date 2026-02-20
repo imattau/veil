@@ -63,21 +63,37 @@ struct QueuedPayloadEnvelope {
     payload_b64: Option<String>,
 }
 
-pub(super) fn queued_payload_to_bytes(payload: &str) -> Vec<u8> {
+pub(super) enum DecodedQueuedPayload {
+    Plain(Vec<u8>),
+    RawObject(Vec<u8>),
+    InvalidRawObject,
+}
+
+pub(super) fn decode_queued_payload(payload: &str) -> DecodedQueuedPayload {
     let parsed = match serde_json::from_str::<QueuedPayloadEnvelope>(payload) {
         Ok(value) => value,
-        Err(_) => return payload.as_bytes().to_vec(),
+        Err(_) => return DecodedQueuedPayload::Plain(payload.as_bytes().to_vec()),
     };
     match parsed.kind.as_deref() {
-        Some("raw_object_b64") | Some("raw_b64") => {
+        Some("raw_object_b64") => {
             let Some(b64) = parsed.payload_b64.as_deref() else {
-                return payload.as_bytes().to_vec();
+                return DecodedQueuedPayload::InvalidRawObject;
             };
             base64::engine::general_purpose::STANDARD
                 .decode(b64)
-                .unwrap_or_else(|_| payload.as_bytes().to_vec())
+                .map(DecodedQueuedPayload::RawObject)
+                .unwrap_or(DecodedQueuedPayload::InvalidRawObject)
         }
-        _ => payload.as_bytes().to_vec(),
+        Some("raw_b64") => {
+            let Some(b64) = parsed.payload_b64.as_deref() else {
+                return DecodedQueuedPayload::Plain(payload.as_bytes().to_vec());
+            };
+            base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map(DecodedQueuedPayload::Plain)
+                .unwrap_or_else(|_| DecodedQueuedPayload::Plain(payload.as_bytes().to_vec()))
+        }
+        _ => DecodedQueuedPayload::Plain(payload.as_bytes().to_vec()),
     }
 }
 
@@ -86,8 +102,8 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        normalize_worker_config, queued_payload_to_bytes, retry_backoff_ms,
-        retry_backoff_with_jitter_ms,
+        decode_queued_payload, normalize_worker_config, retry_backoff_ms,
+        retry_backoff_with_jitter_ms, DecodedQueuedPayload,
     };
     use crate::api::QueueWorkerConfig;
 
@@ -98,22 +114,89 @@ mod tests {
             "payload_b64": "aGVsbG8=",
         })
         .to_string();
-        let bytes = queued_payload_to_bytes(&wrapped);
-        assert_eq!(bytes, b"hello");
+        match decode_queued_payload(&wrapped) {
+            DecodedQueuedPayload::Plain(bytes) => assert_eq!(bytes, b"hello"),
+            DecodedQueuedPayload::RawObject(_) => {
+                panic!("raw_b64 must decode as plain payload bytes")
+            }
+            DecodedQueuedPayload::InvalidRawObject => {
+                panic!("raw_b64 with valid payload must not decode as invalid raw object")
+            }
+        }
+    }
+
+    #[test]
+    fn decode_wrapped_raw_object_b64_payload() {
+        let wrapped = serde_json::json!({
+            "kind": "raw_object_b64",
+            "payload_b64": "aGVsbG8=",
+        })
+        .to_string();
+        match decode_queued_payload(&wrapped) {
+            DecodedQueuedPayload::RawObject(bytes) => assert_eq!(bytes, b"hello"),
+            DecodedQueuedPayload::Plain(_) => {
+                panic!("raw_object_b64 must decode as pre-encoded object bytes")
+            }
+            DecodedQueuedPayload::InvalidRawObject => {
+                panic!("raw_object_b64 with valid payload must not decode as invalid raw object")
+            }
+        }
     }
 
     #[test]
     fn non_wrapped_payload_falls_back_to_utf8_bytes() {
         let payload = r#"{"kind":"post","text":"hello"}"#;
-        let bytes = queued_payload_to_bytes(payload);
-        assert_eq!(bytes, payload.as_bytes());
+        match decode_queued_payload(payload) {
+            DecodedQueuedPayload::Plain(bytes) => assert_eq!(bytes, payload.as_bytes()),
+            DecodedQueuedPayload::RawObject(_) => {
+                panic!("non-wrapped payload must decode as plain payload bytes")
+            }
+            DecodedQueuedPayload::InvalidRawObject => {
+                panic!("non-wrapped payload must not decode as invalid raw object")
+            }
+        }
     }
 
     #[test]
     fn wrapped_payload_without_payload_b64_falls_back_to_utf8_bytes() {
         let payload = r#"{"kind":"raw_b64"}"#;
-        let bytes = queued_payload_to_bytes(payload);
-        assert_eq!(bytes, payload.as_bytes());
+        match decode_queued_payload(payload) {
+            DecodedQueuedPayload::Plain(bytes) => assert_eq!(bytes, payload.as_bytes()),
+            DecodedQueuedPayload::RawObject(_) => {
+                panic!("invalid wrapped payload must decode as plain payload bytes")
+            }
+            DecodedQueuedPayload::InvalidRawObject => {
+                panic!("raw_b64 without payload must not decode as invalid raw object")
+            }
+        }
+    }
+
+    #[test]
+    fn raw_object_without_payload_is_flagged_invalid() {
+        let payload = r#"{"kind":"raw_object_b64"}"#;
+        match decode_queued_payload(payload) {
+            DecodedQueuedPayload::InvalidRawObject => {}
+            DecodedQueuedPayload::Plain(_) => {
+                panic!("raw_object_b64 without payload must be rejected")
+            }
+            DecodedQueuedPayload::RawObject(_) => {
+                panic!("raw_object_b64 without payload must be rejected")
+            }
+        }
+    }
+
+    #[test]
+    fn raw_object_with_invalid_base64_is_flagged_invalid() {
+        let payload = r#"{"kind":"raw_object_b64","payload_b64":"!!!"}"#;
+        match decode_queued_payload(payload) {
+            DecodedQueuedPayload::InvalidRawObject => {}
+            DecodedQueuedPayload::Plain(_) => {
+                panic!("raw_object_b64 with invalid base64 must be rejected")
+            }
+            DecodedQueuedPayload::RawObject(_) => {
+                panic!("raw_object_b64 with invalid base64 must be rejected")
+            }
+        }
     }
 
     #[test]

@@ -26,7 +26,7 @@ pub(in crate::server) async fn publish_profile(
         return bad_request("bio_too_long", "bio too long");
     }
     let feed_bundle = FeedBundle::Profile(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
@@ -36,7 +36,7 @@ pub(in crate::server) async fn publish_profile(
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -72,7 +72,7 @@ pub(in crate::server) async fn publish_post(
         return bad_request("text_too_long", "text too long");
     }
     let feed_bundle = FeedBundle::Post(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
@@ -82,7 +82,7 @@ pub(in crate::server) async fn publish_post(
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -118,7 +118,7 @@ pub(in crate::server) async fn publish_reaction(
         return bad_request("invalid_action", "action_code invalid");
     }
     let feed_bundle = FeedBundle::Reaction(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
@@ -128,7 +128,7 @@ pub(in crate::server) async fn publish_reaction(
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -167,7 +167,7 @@ pub(in crate::server) async fn publish_media(
         return bad_request("url_too_long", "url too long");
     }
     let feed_bundle = FeedBundle::Media(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
@@ -177,7 +177,7 @@ pub(in crate::server) async fn publish_media(
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node

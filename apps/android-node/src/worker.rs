@@ -12,7 +12,8 @@ use veil_node::receive::ReceiveEvent;
 mod helpers;
 
 use self::helpers::{
-    normalize_worker_config, now_millis, queued_payload_to_bytes, retry_backoff_with_jitter_ms,
+    decode_queued_payload, normalize_worker_config, now_millis, retry_backoff_with_jitter_ms,
+    DecodedQueuedPayload,
 };
 
 const APP_TARGET_BATCH_SIZE_BYTES: usize = 96 * 1024;
@@ -125,7 +126,6 @@ impl QueueWorker {
             if !batch.is_empty() {
                 busy = true;
                 let mut executable = Vec::with_capacity(batch.len());
-                let mut namespace = None;
                 let mut payloads = Vec::with_capacity(batch.len());
                 for item in batch {
                     let attempts = worker.state.attempts_for(&item);
@@ -133,11 +133,37 @@ impl QueueWorker {
                         worker.state.drop_item(&item);
                         continue;
                     }
-                    namespace = Some(item.namespace);
-                    payloads.push(queued_payload_to_bytes(&item.payload));
-                    executable.push(item);
+                    match decode_queued_payload(&item.payload) {
+                        DecodedQueuedPayload::RawObject(encoded_object) => {
+                            let result =
+                                worker.protocol.publish_encoded_object(encoded_object).await;
+                            if result.is_ok() {
+                                worker.state.complete_success(&item);
+                            } else {
+                                let backoff = retry_backoff_with_jitter_ms(
+                                    attempts,
+                                    worker.config.backoff_base_ms,
+                                    worker.config.backoff_max_ms,
+                                    item.id.as_u128(),
+                                );
+                                worker.state.complete_failure(item, backoff);
+                            }
+                        }
+                        DecodedQueuedPayload::Plain(bytes) => {
+                            payloads.push(bytes);
+                            executable.push(item);
+                        }
+                        DecodedQueuedPayload::InvalidRawObject => {
+                            tracing::warn!(
+                                message_id = %item.id,
+                                "dropping invalid raw_object_b64 queued payload"
+                            );
+                            worker.state.drop_item(&item);
+                        }
+                    }
                 }
                 if !executable.is_empty() {
+                    let namespace = executable.first().map(|item| item.namespace);
                     let result = worker.protocol.publish_batch(payloads, namespace).await;
                     if result.is_ok() {
                         for item in &executable {

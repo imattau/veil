@@ -17,14 +17,14 @@ pub(in crate::server) async fn publish_list(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::List(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -54,14 +54,14 @@ pub(in crate::server) async fn publish_group_metadata(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::GroupMetadata(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -91,14 +91,14 @@ pub(in crate::server) async fn publish_zap(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::Zap(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -128,14 +128,14 @@ pub(in crate::server) async fn publish_app_preferences(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::AppPreferences(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -165,14 +165,14 @@ pub(in crate::server) async fn publish_deletion(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::Deletion(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -202,14 +202,14 @@ pub(in crate::server) async fn publish_repost(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::Repost(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -239,14 +239,14 @@ pub(in crate::server) async fn publish_poll(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::Poll(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -276,14 +276,14 @@ pub(in crate::server) async fn publish_poll_vote(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::PollVote(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -313,14 +313,14 @@ pub(in crate::server) async fn publish_live_status(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::LiveStatus(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node

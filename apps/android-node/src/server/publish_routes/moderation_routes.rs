@@ -26,7 +26,7 @@ pub(in crate::server) async fn publish_follow(
         return bad_request("invalid_followee", "followee pubkey invalid");
     }
     let feed_bundle = FeedBundle::Follow(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
@@ -36,7 +36,7 @@ pub(in crate::server) async fn publish_follow(
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -84,7 +84,7 @@ pub(in crate::server) async fn publish_mute(
         }
     }
     let feed_bundle = FeedBundle::Mute(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
@@ -93,7 +93,7 @@ pub(in crate::server) async fn publish_mute(
     }
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -138,7 +138,7 @@ pub(in crate::server) async fn publish_block(
         }
     }
     let feed_bundle = FeedBundle::Block(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
@@ -147,7 +147,7 @@ pub(in crate::server) async fn publish_block(
     }
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node

@@ -25,7 +25,7 @@ pub(super) async fn publish_group_message(
         return bad_request("invalid_group", "group_id invalid");
     }
     let feed_bundle = FeedBundle::GroupMessage(bundle.clone());
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
@@ -35,7 +35,7 @@ pub(super) async fn publish_group_message(
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
@@ -126,7 +126,7 @@ pub(super) async fn publish_group_message_text(
         reply_to_root: request.reply_to_root,
     };
     let feed_bundle = FeedBundle::GroupMessage(bundle);
-    let payload = match serde_json::to_vec(&feed_bundle) {
+    let payload = match serde_json::to_string(&feed_bundle) {
         Ok(value) => value,
         Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
     };
@@ -136,7 +136,7 @@ pub(super) async fn publish_group_message_text(
     let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
     let message_id = state.node.enqueue_publish(PublishRequest {
         namespace: request.namespace,
-        payload: String::from_utf8(payload).unwrap_or_default(),
+        payload,
     });
     state
         .node
