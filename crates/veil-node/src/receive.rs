@@ -128,10 +128,10 @@ pub fn receive_shard_with_policy(
     }
     let accept_all_tags = cache_policy.map(|p| p.accept_all_tags).unwrap_or(false);
     if !accept_all_tags && !node.subscriptions.contains(&shard.header.tag) {
-        node.mark_shard_seen(sid, now_step + ttl_steps);
+        node.mark_shard_seen(sid, now_step.saturating_add(ttl_steps));
         return Ok(ReceiveEvent::IgnoredNotSubscribed);
     }
-    node.mark_shard_seen(sid, now_step + ttl_steps);
+    node.mark_shard_seen(sid, now_step.saturating_add(ttl_steps));
 
     let encoded_shard = encode_shard_cbor(shard)?;
     if !require_signed_namespace {
@@ -169,8 +169,20 @@ pub fn receive_shard_with_policy(
         ShardErasureMode::Systematic => ErasureCodingMode::Systematic,
         ShardErasureMode::HardenedNonSystematic => ErasureCodingMode::HardenedNonSystematic,
     };
-    let reconstructed = reconstruct_object_padded_with_mode(&collected, root, erasure_mode)?;
-    let (object, _) = decode_object_cbor_prefix(&reconstructed)?;
+    let reconstructed = match reconstruct_object_padded_with_mode(&collected, root, erasure_mode) {
+        Ok(value) => value,
+        Err(err) => {
+            node.inbox.remove(&root);
+            return Err(err.into());
+        }
+    };
+    let (object, _) = match decode_object_cbor_prefix(&reconstructed) {
+        Ok(value) => value,
+        Err(err) => {
+            node.inbox.remove(&root);
+            return Err(err.into());
+        }
+    };
 
     if require_signed_namespace && (object.flags & OBJECT_FLAG_SIGNED) == 0 {
         node.inbox.remove(&root);
@@ -178,17 +190,36 @@ pub fn receive_shard_with_policy(
     }
 
     if (object.flags & OBJECT_FLAG_SIGNED) != 0 {
-        let pubkey = object
-            .sender_pubkey
-            .ok_or(ReceiveError::MissingSignatureFields)?;
-        let sig = object
-            .signature
-            .as_ref()
-            .ok_or(ReceiveError::MissingSignatureFields)?
-            .0;
-        let digest = object_signature_message_digest(&object)?;
-        let sig_ok = verifier.verify(pubkey, &digest, sig)?;
+        let pubkey = match object.sender_pubkey {
+            Some(value) => value,
+            None => {
+                node.inbox.remove(&root);
+                return Err(ReceiveError::MissingSignatureFields);
+            }
+        };
+        let sig = match object.signature.as_ref() {
+            Some(value) => value.0,
+            None => {
+                node.inbox.remove(&root);
+                return Err(ReceiveError::MissingSignatureFields);
+            }
+        };
+        let digest = match object_signature_message_digest(&object) {
+            Ok(value) => value,
+            Err(err) => {
+                node.inbox.remove(&root);
+                return Err(err.into());
+            }
+        };
+        let sig_ok = match verifier.verify(pubkey, &digest, sig) {
+            Ok(value) => value,
+            Err(err) => {
+                node.inbox.remove(&root);
+                return Err(err.into());
+            }
+        };
         if !sig_ok {
+            node.inbox.remove(&root);
             return Err(ReceiveError::SignatureInvalid);
         }
     }
@@ -196,10 +227,19 @@ pub fn receive_shard_with_policy(
     let aad = build_veil_aad(object.tag, object.namespace, object.epoch);
     let payload = match cipher.decrypt(decrypt_key, object.nonce, &aad, &object.ciphertext) {
         Ok(p) => p,
-        Err(e) if (object.flags & veil_codec::object::OBJECT_FLAG_PUBLIC) != 0 => cipher
-            .decrypt(&[0u8; 32], object.nonce, &aad, &object.ciphertext)
-            .map_err(|_| e)?,
-        Err(e) => return Err(e.into()),
+        Err(e) if (object.flags & veil_codec::object::OBJECT_FLAG_PUBLIC) != 0 => {
+            match cipher.decrypt(&[0u8; 32], object.nonce, &aad, &object.ciphertext) {
+                Ok(p) => p,
+                Err(_) => {
+                    node.inbox.remove(&root);
+                    return Err(e.into());
+                }
+            }
+        }
+        Err(e) => {
+            node.inbox.remove(&root);
+            return Err(e.into());
+        }
     };
 
     // Index content roots for faster lookup
@@ -246,8 +286,8 @@ pub fn receive_shard_with_policy(
 #[cfg(test)]
 mod tests {
     use veil_codec::object::{
-        encode_object_cbor, object_signature_message_digest, ObjectV1, Signature,
-        OBJECT_FLAG_SIGNED, OBJECT_V1_VERSION,
+        decode_object_cbor, encode_object_cbor, object_signature_message_digest, ObjectV1,
+        Signature, OBJECT_FLAG_PUBLIC, OBJECT_FLAG_SIGNED, OBJECT_V1_VERSION,
     };
     use veil_core::{Epoch, Namespace};
     use veil_crypto::aead::{build_veil_aad, AeadCipher, XChaCha20Poly1305Cipher};
@@ -318,6 +358,37 @@ mod tests {
             namespace,
             epoch,
             flags: 0,
+            tag,
+            object_root: payload_root,
+            sender_pubkey: None,
+            signature: None,
+            nonce: envelope.nonce,
+            ciphertext: envelope.ciphertext,
+            padding: vec![0_u8; 8],
+        };
+        encode_object_cbor(&object).expect("object should encode")
+    }
+
+    fn make_public_encrypted_object(
+        payload: &[u8],
+        tag: [u8; 32],
+        namespace: Namespace,
+        epoch: Epoch,
+        key: &[u8; 32],
+    ) -> Vec<u8> {
+        let cipher = XChaCha20Poly1305Cipher;
+        let nonce = [0x57_u8; 24];
+        let aad = build_veil_aad(tag, namespace, epoch);
+        let envelope = cipher
+            .encrypt(key, nonce, &aad, payload)
+            .expect("encrypt should work");
+
+        let payload_root = derive_object_root(payload);
+        let object = ObjectV1 {
+            version: OBJECT_V1_VERSION,
+            namespace,
+            epoch,
+            flags: OBJECT_FLAG_PUBLIC,
             tag,
             object_root: payload_root,
             sender_pubkey: None,
@@ -608,5 +679,121 @@ mod tests {
         .expect("receive should succeed");
 
         assert_ne!(event, ReceiveEvent::IgnoredNotSubscribed);
+    }
+
+    #[test]
+    fn signed_object_with_invalid_signature_clears_inbox() {
+        let mut node = NodeState::default();
+        let tag = [0x53_u8; 32];
+        node.subscriptions.insert(tag);
+        let namespace = Namespace(8);
+        let epoch = Epoch(8);
+        let decrypt_key = [0xAA_u8; 32];
+
+        let encoded_object =
+            make_signed_encrypted_object(b"bad-sig-fields", tag, namespace, epoch, &decrypt_key);
+        let mut object = decode_object_cbor(&encoded_object).expect("decode object");
+        let mut sig = object.signature.expect("signature should exist").0;
+        sig[0] ^= 0x01;
+        object.signature = Some(Signature(sig));
+        let tampered = encode_object_cbor(&object).expect("encode tampered object");
+
+        let wire_root = derive_object_root(&tampered);
+        let shards = object_to_shards(&tampered, namespace, epoch, tag, wire_root)
+            .expect("object should shard");
+        let k = shards[0].header.k as usize;
+
+        let mut got_signature_invalid = false;
+        for shard in shards.iter().take(k) {
+            let result = receive_shard(
+                &mut node,
+                shard,
+                1,
+                100,
+                &decrypt_key,
+                &XChaCha20Poly1305Cipher,
+                &Ed25519Verifier,
+            );
+            if let Err(super::ReceiveError::SignatureInvalid) = result {
+                got_signature_invalid = true;
+                break;
+            }
+        }
+        assert!(
+            got_signature_invalid,
+            "signed object should fail with invalid signature"
+        );
+        assert!(!node.inbox.contains_key(&wire_root));
+    }
+
+    #[test]
+    fn public_object_double_decrypt_failure_clears_inbox() {
+        let mut node = NodeState::default();
+        let tag = [0x54_u8; 32];
+        node.subscriptions.insert(tag);
+        let namespace = Namespace(9);
+        let epoch = Epoch(9);
+
+        let encoded_object = make_public_encrypted_object(
+            b"public-fallback-failure",
+            tag,
+            namespace,
+            epoch,
+            &[0x11; 32],
+        );
+        let wire_root = derive_object_root(&encoded_object);
+        let shards = object_to_shards(&encoded_object, namespace, epoch, tag, wire_root)
+            .expect("object should shard");
+        let k = shards[0].header.k as usize;
+
+        let mut got_decrypt_err = false;
+        for shard in shards.iter().take(k) {
+            let result = receive_shard(
+                &mut node,
+                shard,
+                1,
+                100,
+                &[0x22; 32],
+                &XChaCha20Poly1305Cipher,
+                &Ed25519Verifier,
+            );
+            if let Err(super::ReceiveError::Aead(_)) = result {
+                got_decrypt_err = true;
+                break;
+            }
+        }
+
+        assert!(
+            got_decrypt_err,
+            "public-object decrypt fallback should surface decrypt error when both keys fail",
+        );
+        assert!(!node.inbox.contains_key(&wire_root));
+    }
+
+    #[test]
+    fn receive_not_subscribed_with_max_step_does_not_overflow() {
+        let mut node = NodeState::default();
+        let tag = [0x55_u8; 32];
+        let namespace = Namespace(10);
+        let epoch = Epoch(10);
+        let decrypt_key = [0xAA_u8; 32];
+        let encoded_object =
+            make_signed_encrypted_object(b"overflow-check", tag, namespace, epoch, &decrypt_key);
+        let wire_root = derive_object_root(&encoded_object);
+        let shard = object_to_shards(&encoded_object, namespace, epoch, tag, wire_root)
+            .expect("object should shard")
+            .remove(0);
+
+        let event = receive_shard(
+            &mut node,
+            &shard,
+            u64::MAX,
+            10,
+            &decrypt_key,
+            &XChaCha20Poly1305Cipher,
+            &Ed25519Verifier,
+        )
+        .expect("receive should run");
+        assert_eq!(event, ReceiveEvent::IgnoredNotSubscribed);
     }
 }

@@ -3517,6 +3517,7 @@ name = "veil-node"
 version = "0.1.0"
 dependencies = [
  "ciborium",
+ "hex",
  "lru 0.13.0",
  "serde",
  "serde_json",
@@ -3544,6 +3545,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
+ "hex",
  "rand 0.8.5",
  "rustls",
  "serde",

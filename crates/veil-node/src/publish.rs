@@ -17,6 +17,7 @@ use veil_transport::adapter::TransportAdapter;
 use crate::ack::register_pending_ack;
 use crate::batch::{FeedBatcher, DEFAULT_MAX_OBJECT_SIZE};
 use crate::config::NodeRuntimeConfig;
+use crate::policy::TrustTier;
 use crate::runtime::{pump_ack_timeouts, RuntimeStats};
 use crate::state::NodeState;
 
@@ -366,7 +367,10 @@ pub fn publish_service_tick_multi_lane<
     config: &NodeRuntimeConfig,
     cipher: &impl AeadCipher,
     signer: Option<&S>,
-) -> Result<PublishServiceTickResult, PublishError> {
+) -> Result<PublishServiceTickResult, PublishError>
+where
+    AFallback::Peer: ToString,
+{
     let publish_params = params.publish;
     let retry_peers = publish_params.fallback_peers;
     let now_step = publish_params.now_step;
@@ -381,11 +385,22 @@ pub fn publish_service_tick_multi_lane<
         signer,
     )?;
 
+    let retry_targets = retry_peers
+        .iter()
+        .filter(|peer| {
+            !matches!(
+                config.classify_peer_tier(&peer.to_string(), now_step),
+                TrustTier::Blocked
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
     let mut runtime_stats = RuntimeStats::default();
     let ack_retry_sends = pump_ack_timeouts(
         node,
         fallback_adapter,
-        retry_peers,
+        &retry_targets,
         now_step,
         config.base_fallback_fanout.max(1),
         &mut runtime_stats,
@@ -700,6 +715,67 @@ mod tests {
 
         assert!(out.published.is_none());
         assert!(out.ack_retry_sends > 0);
+    }
+
+    #[test]
+    fn publish_service_tick_ack_retries_skip_blocked_fallback_peers() {
+        let mut node = NodeState::default();
+        register_pending_ack(
+            &mut node,
+            [0x56; 32],
+            vec![vec![1, 2, 3]],
+            0,
+            AckRetryPolicy {
+                initial_timeout_steps: 0,
+                retry_batch_size: 1,
+                backoff_step: 1,
+                max_retries: 1,
+            },
+        );
+
+        let mut fast = InMemoryAdapter::default();
+        let mut fallback = InMemoryAdapter::default();
+        let mut batcher = FeedBatcher::default();
+        let peers = vec!["peer-blocked".to_string(), "peer-allowed".to_string()];
+        let signer = Ed25519Signer::from_secret([0x52_u8; 32]);
+
+        let mut cfg = NodeRuntimeConfig::default();
+        cfg.base_fallback_fanout = 1;
+        let blocked_pubkey = [0x93_u8; 32];
+        cfg.wot_policy.block(blocked_pubkey);
+        cfg.bind_peer_publisher("peer-blocked", blocked_pubkey);
+
+        let out = publish_service_tick_multi_lane(
+            &mut node,
+            &mut fast,
+            &mut fallback,
+            PublishServiceTickParams {
+                batcher: &mut batcher,
+                publish: PublishQueueTickParams {
+                    namespace: Namespace(1),
+                    epoch: Epoch(1),
+                    tag: [0x11; 32],
+                    encrypt_key: &[0xAA; 32],
+                    now_step: 0,
+                    flags: OBJECT_FLAG_SIGNED,
+                    interactive_flush: false,
+                    fast_peers: &peers,
+                    fallback_peers: &peers,
+                },
+            },
+            &cfg,
+            &XChaCha20Poly1305Cipher,
+            Some(&signer),
+        )
+        .expect("service tick should succeed");
+
+        assert_eq!(out.ack_retry_sends, 1);
+        let outbound = fallback.take_outbound();
+        assert_eq!(outbound.len(), 1, "expected one retry send");
+        assert_eq!(
+            outbound[0].0, "peer-allowed",
+            "retry should skip blocked fallback peers",
+        );
     }
 
     #[test]

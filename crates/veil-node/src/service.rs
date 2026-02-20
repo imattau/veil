@@ -647,6 +647,7 @@ impl<AFast, AFallback, C, S> PublisherRuntime<AFast, AFallback, C, S>
 where
     AFast: TransportAdapter,
     AFallback: TransportAdapter,
+    AFallback::Peer: ToString,
     C: AeadCipher,
     S: Signer,
 {

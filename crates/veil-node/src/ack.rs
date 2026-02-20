@@ -44,15 +44,17 @@ pub fn register_pending_ack(
     now_step: u64,
     retry_policy: AckRetryPolicy,
 ) {
+    let retry_batch_size = retry_policy.retry_batch_size.max(1);
+    let backoff_step = retry_policy.backoff_step.max(1);
     node.pending_acks.insert(
         object_root,
         PendingAck {
             unsent_shards,
-            next_retry_step: now_step + retry_policy.initial_timeout_steps,
+            next_retry_step: now_step.saturating_add(retry_policy.initial_timeout_steps),
             retries: 0,
             max_retries: retry_policy.max_retries,
-            retry_batch_size: retry_policy.retry_batch_size,
-            backoff_step: retry_policy.backoff_step,
+            retry_batch_size,
+            backoff_step,
         },
     );
 }
@@ -187,27 +189,39 @@ pub fn next_ack_escalation_batch(
     node: &mut NodeState,
     now_step: u64,
 ) -> Option<(ObjectRoot, Vec<Vec<u8>>)> {
-    let due_root = node
-        .pending_acks
-        .iter()
-        .find_map(|(root, pending)| (pending.next_retry_step <= now_step).then_some(*root))?;
+    loop {
+        let due_root = node
+            .pending_acks
+            .iter()
+            .find_map(|(root, pending)| (pending.next_retry_step <= now_step).then_some(*root))?;
 
-    let pending = node.pending_acks.get_mut(&due_root)?;
-    if pending.unsent_shards.is_empty() || pending.retries >= pending.max_retries {
-        node.pending_acks.remove(&due_root);
-        return None;
+        let mut remove_entry = false;
+        let mut ready_batch: Option<Vec<Vec<u8>>> = None;
+        {
+            let Some(pending) = node.pending_acks.get_mut(&due_root) else {
+                continue;
+            };
+            if pending.unsent_shards.is_empty() || pending.retries >= pending.max_retries {
+                remove_entry = true;
+            } else {
+                let take = pending.retry_batch_size.min(pending.unsent_shards.len());
+                let batch: Vec<Vec<u8>> = pending.unsent_shards.drain(0..take).collect();
+                pending.retries += 1;
+                pending.next_retry_step = now_step.saturating_add(pending.backoff_step);
+                ready_batch = Some(batch);
+                if pending.unsent_shards.is_empty() || pending.retries >= pending.max_retries {
+                    remove_entry = true;
+                }
+            }
+        }
+
+        if remove_entry {
+            node.pending_acks.remove(&due_root);
+        }
+        if let Some(batch) = ready_batch {
+            return Some((due_root, batch));
+        }
     }
-
-    let take = pending.retry_batch_size.min(pending.unsent_shards.len());
-    let batch: Vec<Vec<u8>> = pending.unsent_shards.drain(0..take).collect();
-    pending.retries += 1;
-    pending.next_retry_step = now_step + pending.backoff_step;
-
-    if pending.unsent_shards.is_empty() || pending.retries >= pending.max_retries {
-        node.pending_acks.remove(&due_root);
-    }
-
-    Some((due_root, batch))
 }
 
 #[cfg(test)]
@@ -216,7 +230,7 @@ mod tests {
         ack_received, build_ack_shard_bytes, decode_ack_payload, encode_ack_payload,
         next_ack_escalation_batch, register_pending_ack, AckRetryPolicy,
     };
-    use crate::state::NodeState;
+    use crate::state::{NodeState, PendingAck};
     use veil_core::{Epoch, Namespace};
     use veil_crypto::aead::XChaCha20Poly1305Cipher;
 
@@ -236,6 +250,54 @@ mod tests {
             },
         );
         assert!(next_ack_escalation_batch(&mut node, 12).is_none());
+    }
+
+    #[test]
+    fn register_pending_ack_clamps_zero_batch_and_backoff() {
+        let mut node = NodeState::default();
+        let root = [0x10; 32];
+        register_pending_ack(
+            &mut node,
+            root,
+            vec![vec![1], vec![2]],
+            5,
+            AckRetryPolicy {
+                initial_timeout_steps: 0,
+                retry_batch_size: 0,
+                backoff_step: 0,
+                max_retries: 2,
+            },
+        );
+
+        let pending = node
+            .pending_acks
+            .get(&root)
+            .expect("pending entry should exist");
+        assert_eq!(pending.retry_batch_size, 1);
+        assert_eq!(pending.backoff_step, 1);
+    }
+
+    #[test]
+    fn register_pending_ack_saturates_next_retry_step() {
+        let mut node = NodeState::default();
+        let root = [0x12; 32];
+        register_pending_ack(
+            &mut node,
+            root,
+            vec![vec![1]],
+            u64::MAX - 1,
+            AckRetryPolicy {
+                initial_timeout_steps: 10,
+                retry_batch_size: 1,
+                backoff_step: 1,
+                max_retries: 1,
+            },
+        );
+        let pending = node
+            .pending_acks
+            .get(&root)
+            .expect("pending entry should exist");
+        assert_eq!(pending.next_retry_step, u64::MAX);
     }
 
     #[test]
@@ -264,6 +326,48 @@ mod tests {
             next_ack_escalation_batch(&mut node, 8).expect("second batch should be available");
         assert_eq!(batch2.len(), 1);
         assert!(!node.pending_acks.contains_key(&root));
+    }
+
+    #[test]
+    fn escalation_skips_invalid_due_entry_and_returns_next_valid_batch() {
+        let mut node = NodeState::default();
+        let exhausted_root = [0x24; 32];
+        node.pending_acks.insert(
+            exhausted_root,
+            PendingAck {
+                unsent_shards: Vec::new(),
+                next_retry_step: 0,
+                retries: 1,
+                max_retries: 1,
+                retry_batch_size: 1,
+                backoff_step: 1,
+            },
+        );
+
+        let valid_root = [0x25; 32];
+        register_pending_ack(
+            &mut node,
+            valid_root,
+            vec![vec![9, 9, 9]],
+            0,
+            AckRetryPolicy {
+                initial_timeout_steps: 0,
+                retry_batch_size: 1,
+                backoff_step: 1,
+                max_retries: 3,
+            },
+        );
+
+        let (root, batch) =
+            next_ack_escalation_batch(&mut node, 0).expect("valid due batch should be returned");
+        assert_eq!(root, valid_root);
+        assert_eq!(batch.len(), 1);
+        let second = next_ack_escalation_batch(&mut node, 0);
+        assert!(second.is_none());
+        assert!(
+            !node.pending_acks.contains_key(&exhausted_root),
+            "exhausted due entry should be cleaned up",
+        );
     }
 
     #[test]

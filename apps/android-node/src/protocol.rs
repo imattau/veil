@@ -240,14 +240,17 @@ fn current_epoch() -> Epoch {
     config_helpers::current_epoch()
 }
 
+#[cfg(test)]
 fn derive_server_name(peer: &str) -> Option<String> {
     lane_builders::derive_server_name(peer)
 }
 
+#[cfg(test)]
 fn is_ws_url(value: &str) -> bool {
     lane_builders::is_ws_url(value)
 }
 
+#[cfg(test)]
 fn decode_hex_32(value: &str) -> Option<[u8; 32]> {
     config_helpers::decode_hex_32(value)
 }

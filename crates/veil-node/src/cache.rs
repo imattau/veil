@@ -40,7 +40,7 @@ fn cache_put_internal(
         shard_id,
         CachedShard {
             bytes: shard_bytes,
-            expiry_step: now_step + ttl_steps,
+            expiry_step: now_step.saturating_add(ttl_steps),
             last_seen_step: now_step,
         },
     );
@@ -190,6 +190,7 @@ fn remove_shard(node: &mut NodeState, shard_id: ShardId) {
             shards.remove(&shard_id);
             if shards.is_empty() {
                 node.shard_index.remove(&root);
+                node.content_index.retain(|_, wire_root| *wire_root != root);
             }
         }
     }
@@ -230,6 +231,15 @@ mod tests {
         assert_eq!(stored.last_seen_step, 2);
         assert_eq!(stored.expiry_step, 12);
         assert_eq!(node.replica_estimate.get(&shard_id), Some(&2));
+    }
+
+    #[test]
+    fn cache_put_saturates_expiry_step() {
+        let mut node = NodeState::default();
+        let shard_id = [0xBC_u8; 32];
+        cache_put(&mut node, shard_id, vec![1], u64::MAX - 1, 10);
+        let stored = node.cache.get(&shard_id).expect("shard should be cached");
+        assert_eq!(stored.expiry_step, u64::MAX);
     }
 
     #[test]
@@ -465,5 +475,53 @@ mod tests {
         super::remove_shard(&mut node, shard_id);
         assert!(!node.shard_to_root.contains_key(&shard_id));
         assert!(!node.shard_index.contains_key(&root));
+    }
+
+    #[test]
+    fn removing_last_shard_cleans_content_index_for_wire_root() {
+        use veil_codec::shard::{
+            encode_shard_cbor, ShardHeaderV1, ShardV1, SHARD_HEADER_LEN, SHARD_V1_VERSION,
+        };
+        use veil_core::Namespace;
+
+        let mut node = NodeState::default();
+        let wire_root = [0x21; 32];
+        let content_root_a = [0x31; 32];
+        let content_root_b = [0x32; 32];
+        let other_wire_root = [0x41; 32];
+        let other_content_root = [0x51; 32];
+        node.content_index.insert(content_root_a, wire_root);
+        node.content_index.insert(content_root_b, wire_root);
+        node.content_index
+            .insert(other_content_root, other_wire_root);
+
+        let shard_id = [0xAB; 32];
+        let shard = ShardV1 {
+            header: ShardHeaderV1 {
+                version: SHARD_V1_VERSION,
+                namespace: Namespace(1),
+                epoch: veil_core::Epoch(1),
+                tag: [0x22; 32],
+                object_root: wire_root,
+                profile_id: 1,
+                erasure_mode: veil_codec::shard::ShardErasureMode::Systematic,
+                bucket_size: 2048,
+                k: 1,
+                n: 1,
+                index: 0,
+            },
+            payload: vec![0; 2048 - SHARD_HEADER_LEN],
+        };
+        let bytes = encode_shard_cbor(&shard).expect("shard should encode");
+        cache_put(&mut node, shard_id, bytes, 10, 100);
+
+        super::remove_shard(&mut node, shard_id);
+
+        assert!(!node.content_index.contains_key(&content_root_a));
+        assert!(!node.content_index.contains_key(&content_root_b));
+        assert_eq!(
+            node.content_index.get(&other_content_root),
+            Some(&other_wire_root)
+        );
     }
 }

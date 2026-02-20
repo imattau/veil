@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use veil_codec::object::OBJECT_FLAG_ACK_REQUESTED;
 use veil_codec::shard::decode_shard_cbor;
 use veil_core::hash::blake3_32;
@@ -260,10 +260,18 @@ fn process_inbound<A: TransportAdapter>(
     )?;
 
     if is_forwardable(&event) {
+        let mut blocked_candidates = 0usize;
         let mut candidates = peers
             .iter()
             .filter(|peer| **peer != *from_peer)
             .collect::<Vec<_>>();
+        if let Some(classify) = classify_peer_tier {
+            candidates.retain(|peer| {
+                let is_blocked = matches!(classify(peer, now_step), TrustTier::Blocked);
+                blocked_candidates += usize::from(is_blocked);
+                !is_blocked
+            });
+        }
         if let Some(classify) = classify_peer_tier {
             candidates.sort_by_key(|peer| match classify(peer, now_step) {
                 TrustTier::Trusted => 0_u8,
@@ -273,9 +281,10 @@ fn process_inbound<A: TransportAdapter>(
                 TrustTier::Blocked => 4_u8,
             });
         }
-        stats
-            .dropped_by_tier
-            .incr(inbound_tier, candidates.len().saturating_sub(fanout));
+        stats.dropped_by_tier.incr(
+            inbound_tier,
+            blocked_candidates + candidates.len().saturating_sub(fanout),
+        );
         for (ordinal, peer) in candidates.into_iter().take(fanout).enumerate() {
             let replica = *node.replica_estimate.get(&sid).unwrap_or(&0);
             let p = forwarding_probability(replica, probabilistic_forwarding);
@@ -589,14 +598,23 @@ pub fn pump_multi_lane_once_split<AFast: TransportAdapter, AFallback: TransportA
             .unwrap_or(fallback_redundancy_fanout);
 
         if is_forwardable(&event) && effective_redundancy > 0 {
+            let mut blocked_fallback_candidates = 0usize;
+            let mut fallback_candidates = fallback_lane.peers.iter().collect::<Vec<_>>();
+            if let Some(classify) = fallback_policy_hooks.classify_peer_tier {
+                fallback_candidates.retain(|peer| {
+                    let is_blocked = matches!(classify(peer, now_step), TrustTier::Blocked);
+                    blocked_fallback_candidates += usize::from(is_blocked);
+                    !is_blocked
+                });
+            }
             stats.dropped_by_tier.incr(
                 inbound_tier,
-                fallback_lane
-                    .peers
-                    .len()
-                    .saturating_sub(effective_redundancy),
+                blocked_fallback_candidates
+                    + fallback_candidates
+                        .len()
+                        .saturating_sub(effective_redundancy),
             );
-            for peer in fallback_lane.peers.iter().take(effective_redundancy) {
+            for peer in fallback_candidates.into_iter().take(effective_redundancy) {
                 if fallback_adapter.send(peer, &bytes).is_ok() {
                     stats.forwarded_messages += 1;
                     stats.forwarded_by_tier.incr(inbound_tier, 1);
@@ -921,10 +939,21 @@ where
         verifier,
     )?;
 
+    let retry_targets = fallback_peers
+        .iter()
+        .filter(|peer| {
+            !matches!(
+                config.classify_publisher_tier(fallback_resolver(peer), now_step),
+                TrustTier::Blocked
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
     let _ = pump_ack_timeouts(
         node,
         fallback_adapter,
-        fallback_peers,
+        &retry_targets,
         now_step,
         config.base_fallback_fanout.max(1),
         stats,
@@ -989,15 +1018,79 @@ pub fn pump_ack_timeouts<A: TransportAdapter>(
     fallback_fanout: usize,
     stats: &mut RuntimeStats,
 ) -> usize {
+    #[derive(Clone, Copy)]
+    struct RetrySnapshot {
+        retries_after_step: u32,
+        max_retries: u32,
+        retry_batch_size: usize,
+        backoff_step: u64,
+    }
+
+    if fallback_fanout == 0 || fallback_peers.is_empty() {
+        // No reachable retry targets; keep pending state intact for a future tick.
+        return 0;
+    }
     let mut sent = 0;
-    while let Some((_root, batch)) = next_ack_escalation_batch(node, now_step) {
+    loop {
+        let due_snapshots: HashMap<_, _> = node
+            .pending_acks
+            .iter()
+            .filter_map(|(root, pending)| {
+                (pending.next_retry_step <= now_step).then_some((
+                    *root,
+                    RetrySnapshot {
+                        retries_after_step: pending.retries.saturating_add(1),
+                        max_retries: pending.max_retries,
+                        retry_batch_size: pending.retry_batch_size,
+                        backoff_step: pending.backoff_step,
+                    },
+                ))
+            })
+            .collect();
+        if due_snapshots.is_empty() {
+            break;
+        }
+
+        let Some((root, batch)) = next_ack_escalation_batch(node, now_step) else {
+            break;
+        };
+        let retry_snapshot = due_snapshots.get(&root).copied();
+
+        let mut failed_shards = Vec::new();
         for shard_bytes in batch {
+            let mut sent_to_any = false;
             for peer in fallback_peers.iter().take(fallback_fanout) {
                 if fallback_adapter.send(peer, &shard_bytes).is_ok() {
                     stats.forwarded_messages += 1;
                     sent += 1;
+                    sent_to_any = true;
                 } else {
                     stats.send_failures += 1;
+                }
+            }
+            if !sent_to_any {
+                failed_shards.push(shard_bytes);
+            }
+        }
+
+        if !failed_shards.is_empty() {
+            if let Some(pending) = node.pending_acks.get_mut(&root) {
+                let mut restored = failed_shards;
+                restored.append(&mut pending.unsent_shards);
+                pending.unsent_shards = restored;
+            } else if let Some(snapshot) = retry_snapshot {
+                if snapshot.retries_after_step < snapshot.max_retries {
+                    node.pending_acks.insert(
+                        root,
+                        crate::state::PendingAck {
+                            unsent_shards: failed_shards,
+                            next_retry_step: now_step.saturating_add(snapshot.backoff_step),
+                            retries: snapshot.retries_after_step,
+                            max_retries: snapshot.max_retries,
+                            retry_batch_size: snapshot.retry_batch_size,
+                            backoff_step: snapshot.backoff_step,
+                        },
+                    );
                 }
             }
         }
@@ -1017,13 +1110,13 @@ mod tests {
     use veil_crypto::aead::{build_veil_aad, AeadCipher, XChaCha20Poly1305Cipher};
     use veil_crypto::signing::{Ed25519Signer, Ed25519Verifier, Signer};
     use veil_fec::sharder::{derive_object_root, object_to_shards};
-    use veil_transport::adapter::InMemoryAdapter;
+    use veil_transport::adapter::{CappedInMemoryAdapter, InMemoryAdapter};
 
     use super::{
         forwarding_probability, probabilistic_allow, pump_ack_timeouts, pump_multi_lane_once,
         pump_multi_lane_once_with_config, pump_multi_lane_tick_with_config, pump_once,
         pump_once_with_config, ConfigMultiLanePumpParams, ConfigPumpParams, LaneForwardParams,
-        MultiLanePumpParams, PumpParams, RuntimePolicyHooks, RuntimeStats,
+        MultiLanePumpParams, PumpParams, RuntimePolicyHooks, RuntimeStats, TrustTier,
     };
     use crate::ack::{encode_ack_payload, register_pending_ack, AckRetryPolicy};
     use crate::config::{NodeRuntimeConfig, ProbabilisticForwardingConfig};
@@ -1500,6 +1593,68 @@ mod tests {
     }
 
     #[test]
+    fn runtime_does_not_forward_to_blocked_destination_peers() {
+        let mut node = NodeState::default();
+        let tag = [0x5A_u8; 32];
+        node.subscriptions.insert(tag);
+        let key = [0xE7_u8; 32];
+
+        let payload = b"blocked destination should not receive forwards";
+        let encoded_object = make_encoded_object(payload, tag, &key);
+        let root = blake3_32(&encoded_object);
+        let shards = object_to_shards(&encoded_object, Namespace(19), Epoch(55), tag, root)
+            .expect("sharding should succeed");
+        let bytes = encode_shard_cbor(&shards[0]).expect("shard should encode");
+
+        let mut adapter = InMemoryAdapter::default();
+        adapter.enqueue_inbound("sender", bytes);
+        let peers = vec![
+            "sender".to_string(),
+            "peer-blocked".to_string(),
+            "peer-allowed".to_string(),
+        ];
+        let mut stats = RuntimeStats::default();
+
+        let tier_fn = |peer: &String, _now_step: u64| {
+            if peer == "peer-blocked" {
+                TrustTier::Blocked
+            } else {
+                TrustTier::Unknown
+            }
+        };
+
+        let _ = pump_once(
+            &mut node,
+            &mut adapter,
+            PumpParams {
+                peers: &peers,
+                now_step: 0,
+                ttl_steps: 100,
+                fanout: 2,
+                policy_hooks: RuntimePolicyHooks {
+                    classify_peer_tier: Some(&tier_fn),
+                    ..RuntimePolicyHooks::default()
+                },
+                decrypt_key: &key,
+                stats: &mut stats,
+            },
+            &XChaCha20Poly1305Cipher,
+            &Ed25519Verifier,
+        )
+        .expect("pump should succeed");
+
+        let outbound = adapter.take_outbound();
+        assert!(
+            outbound.iter().all(|(peer, _)| peer != "peer-blocked"),
+            "blocked destination peer should not receive forwarded shard",
+        );
+        assert!(
+            outbound.iter().any(|(peer, _)| peer == "peer-allowed"),
+            "non-blocked destination peer should still receive forwarded shard",
+        );
+    }
+
+    #[test]
     fn config_wrapper_accept_all_tags_bypasses_subscription_gate() {
         let mut node = NodeState::default();
         let tag = [0x52_u8; 32];
@@ -1597,6 +1752,78 @@ mod tests {
     }
 
     #[test]
+    fn multi_lane_redundancy_skips_blocked_fallback_peers() {
+        let mut node = NodeState::default();
+        let tag = [0x68_u8; 32];
+        node.subscriptions.insert(tag);
+        let key = [0xF7_u8; 32];
+        let payload = b"redundancy should skip blocked fallback peers";
+        let encoded_object = make_encoded_object(payload, tag, &key);
+        let root = blake3_32(&encoded_object);
+        let shards = object_to_shards(&encoded_object, Namespace(22), Epoch(58), tag, root)
+            .expect("sharding should succeed");
+
+        let mut fast = InMemoryAdapter::default();
+        let mut fallback = InMemoryAdapter::default();
+        let bytes = encode_shard_cbor(&shards[0]).expect("shard should encode");
+        fast.enqueue_inbound("sender", bytes);
+
+        let peers = vec![
+            "sender".to_string(),
+            "peer-blocked".to_string(),
+            "peer-allowed".to_string(),
+        ];
+        let mut stats = RuntimeStats::default();
+
+        let tier_fn = |peer: &String, _now_step: u64| {
+            if peer == "peer-blocked" {
+                TrustTier::Blocked
+            } else {
+                TrustTier::Unknown
+            }
+        };
+
+        let _ = pump_multi_lane_once(
+            &mut node,
+            &mut fast,
+            &mut fallback,
+            MultiLanePumpParams {
+                fast_lane: LaneForwardParams {
+                    peers: &peers,
+                    fanout: 2,
+                },
+                fallback_lane: LaneForwardParams {
+                    peers: &peers,
+                    fanout: 1,
+                },
+                fallback_redundancy_fanout: 2,
+                now_step: 0,
+                ttl_steps: 100,
+                fast_policy_hooks: RuntimePolicyHooks::default(),
+                fallback_policy_hooks: RuntimePolicyHooks {
+                    classify_peer_tier: Some(&tier_fn),
+                    ..RuntimePolicyHooks::default()
+                },
+                decrypt_key: &key,
+                stats: &mut stats,
+            },
+            &XChaCha20Poly1305Cipher,
+            &Ed25519Verifier,
+        )
+        .expect("multi-lane pump should succeed");
+
+        let outbound = fallback.take_outbound();
+        assert!(
+            outbound.iter().all(|(peer, _)| peer != "peer-blocked"),
+            "blocked fallback peer should not receive redundant forwards",
+        );
+        assert!(
+            outbound.iter().any(|(peer, _)| peer == "peer-allowed"),
+            "allowed fallback peer should still receive redundant forwards",
+        );
+    }
+
+    #[test]
     fn ack_timeout_pump_sends_escalation_batches_on_fallback_lane() {
         let mut node = NodeState::default();
         let root = [0xD5; 32];
@@ -1627,6 +1854,88 @@ mod tests {
         let sent_final = pump_ack_timeouts(&mut node, &mut fallback, &peers, 14, 1, &mut stats);
         assert_eq!(sent_final, 1);
         assert!(!node.pending_acks.contains_key(&root));
+    }
+
+    #[test]
+    fn ack_timeout_pump_preserves_pending_when_no_retry_targets() {
+        let mut node = NodeState::default();
+        let root = [0xD6; 32];
+        register_pending_ack(
+            &mut node,
+            root,
+            vec![vec![1, 2, 3], vec![4, 5, 6]],
+            10,
+            AckRetryPolicy {
+                initial_timeout_steps: 2,
+                retry_batch_size: 2,
+                backoff_step: 2,
+                max_retries: 3,
+            },
+        );
+
+        let mut fallback = InMemoryAdapter::default();
+        let mut stats = RuntimeStats::default();
+
+        let sent_empty = pump_ack_timeouts(
+            &mut node,
+            &mut fallback,
+            &Vec::<String>::new(),
+            12,
+            1,
+            &mut stats,
+        );
+        assert_eq!(sent_empty, 0);
+        assert!(
+            node.pending_acks.contains_key(&root),
+            "pending retry state should be preserved when no peers are available",
+        );
+
+        let peers = vec!["peer-a".to_string()];
+        let sent_later = pump_ack_timeouts(&mut node, &mut fallback, &peers, 12, 1, &mut stats);
+        assert_eq!(sent_later, 2);
+        assert!(
+            !node.pending_acks.contains_key(&root),
+            "pending retry state should clear only after retries are actually sent/drained",
+        );
+    }
+
+    #[test]
+    fn ack_timeout_pump_requeues_batch_when_all_transport_sends_fail() {
+        let mut node = NodeState::default();
+        let root = [0xD7; 32];
+        register_pending_ack(
+            &mut node,
+            root,
+            vec![vec![1, 2, 3], vec![4, 5, 6]],
+            0,
+            AckRetryPolicy {
+                initial_timeout_steps: 0,
+                retry_batch_size: 2,
+                backoff_step: 1,
+                max_retries: 3,
+            },
+        );
+
+        let peers = vec!["peer-a".to_string()];
+        let mut fallback = CappedInMemoryAdapter::default();
+        fallback.set_allow_send(false);
+        let mut stats = RuntimeStats::default();
+
+        let sent_fail = pump_ack_timeouts(&mut node, &mut fallback, &peers, 0, 1, &mut stats);
+        assert_eq!(sent_fail, 0);
+        assert!(
+            node.pending_acks.contains_key(&root),
+            "failed sends should keep pending retry state",
+        );
+        assert_eq!(stats.send_failures, 2);
+
+        fallback.set_allow_send(true);
+        let sent_ok = pump_ack_timeouts(&mut node, &mut fallback, &peers, 1, 1, &mut stats);
+        assert_eq!(sent_ok, 2);
+        assert!(
+            !node.pending_acks.contains_key(&root),
+            "pending retry state should clear after successful resend",
+        );
     }
 
     #[test]
@@ -1800,5 +2109,60 @@ mod tests {
 
         assert!(event.is_none());
         assert!(!fallback.take_outbound().is_empty());
+    }
+
+    #[test]
+    fn tick_wrapper_ack_retries_skip_blocked_fallback_peers() {
+        let mut node = NodeState::default();
+        let root = [0xE2; 32];
+        register_pending_ack(
+            &mut node,
+            root,
+            vec![vec![1, 2, 3]],
+            0,
+            AckRetryPolicy {
+                initial_timeout_steps: 0,
+                retry_batch_size: 1,
+                backoff_step: 1,
+                max_retries: 1,
+            },
+        );
+
+        let mut fast = InMemoryAdapter::default();
+        let mut fallback = InMemoryAdapter::default();
+        let peers = vec!["peer-blocked".to_string(), "peer-allowed".to_string()];
+        let mut stats = RuntimeStats::default();
+        let key = [0xDD_u8; 32];
+
+        let mut cfg = NodeRuntimeConfig::default();
+        cfg.base_fallback_fanout = 1;
+        let blocked_pubkey = [0x97_u8; 32];
+        cfg.wot_policy.block(blocked_pubkey);
+        cfg.bind_peer_publisher("peer-blocked", blocked_pubkey);
+
+        let _ = pump_multi_lane_tick_with_config(
+            &mut node,
+            &mut fast,
+            &mut fallback,
+            ConfigMultiLanePumpParams {
+                fast_peers: &peers,
+                fallback_peers: &peers,
+                now_step: 0,
+                decrypt_key: &key,
+                config: &cfg,
+                stats: &mut stats,
+            },
+            &XChaCha20Poly1305Cipher,
+            &Ed25519Verifier,
+        )
+        .expect("tick wrapper should succeed");
+
+        let outbound = fallback.take_outbound();
+        assert_eq!(outbound.len(), 1, "expected one retry send");
+        assert_eq!(
+            outbound[0].0, "peer-allowed",
+            "retry should skip blocked fallback peers",
+        );
+        assert!(!node.pending_acks.contains_key(&root));
     }
 }

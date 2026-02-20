@@ -6,7 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::api::{ContactBundle, EventEnvelope, LaneDetail, LaneHealth, PublishRequest};
+#[cfg(test)]
+use crate::api::ContactBundle;
+use crate::api::{EventEnvelope, LaneDetail, LaneHealth, PublishRequest};
 use crate::state_store::{IdentityRecord, QueueItem, StateStore, StoreSnapshot};
 use veil_crypto::signing::{NostrSigner, Signer};
 use veil_node::policy::{EndorsementIngestResult, LocalWotPolicy};

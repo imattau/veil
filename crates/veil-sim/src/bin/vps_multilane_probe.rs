@@ -261,16 +261,12 @@ fn get_arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 fn parse_hex_tag(hex: &str) -> Result<Tag, String> {
-    let cleaned = hex.trim().trim_start_matches("tag:").to_lowercase();
+    let cleaned = hex.trim().trim_start_matches("tag:");
     if cleaned.len() != 64 {
         return Err("expected 64 hex chars".to_string());
     }
     let mut out = [0u8; 32];
-    for i in 0..32 {
-        let byte = u8::from_str_radix(&cleaned[i * 2..i * 2 + 2], 16)
-            .map_err(|_| "invalid hex".to_string())?;
-        out[i] = byte;
-    }
+    hex::decode_to_slice(cleaned, &mut out).map_err(|_| "invalid hex".to_string())?;
     Ok(out)
 }
 
@@ -383,18 +379,7 @@ fn current_epoch() -> Epoch {
 
 fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
     let cleaned = hex.trim().trim_start_matches("0x").replace(':', "");
-    if !cleaned.len().is_multiple_of(2) {
-        return Err("invalid hex length".to_string());
-    }
-    let mut out = Vec::with_capacity(cleaned.len() / 2);
-    let mut i = 0;
-    while i < cleaned.len() {
-        let byte =
-            u8::from_str_radix(&cleaned[i..i + 2], 16).map_err(|_| "invalid hex".to_string())?;
-        out.push(byte);
-        i += 2;
-    }
-    Ok(out)
+    hex::decode(cleaned).map_err(|_| "invalid hex".to_string())
 }
 
 fn fetch_cert_from_url(url: &str) -> Result<Vec<u8>, String> {

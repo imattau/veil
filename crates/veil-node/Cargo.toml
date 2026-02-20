@@ -16,3 +16,4 @@ veil-crypto = { path = "../veil-crypto" }
 veil-fec = { path = "../veil-fec" }
 veil-transport = { path = "../veil-transport" }
 tracing.workspace = true
+hex.workspace = true

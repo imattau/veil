@@ -174,15 +174,8 @@ struct EndorsementPayloadSerde {
 }
 
 fn decode_hex_pubkey_32(value: &str) -> Option<[u8; 32]> {
-    if value.len() != 64 {
-        return None;
-    }
     let mut out = [0_u8; 32];
-    for (idx, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
-        let s = std::str::from_utf8(chunk).ok()?;
-        let byte = u8::from_str_radix(s, 16).ok()?;
-        out[idx] = byte;
-    }
+    hex::decode_to_slice(value, &mut out).ok()?;
     Some(out)
 }
 
@@ -776,5 +769,17 @@ mod tests {
         assert_eq!(parsed.endorser, [0x11; 32]);
         assert_eq!(parsed.publisher, [0x22; 32]);
         assert_eq!(parsed.at_step, 123);
+    }
+
+    #[test]
+    fn rejects_endorsement_payload_with_invalid_hex_pubkey() {
+        let payload = serde_json::json!({
+            "kind": "endorsement",
+            "endorser_pubkey_hex": "zz",
+            "publisher_pubkey_hex": "22".repeat(32),
+            "at_step": 123
+        });
+        let bytes = serde_json::to_vec(&payload).expect("json should serialize");
+        assert!(parse_endorsement_payload(&bytes).is_none());
     }
 }
