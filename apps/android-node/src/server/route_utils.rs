@@ -27,6 +27,38 @@ pub(in crate::server) fn bad_request(code: &str, message: &str) -> Response {
     (StatusCode::BAD_REQUEST, Json(payload)).into_response()
 }
 
+pub(in crate::server) fn serialize_feed_bundle_payload(
+    feed_bundle: &FeedBundle,
+    max_bytes: Option<usize>,
+) -> Result<String, Response> {
+    let payload = match serde_json::to_string(feed_bundle) {
+        Ok(value) => value,
+        Err(_) => return Err(bad_request("invalid_bundle", "bundle serialization failed")),
+    };
+    if let Some(limit) = max_bytes {
+        if payload.len() > limit {
+            return Err(bad_request("bundle_too_large", "bundle exceeds max size"));
+        }
+    }
+    Ok(payload)
+}
+
+pub(in crate::server) fn enqueue_and_inject_feed_bundle(
+    state: &AppState,
+    namespace: u16,
+    payload: String,
+    feed_bundle: &FeedBundle,
+) -> uuid::Uuid {
+    let bundle_value = serde_json::to_value(feed_bundle).unwrap_or_default();
+    let message_id = state
+        .node
+        .enqueue_publish(PublishRequest { namespace, payload });
+    state
+        .node
+        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    message_id
+}
+
 pub(in crate::server) fn valid_pubkey_hex(value: &str) -> bool {
     parse_hex_32(value).is_some()
 }

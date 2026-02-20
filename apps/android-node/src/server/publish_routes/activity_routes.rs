@@ -17,18 +17,12 @@ pub(in crate::server) async fn publish_list(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::List(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, None) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(ListPublishResponse {
         message_id,
         queued: true,
@@ -54,18 +48,12 @@ pub(in crate::server) async fn publish_group_metadata(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::GroupMetadata(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, None) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(GroupMetadataPublishResponse {
         message_id,
         queued: true,
@@ -91,18 +79,12 @@ pub(in crate::server) async fn publish_zap(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::Zap(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, None) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(ZapPublishResponse {
         message_id,
         queued: true,
@@ -128,18 +110,12 @@ pub(in crate::server) async fn publish_app_preferences(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::AppPreferences(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, None) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(AppPreferencesPublishResponse {
         message_id,
         queued: true,
@@ -165,18 +141,12 @@ pub(in crate::server) async fn publish_deletion(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::Deletion(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, None) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(DeletionPublishResponse {
         message_id,
         queued: true,
@@ -202,18 +172,12 @@ pub(in crate::server) async fn publish_repost(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::Repost(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, None) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(RepostPublishResponse {
         message_id,
         queued: true,
@@ -239,18 +203,12 @@ pub(in crate::server) async fn publish_poll(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::Poll(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, None) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(PollPublishResponse {
         message_id,
         queued: true,
@@ -276,18 +234,12 @@ pub(in crate::server) async fn publish_poll_vote(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::PollVote(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, None) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(PollVotePublishResponse {
         message_id,
         queued: true,
@@ -313,18 +265,12 @@ pub(in crate::server) async fn publish_live_status(
         return bad_request("author_mismatch", "author pubkey does not match identity");
     }
     let feed_bundle = FeedBundle::LiveStatus(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, None) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(LiveStatusPublishResponse {
         message_id,
         queued: true,

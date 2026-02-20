@@ -60,7 +60,8 @@ pub(in crate::server) use self::limits::{
     MAX_UPLOAD_PAYLOAD_BYTES, MAX_URL_LEN,
 };
 use self::route_utils::{
-    authorized, bad_request, current_unix_seconds, hex_to_pubkey, valid_channel, valid_pubkey_hex,
+    authorized, bad_request, current_unix_seconds, enqueue_and_inject_feed_bundle, hex_to_pubkey,
+    serialize_feed_bundle_payload, valid_channel, valid_pubkey_hex,
 };
 pub use self::runtime::serve;
 

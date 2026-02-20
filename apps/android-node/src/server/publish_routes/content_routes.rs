@@ -26,21 +26,12 @@ pub(in crate::server) async fn publish_profile(
         return bad_request("bio_too_long", "bio too long");
     }
     let feed_bundle = FeedBundle::Profile(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, Some(MAX_BUNDLE_JSON_BYTES)) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    if payload.len() > MAX_BUNDLE_JSON_BYTES {
-        return bad_request("bundle_too_large", "bundle exceeds max size");
-    }
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(ProfilePublishResponse {
         message_id,
         queued: true,
@@ -72,21 +63,12 @@ pub(in crate::server) async fn publish_post(
         return bad_request("text_too_long", "text too long");
     }
     let feed_bundle = FeedBundle::Post(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, Some(MAX_BUNDLE_JSON_BYTES)) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    if payload.len() > MAX_BUNDLE_JSON_BYTES {
-        return bad_request("bundle_too_large", "bundle exceeds max size");
-    }
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(PostPublishResponse {
         message_id,
         queued: true,
@@ -118,21 +100,12 @@ pub(in crate::server) async fn publish_reaction(
         return bad_request("invalid_action", "action_code invalid");
     }
     let feed_bundle = FeedBundle::Reaction(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, Some(MAX_BUNDLE_JSON_BYTES)) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    if payload.len() > MAX_BUNDLE_JSON_BYTES {
-        return bad_request("bundle_too_large", "bundle exceeds max size");
-    }
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(ReactionPublishResponse {
         message_id,
         queued: true,
@@ -167,21 +140,12 @@ pub(in crate::server) async fn publish_media(
         return bad_request("url_too_long", "url too long");
     }
     let feed_bundle = FeedBundle::Media(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, Some(MAX_BUNDLE_JSON_BYTES)) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    if payload.len() > MAX_BUNDLE_JSON_BYTES {
-        return bad_request("bundle_too_large", "bundle exceeds max size");
-    }
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(MediaPublishResponse {
         message_id,
         queued: true,

@@ -24,21 +24,12 @@ pub(super) async fn publish_direct_message(
         return bad_request("invalid_recipient", "recipient pubkey invalid");
     }
     let feed_bundle = FeedBundle::DirectMessage(bundle.clone());
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, Some(MAX_BUNDLE_JSON_BYTES)) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    if payload.len() > MAX_BUNDLE_JSON_BYTES {
-        return bad_request("bundle_too_large", "bundle exceeds max size");
-    }
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(DirectMessagePublishResponse {
         message_id,
         queued: true,
@@ -95,21 +86,12 @@ pub(super) async fn publish_direct_message_text(
         reply_to_root: request.reply_to_root,
     };
     let feed_bundle = FeedBundle::DirectMessage(bundle);
-    let payload = match serde_json::to_string(&feed_bundle) {
+    let payload = match serialize_feed_bundle_payload(&feed_bundle, Some(MAX_BUNDLE_JSON_BYTES)) {
         Ok(value) => value,
-        Err(_) => return bad_request("invalid_bundle", "bundle serialization failed"),
+        Err(response) => return response,
     };
-    if payload.len() > MAX_BUNDLE_JSON_BYTES {
-        return bad_request("bundle_too_large", "bundle exceeds max size");
-    }
-    let bundle_value = serde_json::to_value(&feed_bundle).unwrap_or_default();
-    let message_id = state.node.enqueue_publish(PublishRequest {
-        namespace: request.namespace,
-        payload,
-    });
-    state
-        .node
-        .inject_local_feed_bundle(bundle_value, blake3::hash(message_id.as_bytes()).into());
+    let message_id =
+        enqueue_and_inject_feed_bundle(&state, request.namespace, payload, &feed_bundle);
     Json(DirectMessagePublishResponse {
         message_id,
         queued: true,
